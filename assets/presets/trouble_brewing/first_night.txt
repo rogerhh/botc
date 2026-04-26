@@ -1,0 +1,38 @@
+Dusk
+Start the Night Phase.
+
+Minion Info
+If there are 7 or more players, wake all Minions: Show the THIS IS THE DEMON token. Point to the Demon. Show the THESE ARE YOUR MINIONS token. Point to the other Minions.
+
+Demon Info
+If there are 7 or more players, wake the Demon: Show the THESE ARE YOUR MINIONS token. Point to all Minions. Show the THESE CHARACTERS ARE NOT IN PLAY token. Show 3 not-in-play good character tokens.
+
+Poisoner
+The Poisoner chooses a player.
+
+Washerwoman
+Show the Townsfolk character token. Point to both the TOWNSFOLK and WRONG players.
+
+Librarian
+Show the Outsider character token. Point to both the OUTSIDER and WRONG players.
+
+Investigator
+Show the Minion character token. Point to both the MINION and WRONG players.
+
+Chef
+Give a finger signal.
+
+Empath
+Give a finger signal.
+
+Fortune Teller
+The Fortune Teller chooses 2 players. Nod if either is the Demon (or the RED HERRING).
+
+Butler
+The Butler chooses a player.
+
+Spy
+Show the Grimoire for as long as the Spy needs.
+
+Dawn
+Wait for a few seconds. End the Night Phase.

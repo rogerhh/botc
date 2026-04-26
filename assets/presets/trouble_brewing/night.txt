@@ -1,0 +1,35 @@
+Dusk
+Start the Night Phase.
+
+Poisoner
+The Poisoner chooses a player.
+
+Monk
+The Monk chooses a player.
+
+Scarlet Woman
+If the Scarlet Woman became the Demon today, show them the YOU ARE token, then the Demon token.
+
+Imp
+The Imp chooses a player.  If the Imp chose themselves: Replace 1 alive Minion token with a spare Imp token. Put the old Imp to sleep. Wake the new Imp. Show the YOU ARE token, then show the Imp token.
+
+Ravenkeeper
+If the Ravenkeeper died tonight, the Ravenkeeper chooses a player. Show that player's character token.
+
+Empath
+Give a finger signal.
+
+Fortune Teller
+The Fortune Teller chooses 2 players. Nod if either is the Demon (or the RED HERRING).
+
+Undertaker
+If a player was executed today, show their character token.
+
+Butler
+The Butler chooses a player.
+
+Spy
+Show the Grimoire for as long as the Spy needs.
+
+Dawn
+Wait for a few seconds. End the Night Phase.

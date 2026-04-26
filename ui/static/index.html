@@ -1,0 +1,4730 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Blood on the Clocktower — Town Square</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
+<style>
+  :root {
+    --bg: #1a1410;
+    --panel: #221c17;
+    --board: #3a2a1d;
+    --board-edge: #8a6a4b;
+    --chair: #d9c9a8;
+    --chair-edge: #5a3f27;
+    --chair-hover: #f2e2bd;
+    --chair-drag: #ffd27a;
+    --st-fill: #6e1f1b;
+    --st-edge: #f0c27a;
+    --st-hover: #8c2824;
+    --st-drag: #b8342d;
+    --st-text: #f5e6c4;
+    --text: #ece3d3;
+    --muted: #a9988080;
+    --accent: #c7453a;
+    --accent-dim: #8a3029;
+    --button: #3f3128;
+    --button-hover: #554033;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    overflow: hidden;
+  }
+
+  header {
+    padding: 12px 16px;
+    background: var(--panel);
+    border-bottom: 1px solid #00000066;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  header h1 {
+    margin: 0;
+    font-size: 16px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    flex: 1;
+  }
+
+  .toolbar {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+  }
+
+  button {
+    background: var(--button);
+    color: var(--text);
+    border: 1px solid #00000055;
+    border-radius: 6px;
+    padding: 8px 14px;
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.12s;
+  }
+  button:hover { background: var(--button-hover); }
+  button:active { transform: translateY(1px); }
+  button.danger { background: var(--accent-dim); }
+  button.danger:hover { background: var(--accent); }
+  button.start { background: #2f6b2c; }
+  button.start:hover { background: #3a8636; }
+  button.start:disabled,
+  button:disabled {
+    background: #2a2a2a;
+    color: #888;
+    cursor: not-allowed;
+  }
+
+  /* --- Phase visibility --- */
+  /* The body element gets one of phase-setup / phase-night / phase-day
+     / phase-finished. Elements tagged with the matching class are
+     visible; others are display:none. */
+  body:not(.phase-setup) .phase-setup-only { display: none !important; }
+  body:not(.phase-night) .phase-night-only { display: none !important; }
+  body:not(.phase-day)   .phase-day-only   { display: none !important; }
+  body.phase-setup .phase-game-only        { display: none !important; }
+
+  /* Start Game button — bottom-right pill during Setup. Larger than
+     a normal toolbar button so it reads as the primary action while
+     the storyteller wires up seats. */
+  #btnStartGame.fab-below {
+    position: fixed;
+    right: 20px;
+    bottom: 20px;
+    z-index: 80;
+    padding: 22px 36px;
+    border-radius: 999px;
+    background: #2f6b2c;
+    color: var(--text);
+    border: 1px solid #00000088;
+    box-shadow: 0 8px 24px #000000aa;
+    cursor: pointer;
+    font-size: 22px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    min-width: 220px;
+  }
+  #btnStartGame.fab-below:hover { background: #3a8636; }
+  #btnStartGame.fab-below:disabled {
+    background: #2a2a2a;
+    color: #888;
+    cursor: not-allowed;
+    box-shadow: none;
+  }
+
+  /* Edit Character button — sits at the bottom of the right-side
+     setup dock (under arrange + pool panels). Same panel-style
+     visuals so it reads as belonging to that column rather than
+     floating like a FAB. */
+  #btnAddChars.edit-chars {
+    /* Reset the FAB-style positioning. */
+    position: static;
+    right: auto;
+    bottom: auto;
+    /* Panel-aligned look. */
+    width: 100%;
+    padding: 10px 14px;
+    border-radius: 8px;
+    background: #8a5a1c;
+    color: var(--text);
+    border: 1px solid #00000099;
+    box-shadow: 0 4px 12px #00000077;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    letter-spacing: 0.02em;
+  }
+  #btnAddChars.edit-chars:hover { background: #a9731f; }
+
+  /* Phase-controls dock — bottom-right stack used during Night and
+     Day. Holds the prompt drawer and the Back / Next / Start Night
+     buttons in a vertical stack so the storyteller doesn't have to
+     hunt across the screen.
+
+     Width is ~10% narrower than the original prompt drawer, so the
+     buttons read as a tidy column rather than spanning the whole
+     bottom edge. */
+  #phaseDock {
+    position: fixed;
+    right: 20px;
+    bottom: 20px;
+    z-index: 70;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+    width: min(378px, calc(100vw - 36px));
+  }
+  #phaseDock #promptPanel {
+    /* Override the default centered position now that the panel
+       lives inside a right-anchored stack. The prompt is taller
+       than wide so it reads as a more square panel — the
+       storyteller-facing description text gets room to breathe. */
+    position: static;
+    transform: none;
+    transition: opacity 0.18s;
+    width: auto;
+    margin: 0;
+    min-height: 360px;
+    display: flex;
+    flex-direction: column;
+  }
+  /* Push the action row to the bottom of the prompt panel so the
+     stretched height looks intentional rather than empty. */
+  #phaseDock #promptPanel .actions { margin-top: auto; }
+  #phaseDock.no-prompt #promptPanel { opacity: 0; pointer-events: none; }
+
+  #phaseDock .dock-button {
+    width: 100%;
+    padding: 14px 16px;
+    border-radius: 8px;
+    font-size: 16px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    border: 1px solid #00000088;
+    color: var(--text);
+    cursor: pointer;
+  }
+  #phaseDock .dock-button.next { background: #2f6b2c; }
+  #phaseDock .dock-button.next:hover { background: #3a8636; }
+  #phaseDock .dock-button.start-night { background: #3949a8; }
+  #phaseDock .dock-button.start-night:hover { background: #4a5dcc; }
+  /* Back: deliberately red and visually subdued so the storyteller
+     reads it as "destructive — undo" rather than a forward action. */
+  #phaseDock .dock-button.back {
+    background: #5a1f1f;
+    color: #d8a4a4;
+    opacity: 0.7;
+  }
+  #phaseDock .dock-button.back:hover {
+    background: #732828;
+    opacity: 0.9;
+  }
+
+  /* --- Debug-mode buttons ---
+     The Debug toggle is always visible (so a developer can switch
+     debug mode on without hunting for it). The actions it gates
+     (.debug-action) are hidden until <body> carries the
+     "debug-mode" class. */
+  button.debug-toggle {
+    background: #2a1f1a;
+    color: #e3b97a;
+    border: 1px solid #f0c27a55;
+  }
+  button.debug-toggle:hover { background: #3a2c24; }
+  body.debug-mode button.debug-toggle {
+    background: #f0c27a;
+    color: #1a1411;
+    border-color: #f0c27a;
+  }
+  button.debug-action {
+    background: #2a1f1a;
+    color: #e3b97a;
+    border: 1px dashed #f0c27a55;
+    display: none;          /* hidden unless debug-mode is on */
+  }
+  body.debug-mode button.debug-action { display: inline-block; }
+  button.debug-action:hover { background: #3a2c24; }
+
+  /* --- Prompt panel ---
+     Bottom-of-screen drawer that surfaces the engine's current prompt
+     to the storyteller. Drawer slides up when there's a prompt, slides
+     down when there isn't. The storyteller's-eyes view (description +
+     options) is always shown; the player-facing payload (info to be
+     shown on the phone) is shown covered by default with a "Show
+     player" reveal button. */
+  #promptPanel {
+    position: fixed;
+    left: 50%;
+    bottom: 16px;
+    transform: translate(-50%, calc(100% + 16px));
+    transition: transform 0.22s ease-out;
+    z-index: 60;
+    width: min(720px, calc(100vw - 32px));
+    background: #1f1611;
+    border: 1px solid #00000088;
+    border-radius: 10px;
+    box-shadow: 0 10px 40px #000000aa;
+    color: var(--text);
+    padding: 14px 16px 12px 16px;
+  }
+  #promptPanel.visible { transform: translate(-50%, 0); }
+  /* Title row — the role / step name. A vertical accent bar sits to
+     the left of the text and alternates color each time the engine
+     advances to a new character (toggled via #promptPanel.alt below),
+     giving the storyteller a clear "we've moved on" cue without
+     restyling the whole panel. */
+  #promptPanel .title {
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--muted);
+    margin: 0 0 4px 0;
+    border-left: 4px solid #c69049;
+    padding-left: 8px;
+  }
+  #promptPanel.alt .title {
+    border-left-color: #5b8caa;
+  }
+  /* Drunk / poisoned parenthetical inside the title — italic so the
+     storyteller's eye picks up the impaired state at a glance without
+     the label overpowering the role name. */
+  #promptPanel .title .impaired-label {
+    font-style: italic;
+    font-weight: 400;
+  }
+  #promptPanel .description {
+    font-size: 15px;
+    line-height: 1.4;
+    margin: 4px 0 10px 0;
+    color: var(--text);
+  }
+  /* Section 3 — "Wake up <Role> (<Player>)". The wake-up line is a
+     pure display, never an interaction; styled as a subdued banner so
+     the eye distinguishes it from the rule description above and the
+     stages below. */
+  #promptPanel .wakeup {
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: #e8c98a;
+    background: #2a1c13;
+    border-left: 3px solid #c69049;
+    padding: 6px 10px;
+    margin: 0 0 10px 0;
+    border-radius: 0 4px 4px 0;
+  }
+  /* Sections 4 / 5 — accumulating input stages. Each stage sits in its
+     own card. A "completed" stage shows the question dimmed with the
+     chosen answer bright next to it; the "current" stage simply
+     contains the prompt question (the actual input controls live in
+     #promptOptions / #promptActions, kept where they were so existing
+     button wiring still applies). */
+  #promptPanel .stages {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin: 0 0 8px 0;
+  }
+  #promptPanel .stage {
+    border: 1px solid #00000044;
+    background: #261c14;
+    border-radius: 6px;
+    padding: 8px 10px;
+    font-size: 13px;
+    line-height: 1.35;
+  }
+  #promptPanel .stage .stage-question {
+    color: var(--muted);
+  }
+  #promptPanel .stage .stage-answer {
+    margin-top: 4px;
+    padding: 4px 8px;
+    background: #5a3c14;
+    border: 1px solid #c69049;
+    border-radius: 4px;
+    color: #ffe2a4;
+    font-weight: 600;
+  }
+  #promptPanel .stage.current {
+    border-color: #c69049;
+    background: #2e2114;
+  }
+  #promptPanel .stage.current .stage-question {
+    color: var(--text);
+  }
+  /* Wake-up marker — sits inside the stages list, between any
+     pre-wake ST decisions and the player/post-wake stages. Styled
+     like the original wakeup banner so the visual cue ("the player
+     is now awake") is the same regardless of whether the panel had
+     pre-wake stages above it. */
+  #promptPanel .wakeup-marker {
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: #e8c98a;
+    background: #2a1c13;
+    border-left: 3px solid #c69049;
+    padding: 6px 10px;
+    border-radius: 0 4px 4px 0;
+  }
+  #promptPanel .player-payload {
+    margin: 6px 0 10px 0;
+    border: 1px dashed #66493a;
+    border-radius: 6px;
+    padding: 10px;
+    position: relative;
+    min-height: 44px;
+    background: #2a1c13;
+  }
+  #promptPanel .player-payload .label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: #b8945a;
+    margin-bottom: 4px;
+  }
+  #promptPanel .player-payload .body {
+    font-size: 14px;
+    line-height: 1.4;
+    color: var(--text);
+  }
+  /* Stack of one or more "info tokens" — each token is a labeled row
+     of the form "<TOKEN NAME>: <values>" so the storyteller knows
+     which physical token to show the player and what to point at. */
+  #promptPanel .player-payload .tokens {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  #promptPanel .player-payload .token-row {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  #promptPanel .player-payload .token-row .token-label {
+    font-size: 13px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: #e8c98a;
+  }
+  #promptPanel .player-payload .token-row .token-body {
+    font-size: 14px;
+    line-height: 1.4;
+    color: var(--text);
+  }
+  #promptPanel .actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-end;
+  }
+  #promptPanel .actions .left {
+    margin-right: auto;
+    font-size: 12px;
+    color: var(--muted);
+  }
+  #promptPanel .actions button {
+    font-size: 13px;
+    padding: 6px 12px;
+  }
+  #promptPanel .options {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    margin-bottom: 8px;
+  }
+  #promptPanel .option {
+    background: var(--button);
+    border: 1px solid #00000055;
+    color: var(--text);
+    border-radius: 4px;
+    padding: 5px 10px;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  #promptPanel .option:hover { background: var(--button-hover); }
+  #promptPanel .option.selected {
+    background: #8a5a1c;
+    border-color: #c69049;
+  }
+  #promptPanel .option.default-hint {
+    box-shadow: 0 0 0 2px #87c98744;
+  }
+  /* When the engine surfaces the *correct* answer alongside a
+     drunk/poisoned prompt, mark it with a small green border so the
+     storyteller can see at a glance which option is the truth — even
+     though the prefilled (highlighted) default is the wrong one. */
+  #promptPanel .option.correct-hint {
+    border: 2px solid #5fb05f;
+    padding: 4px 9px;  /* compensate for the thicker border */
+  }
+  #promptPanel .option.correct-hint.default-hint {
+    box-shadow: 0 0 0 2px #87c98744;
+  }
+  .toolbar .start-status {
+    font-size: 13px;
+    color: var(--muted);
+    margin-left: 6px;
+    max-width: 320px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .toolbar .start-status.error { color: #e07171; }
+  .toolbar .start-status.ok { color: #87c987; }
+
+  .count {
+    font-size: 13px;
+    color: var(--muted);
+    min-width: 90px;
+    text-align: right;
+  }
+
+  main {
+    position: absolute;
+    top: 56px;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+  }
+
+  /* The board is a true square, sized to fit the available space. */
+  #boardWrap {
+    position: relative;
+    aspect-ratio: 1 / 1;
+    width: min(100%, calc(100vh - 88px));
+    max-width: 100%;
+  }
+
+  #board {
+    width: 100%;
+    height: 100%;
+    background: radial-gradient(ellipse at center, #4a3525 0%, #2a1c13 100%);
+    border: 2px solid var(--board-edge);
+    border-radius: 6px;
+    box-shadow: 0 4px 24px #00000088, inset 0 0 60px #00000077;
+    touch-action: none; /* let us handle touch drags */
+  }
+
+  .chair {
+    cursor: grab;
+    transition: r 0.12s, fill 0.12s;
+  }
+  .chair:hover { fill: var(--chair-hover); }
+  .chair.dragging { cursor: grabbing; fill: var(--chair-drag); }
+
+  /* Chairs are locked (no drag, no click-to-edit, no hover affordance)
+     once the game has started. We turn off pointer events on every
+     chair group AND on the storyteller marker so neither can be
+     clicked or dragged. Visual styling (the dimmed/highlighted
+     chairs) still applies because pointer-events:none doesn't kill
+     CSS classes — it only blocks pointer hit-testing. */
+  body.phase-night #chairs g[data-id],
+  body.phase-day   #chairs g[data-id],
+  body.phase-finished #chairs g[data-id],
+  body.phase-night #storyteller,
+  body.phase-day   #storyteller,
+  body.phase-finished #storyteller {
+    pointer-events: none;
+  }
+  body.phase-night .chair,
+  body.phase-day   .chair,
+  body.phase-finished .chair {
+    cursor: default;
+  }
+  body.phase-night .chair:hover,
+  body.phase-day   .chair:hover,
+  body.phase-finished .chair:hover { fill: var(--chair); }
+
+  /* Prompt-driven highlighting. When the engine emits a prompt with
+     ``highlight_player_ids`` (or a ``target_player_id``), the JS adds
+     ``.highlight-active`` to <g id="chairs"> and ``.highlight-target``
+     to each highlighted chair group. Non-target chairs and their
+     tokens fade out so the storyteller's eye snaps to the few that
+     matter. */
+  #chairs.highlight-active g[data-id] {
+    opacity: 0.25;
+    transition: opacity 0.18s;
+  }
+  #chairs.highlight-active g[data-id].highlight-target {
+    opacity: 1;
+    filter: drop-shadow(0 0 12px #f0c27aaa);
+  }
+
+  /* Highlight chairs that are valid drop targets while a status token
+     is being dragged. The amber pulse uses the same warm palette as
+     existing reminder UI; the inner chair circle gets a brighter fill
+     so it stands out from chairs that are not eligible. */
+  g[data-id].chair-drop-target .chair {
+    fill: #f0c27a;
+    stroke: #b8945a;
+    stroke-width: 4;
+    filter: drop-shadow(0 0 8px #f0c27a);
+  }
+  g[data-id].chair-drop-target { animation: chair-drop-pulse 1.2s ease-in-out infinite; }
+  @keyframes chair-drop-pulse {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: 0.75; }
+  }
+  /* The status tokens themselves get a slight lift on hover so the
+     storyteller can tell they're grabbable. */
+  .chair-status-token { cursor: grab; }
+  .chair-status-token:hover { filter: drop-shadow(0 2px 4px #000a); }
+
+  .chair-name {
+    font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, "Times New Roman", serif;
+    font-size: 21px;
+    font-weight: 700;
+    fill: #2a1c13;
+    pointer-events: none;
+    user-select: none;
+    text-anchor: middle;
+  }
+  .chair-character {
+    font-size: 19px;
+    font-weight: 500;
+    font-style: italic;
+    fill: #5a3f27;
+    pointer-events: none;
+    user-select: none;
+    text-anchor: middle;
+  }
+
+  /* Stable seat number inscribed at the top of each chair, in the same
+     serif family as the player name. No background shape — the numeral
+     itself is the marker, like a stamped seat number. */
+  .chair-num {
+    font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, "Times New Roman", serif;
+    font-size: 16px;
+    font-weight: 700;
+    fill: #2a1c13;
+    letter-spacing: 0.04em;
+    text-anchor: middle;
+    pointer-events: none;
+    user-select: none;
+  }
+
+  .storyteller-rect {
+    cursor: grab;
+    transition: fill 0.12s;
+  }
+  .storyteller-rect:hover { fill: var(--st-hover); }
+  .storyteller-rect.dragging { cursor: grabbing; fill: var(--st-drag); }
+
+  .storyteller-label {
+    font-size: 18px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    fill: var(--st-text);
+    pointer-events: none;
+    user-select: none;
+    dominant-baseline: central;
+    text-anchor: middle;
+  }
+
+  .hint {
+    position: absolute;
+    bottom: 8px;
+    left: 0;
+    right: 0;
+    text-align: center;
+    font-size: 12px;
+    color: var(--muted);
+    pointer-events: none;
+  }
+
+  /* --- Edit-chair modal --- */
+  .modal-backdrop {
+    position: fixed;
+    inset: 0;
+    background: #000000b0;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+  }
+  .modal-backdrop.open { display: flex; }
+
+  .modal {
+    background: var(--panel);
+    color: var(--text);
+    border: 1px solid #00000088;
+    border-radius: 8px;
+    padding: 20px;
+    width: min(360px, calc(100% - 32px));
+    box-shadow: 0 12px 40px #000000cc;
+  }
+  .modal h2 {
+    margin: 0 0 14px 0;
+    font-size: 15px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    color: #f0c27a;
+  }
+  .modal label {
+    display: block;
+    font-size: 12px;
+    color: var(--muted);
+    margin: 10px 0 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+  .modal input {
+    width: 100%;
+    font-size: 15px;
+    padding: 9px 11px;
+    background: #14100d;
+    color: var(--text);
+    border: 1px solid #00000099;
+    border-radius: 6px;
+    outline: none;
+  }
+  .modal input:focus { border-color: #f0c27a; }
+  .modal-actions {
+    display: flex;
+    gap: 8px;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 18px;
+  }
+  .modal-actions .right {
+    display: flex;
+    gap: 8px;
+    margin-left: auto;
+  }
+  .modal-actions button.primary {
+    background: #8a5a1c;
+  }
+  .modal-actions button.primary:hover { background: #a9731f; }
+
+  /* --- QR modal --- */
+  .qr-modal { width: min(420px, calc(100% - 32px)); }
+  .qr-sub {
+    margin: 0 0 10px 0;
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .faint { color: var(--muted); font-weight: 400; letter-spacing: 0; text-transform: none; }
+  .qr-preview {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    padding: 14px;
+    margin-top: 14px;
+    background: #fff;
+    border-radius: 6px;
+    min-height: 200px;
+    justify-content: center;
+  }
+  .qr-preview svg {
+    display: block;
+    width: 240px;
+    height: 240px;
+    image-rendering: pixelated;
+  }
+  .qr-link {
+    font-family: "SF Mono", Menlo, Consolas, monospace;
+    font-size: 11px;
+    color: #333;
+    max-width: 100%;
+    word-break: break-all;
+    text-align: center;
+  }
+  .qr-candidates {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 6px;
+  }
+  .qr-candidates .pill {
+    font-family: "SF Mono", Menlo, Consolas, monospace;
+    font-size: 11px;
+    padding: 4px 9px;
+    border-radius: 999px;
+    background: #14100d;
+    color: var(--text);
+    border: 1px solid #00000099;
+    cursor: pointer;
+  }
+  .qr-candidates .pill:hover { border-color: #f0c27a; }
+  .qr-candidates .label {
+    font-size: 11px;
+    color: var(--muted);
+    padding: 4px 2px;
+  }
+  .qr-warn {
+    margin-top: 10px;
+    padding: 8px 10px;
+    background: #3a2c17;
+    border: 1px solid #f0c27a88;
+    border-radius: 6px;
+    color: #f0c27a;
+    font-size: 12px;
+  }
+
+  /* --- Add-Characters floating button (bottom right) --- */
+  .fab {
+    position: fixed;
+    right: 20px;
+    bottom: 20px;
+    z-index: 80;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 18px;
+    border-radius: 999px;
+    background: #8a5a1c;
+    color: var(--text);
+    border: 1px solid #00000088;
+    box-shadow: 0 6px 18px #000000aa;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+  }
+  .fab:hover { background: #a9731f; }
+  .fab .fab-icon {
+    font-size: 18px;
+    line-height: 1;
+    font-weight: 700;
+  }
+  .fab .badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 22px;
+    height: 22px;
+    padding: 0 7px;
+    border-radius: 999px;
+    background: var(--accent);
+    color: #fff;
+    font-size: 12px;
+    font-weight: 700;
+  }
+  .fab .badge.zero {
+    background: #2f4a2c;
+    color: #c8e2c5;
+  }
+  .fab .badge.hidden { display: none; }
+
+  /* --- Add-Characters modal (wider than the chair editor) --- */
+  .modal.add-chars {
+    width: min(640px, calc(100% - 32px));
+    max-height: calc(100vh - 64px);
+    display: flex;
+    flex-direction: column;
+  }
+  .add-chars header.title-row {
+    background: transparent;
+    border: 0;
+    padding: 0 0 8px;
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+  }
+  .add-chars h2 { margin: 0; }
+  .add-chars .preset-row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    margin: 4px 0 12px;
+  }
+  .add-chars .preset-row .preset-label {
+    font-size: 12px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin: 0;
+    flex-shrink: 0;
+  }
+  .add-chars .preset-slider {
+    flex: 1;
+    display: flex;
+    gap: 6px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding: 4px 2px;
+    scrollbar-width: thin;
+    scrollbar-color: #00000088 transparent;
+    scroll-snap-type: x proximity;
+    -webkit-overflow-scrolling: touch;
+  }
+  .add-chars .preset-slider::-webkit-scrollbar {
+    height: 6px;
+  }
+  .add-chars .preset-slider::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .add-chars .preset-slider::-webkit-scrollbar-thumb {
+    background: #00000088;
+    border-radius: 3px;
+  }
+  .add-chars .preset-chip {
+    flex: 0 0 auto;
+    background: #14100d;
+    color: var(--text);
+    border: 1px solid #00000099;
+    border-radius: 999px;
+    padding: 6px 14px;
+    font-size: 13px;
+    cursor: pointer;
+    user-select: none;
+    white-space: nowrap;
+    transition: background 0.12s, border-color 0.12s, color 0.12s;
+    scroll-snap-align: center;
+  }
+  .add-chars .preset-chip:hover {
+    border-color: #f0c27a99;
+  }
+  .add-chars .preset-chip.selected {
+    background: #f0c27a;
+    border-color: #f0c27a;
+    color: #1a1410;
+    font-weight: 600;
+  }
+  .add-chars .preset-chip.empty {
+    opacity: 0.6;
+    cursor: default;
+  }
+  .add-chars .needed-banner {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 12px;
+    padding: 8px 10px;
+    margin-bottom: 10px;
+    background: #14100d;
+    border: 1px solid #00000088;
+    border-radius: 6px;
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .add-chars .needed-banner b { color: var(--text); }
+  .add-chars .needed-banner .ok { color: #9bd28e; }
+  .add-chars .needed-banner .short { color: #f0c27a; }
+
+  .add-chars .scroll {
+    overflow-y: auto;
+    padding-right: 4px;
+    flex: 1;
+    min-height: 0;
+  }
+  .group {
+    margin-bottom: 14px;
+  }
+  .group h3 {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: #f0c27a;
+    margin: 0 0 6px;
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+  }
+  .group h3 .count-pill {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: none;
+    color: var(--muted);
+  }
+  .group h3 .count-pill .ok { color: #9bd28e; }
+  .group h3 .count-pill .short { color: #f0c27a; }
+  .group h3 .count-pill .over { color: #d8867a; }
+
+  .char-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+    gap: 6px;
+  }
+  .char-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 10px;
+    background: #14100d;
+    border: 1px solid #00000088;
+    border-radius: 6px;
+    font-size: 14px;
+    cursor: pointer;
+    user-select: none;
+    transition: background 0.12s, border-color 0.12s;
+  }
+  .char-item:hover { border-color: #f0c27a99; }
+  .char-item.in-pool {
+    background: #2c3a26;
+    border-color: #6e9c5b;
+  }
+  .char-item.in-pool .ind { color: #9bd28e; }
+
+  /* The Drunk's pretend Townsfolk role gets its own (cooler) palette so
+     it's visually distinct from "really in play". */
+  .char-item.drunk-fake {
+    background: #1f2c3e;
+    border-color: #5a8cb8;
+  }
+  .char-item.drunk-fake .ind { color: #9ec5e8; }
+  .char-item.drunk-fake .name { font-style: italic; }
+
+  /* When the Drunk has been added but no fake is chosen yet, give every
+     selectable Townsfolk a subtle hint that "this click sets the fake". */
+  .add-chars.pending-fake .group[data-type="townsfolk"] .char-item:not(.in-pool):not(.drunk-fake) {
+    border-color: #5a8cb8aa;
+  }
+
+  /* Pending-state banner for the Drunk's pretend role — the Drunk is
+     the one slot the storyteller still picks explicitly in the
+     Add-Characters page (FT and WW auto-pick on add and are
+     re-rolled by dragging the corresponding token on the grimoire). */
+  .add-chars .pending-banner {
+    margin-bottom: 10px;
+    padding: 8px 10px;
+    border: 1px solid;
+    border-radius: 6px;
+    font-size: 12px;
+    display: none;
+  }
+  .add-chars .pending-banner.drunk-banner {
+    background: #1f2c3e;
+    border-color: #5a8cb8aa;
+    color: #c8def0;
+  }
+  .add-chars.pending-fake .pending-banner.drunk-banner { display: block; }
+  .char-item .name { flex: 1; min-width: 0; }
+  .char-item .ind {
+    margin-left: 8px;
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--muted);
+  }
+
+  /* --- Right-side setup dock --- */
+  /* Stacks the arrange-chairs panel, the characters-in-game pool, and
+     the Edit Character button in a single right-anchored column.
+     Children render with their normal box layout (no individual
+     fixed positioning). Hidden during Night / Day via the
+     phase-setup-only marker on the wrapper. */
+  .right-dock {
+    position: fixed;
+    top: 72px;
+    right: 16px;
+    width: 220px;
+    z-index: 60;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    max-height: calc(100vh - 88px);
+  }
+  /* When children sit inside the dock they shed their old fixed
+     positioning and just stack vertically. */
+  .right-dock .arrange-side,
+  .right-dock .pool-side {
+    position: static;
+    top: auto;
+    right: auto;
+    width: auto;
+    max-height: none;
+  }
+
+  /* --- Arrange-chairs side panel (always visible, top-right). --- */
+  .arrange-side {
+    position: fixed;
+    top: 72px;
+    right: 16px;
+    width: 220px;
+    background: var(--panel);
+    border: 1px solid #00000099;
+    border-radius: 8px;
+    box-shadow: 0 8px 24px #000000aa;
+    padding: 10px 12px;
+    z-index: 60;
+    color: var(--text);
+  }
+  .arrange-side .arrange-title {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: #f0c27a;
+    margin: 0 0 8px;
+  }
+  .arrange-options {
+    display: flex;
+    gap: 8px;
+  }
+  .arrange-option {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 6px;
+    background: #14100d;
+    border: 1px solid #00000099;
+    border-radius: 6px;
+    cursor: pointer;
+    color: var(--text);
+    transition: border-color 0.12s, background 0.12s;
+    font: inherit;
+  }
+  .arrange-option:hover {
+    border-color: #f0c27aaa;
+    background: #1c1612;
+  }
+  .arrange-option:active { transform: translateY(1px); }
+  .arrange-option.selected {
+    background: #2c3a26;
+    border-color: #6e9c5b;
+  }
+  .arrange-option svg {
+    width: 40px;
+    height: 40px;
+    display: block;
+    color: #f0c27a;
+  }
+  .arrange-option.selected svg { color: #d8e8c8; }
+
+  /* --- Pool side panel (visible whenever the modal is closed and the
+         pool isn't empty). Sits below the arrange-chairs panel. --- */
+  .pool-side {
+    position: fixed;
+    top: 152px;
+    right: 16px;
+    width: 220px;
+    max-height: calc(100vh - 188px);
+    background: var(--panel);
+    border: 1px solid #00000099;
+    border-radius: 8px;
+    box-shadow: 0 8px 24px #000000aa;
+    padding: 10px 12px;
+    z-index: 60;
+    overflow-y: auto;
+    color: var(--text);
+    display: none;
+  }
+  .pool-side.open { display: block; }
+  .pool-side .pool-title {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: #f0c27a;
+    margin: 0 0 6px;
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+  }
+  .pool-side .pool-title .total {
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.04em;
+    text-transform: none;
+    color: var(--muted);
+  }
+  .pool-side .pool-group {
+    margin-top: 8px;
+  }
+  .pool-side .pool-group .label {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 2px;
+  }
+  .pool-side .pool-group .needed {
+    color: #f0c27a;
+  }
+  .pool-side .pool-group .over {
+    color: #d8867a;
+  }
+  .pool-side .pool-row {
+    font-size: 13px;
+    padding: 3px 4px;
+    border-radius: 4px;
+    cursor: default;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .pool-side .empty {
+    font-size: 12px;
+    color: var(--muted);
+    padding: 4px 0;
+  }
+
+  /* --- Character picker inside the edit-Player modal --- */
+  .char-picker {
+    max-height: 240px;
+    overflow-y: auto;
+    padding: 4px;
+    background: #14100d;
+    border: 1px solid #00000099;
+    border-radius: 6px;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    gap: 4px;
+  }
+  .char-picker .pick-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 7px 9px;
+    background: #1c1612;
+    border: 1px solid #00000088;
+    border-radius: 5px;
+    font-size: 13px;
+    cursor: pointer;
+    user-select: none;
+    transition: background 0.12s, border-color 0.12s;
+  }
+  .char-picker .pick-item:hover { border-color: #f0c27a99; }
+  .char-picker .pick-item.selected {
+    background: #2c3a26;
+    border-color: #6e9c5b;
+  }
+  .char-picker .pick-item.selected .ind { color: #9bd28e; }
+  /* Characters already in use by another chair are dimmed and tagged
+     with the seat number(s) holding them. They remain clickable so the
+     Storyteller can still reassign on purpose. */
+  .char-picker .pick-item.assigned {
+    opacity: 0.55;
+    background: #1a1411;
+    border-style: dashed;
+  }
+  .char-picker .pick-item.assigned .name { text-decoration: line-through; }
+  .char-picker .pick-item.assigned.selected {
+    /* If the player is currently editing an already-assigned character
+       (e.g. it is duplicated), keep the green "selected" highlight. */
+    opacity: 1;
+    background: #2c3a26;
+    border-style: solid;
+  }
+  .char-picker .pick-item.assigned.selected .name { text-decoration: none; }
+  .char-picker .pick-item .name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .char-picker .pick-item .assigned-tag {
+    margin-left: 6px;
+    font-size: 10px;
+    font-weight: 700;
+    color: #f0c27acc;
+    background: #00000055;
+    border: 1px solid #f0c27a55;
+    border-radius: 4px;
+    padding: 1px 5px;
+    letter-spacing: 0.04em;
+    flex-shrink: 0;
+  }
+  .char-picker .pick-item .ind {
+    margin-left: 8px;
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--muted);
+  }
+  .char-picker .pick-empty {
+    grid-column: 1 / -1;
+    font-size: 12px;
+    color: var(--muted);
+    padding: 10px 8px;
+    text-align: center;
+  }
+  .char-picker .pick-section {
+    grid-column: 1 / -1;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: #f0c27aaa;
+    padding: 6px 4px 2px;
+  }
+</style>
+</head>
+<body class="phase-setup">
+
+<header>
+  <h1>Blood on the Clocktower — Town Square</h1>
+  <div class="toolbar">
+    <button id="btnAdd" class="phase-setup-only">+ Add Player</button>
+    <button id="btnQR" class="phase-setup-only">QR Code</button>
+    <button id="btnResetGame" class="danger phase-game-only" type="button"
+            title="Kill the running game engine and return to the town square.">
+      ⟳ Reset Game
+    </button>
+    <span id="startStatus" class="start-status"></span>
+    <span id="count" class="count">0 players</span>
+    <!-- Debug toggle: clicking it flips a CSS class on <body> that
+         reveals the debug-only buttons (auto-fill, etc.). State is
+         persisted in localStorage so reloads keep debug mode on. -->
+    <button id="btnDebugMode" type="button" class="debug-toggle"
+            title="Toggle debug mode (extra buttons for quick test setup)">
+      🐛 Debug
+    </button>
+    <button id="btnDebugFill" type="button" class="debug-action"
+            title="Assign random names + characters to every chair">
+      🎲 Auto-fill
+    </button>
+    <button id="btnDebugSeed" type="button" class="debug-action"
+            title="Add chairs (up to 8) + randomize the pool + auto-fill">
+      ⚡ Quick Setup
+    </button>
+  </div>
+</header>
+
+<main>
+  <div id="boardWrap">
+    <svg id="board" viewBox="0 0 1000 1000" preserveAspectRatio="xMidYMid meet">
+      <!-- Storyteller sits below the chairs so chair drags win when
+           markers overlap. -->
+      <g id="storyteller"></g>
+      <g id="chairs"></g>
+    </svg>
+    <div class="hint">Drag chairs to rearrange. Click (or tap) a chair to set the player and character.</div>
+  </div>
+</main>
+
+<div id="editBackdrop" class="modal-backdrop" role="dialog" aria-modal="true">
+  <form id="editForm" class="modal">
+    <h2 id="editTitle">Edit Player</h2>
+    <label for="editName">Player name</label>
+    <input id="editName" type="text" maxlength="64" autocomplete="off" />
+    <label>Character</label>
+    <div id="editCharPicker" class="char-picker"></div>
+    <div class="modal-actions">
+      <button type="button" id="editRemove" class="danger">− Remove player</button>
+      <div class="right">
+        <button type="button" id="editCancel">Cancel</button>
+        <button type="submit" class="primary">Save</button>
+      </div>
+    </div>
+  </form>
+</div>
+
+<div id="qrBackdrop" class="modal-backdrop" role="dialog" aria-modal="true">
+  <div class="modal qr-modal">
+    <h2>Phone view — QR code</h2>
+    <p class="qr-sub">Players scan this to open the read-only town square on
+      their phones.</p>
+
+    <label for="qrUrl">Base URL</label>
+    <input id="qrUrl" type="text" autocomplete="off" spellcheck="false" />
+    <div id="qrCandidates" class="qr-candidates"></div>
+
+    <label for="qrCode">Access code <span class="faint">(optional)</span></label>
+    <input id="qrCode" type="text" autocomplete="off" autocapitalize="characters"
+           spellcheck="false" placeholder="leave blank if the server has no code" />
+
+    <div class="qr-preview">
+      <div id="qrSvgWrap"></div>
+      <div id="qrLinkWrap" class="qr-link"></div>
+    </div>
+
+    <div id="qrWarn" class="qr-warn" style="display:none"></div>
+
+    <div class="modal-actions">
+      <div class="right">
+        <button type="button" id="qrClose">Close</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="rightDock" class="right-dock phase-setup-only">
+<div id="arrangeSide" class="arrange-side">
+  <div class="arrange-title">Arrange chairs</div>
+  <div class="arrange-options">
+    <button type="button" class="arrange-option" id="arrangeCircle"
+            title="Arrange chairs in a semi-circle (270° arc)">
+      <svg viewBox="0 0 40 40" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+        <rect x="2" y="2" width="36" height="36" rx="3" ry="3"
+              fill="none" stroke="currentColor" stroke-width="1.5"/>
+        <circle cx="9.5"  cy="27"   r="1.7" fill="currentColor"/>
+        <circle cx="6.5"  cy="19"   r="1.7" fill="currentColor"/>
+        <circle cx="9.5"  cy="11"   r="1.7" fill="currentColor"/>
+        <circle cx="20"   cy="8"    r="1.7" fill="currentColor"/>
+        <circle cx="30.5" cy="11"   r="1.7" fill="currentColor"/>
+        <circle cx="33.5" cy="19"   r="1.7" fill="currentColor"/>
+        <circle cx="30.5" cy="27"   r="1.7" fill="currentColor"/>
+      </svg>
+    </button>
+    <button type="button" class="arrange-option" id="arrangeSquare"
+            title="Arrange chairs in a semi-square (3-sided grid)">
+      <svg viewBox="0 0 40 40" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+        <rect x="2" y="2" width="36" height="36" rx="3" ry="3"
+              fill="none" stroke="currentColor" stroke-width="1.5"/>
+        <circle cx="8"  cy="7"  r="1.7" fill="currentColor"/>
+        <circle cx="20" cy="7"  r="1.7" fill="currentColor"/>
+        <circle cx="32" cy="7"  r="1.7" fill="currentColor"/>
+        <circle cx="8"  cy="17" r="1.7" fill="currentColor"/>
+        <circle cx="32" cy="17" r="1.7" fill="currentColor"/>
+        <circle cx="8"  cy="27" r="1.7" fill="currentColor"/>
+        <circle cx="32" cy="27" r="1.7" fill="currentColor"/>
+      </svg>
+    </button>
+  </div>
+</div>
+
+<div id="poolSide" class="pool-side" aria-live="polite">
+  <div class="pool-title">
+    <span>Characters in game</span>
+    <span class="total" id="poolSideTotal"></span>
+  </div>
+  <div id="poolSideBody"></div>
+</div>
+
+<button id="btnAddChars" class="edit-chars" type="button" title="Edit the characters in this game">
+  <span class="fab-icon">✎</span>
+  <span>Edit Character</span>
+  <span id="addCharsBadge" class="badge zero">0</span>
+</button>
+</div> <!-- /#rightDock -->
+
+<!-- Start Game button: large pill anchored to the bottom-right of
+     the screen during Setup. Disabled until every chair has both a
+     name and a character. Hidden during Night / Day. The Edit
+     Character button (now in the right-side dock) used to live next
+     to it; we kept the .fab-below class name for backwards
+     compatibility with the CSS selector. -->
+<button id="btnStartGame" class="fab-below phase-setup-only" type="button"
+        title="Lock in seating + characters and spin up the game engine.">
+  ▶ Start Game
+</button>
+
+<div id="addCharsBackdrop" class="modal-backdrop" role="dialog" aria-modal="true">
+  <div class="modal add-chars">
+    <header class="title-row">
+      <h2>Add characters</h2>
+    </header>
+
+    <div class="preset-row">
+      <span class="preset-label">Preset</span>
+      <div id="presetSlider" class="preset-slider" role="tablist"
+           aria-label="Character preset"></div>
+    </div>
+
+    <div id="addCharsNeeded" class="needed-banner"></div>
+
+    <div id="addCharsPending" class="pending-banner drunk-banner">
+      Pick a Townsfolk to be the Drunk's pretend role. Click an existing
+      pretend role to swap it.
+    </div>
+
+    <div id="addCharsScroll" class="scroll"></div>
+
+    <div class="modal-actions">
+      <button type="button" id="addCharsClear" class="danger">Clear all</button>
+      <button type="button" id="addCharsRandomize" title="Pick a random valid roster from this preset">🎲 Randomize</button>
+      <div class="right">
+        <button type="button" id="addCharsClose" class="primary">Done</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Phase dock — bottom-right stack used during Night and Day.
+     Contains the prompt drawer at the top, then a Back button (red,
+     visually subdued, no-op for now), then a Next button (Night) /
+     Start Night button (Day) at the bottom. -->
+<div id="phaseDock" class="phase-game-only no-prompt">
+  <div id="promptPanel" role="dialog" aria-live="polite" aria-label="Engine prompt">
+    <!-- Sections 1, 2, 3 — always visible while an ability is active. -->
+    <div class="title" id="promptTitle">Storyteller prompt</div>
+    <div class="description" id="promptDescription"></div>
+    <div class="wakeup" id="promptWakeup" style="display:none"></div>
+
+    <!-- Sections 4 and 5 — past + current input stages. Each stage is
+         appended to #promptStages as the engine works through the
+         ability; once answered, a stage flips to a highlighted "answer"
+         summary so the storyteller can see at a glance what was picked.
+         Section 6 (the player-facing payload) lives below this list. -->
+    <div class="stages" id="promptStages"></div>
+
+    <div id="promptPayload" class="player-payload" style="display:none">
+      <div class="label" id="promptPayloadHeader">Show this to the player</div>
+      <div class="tokens" id="promptPayloadTokens"></div>
+    </div>
+    <div class="options" id="promptOptions"></div>
+    <div class="actions">
+      <span class="left" id="promptHint"></span>
+      <button type="button" id="promptRandomize" style="display:none">Randomize</button>
+      <button type="button" id="promptYes" class="start" style="display:none">Yes</button>
+      <button type="button" id="promptNo" class="danger" style="display:none">No</button>
+    </div>
+  </div>
+  <button type="button" id="btnBack" class="dock-button back phase-night-only"
+          title="(Not yet implemented) Step the storyteller back one event.">
+    ◀ Back
+  </button>
+  <button type="button" id="promptNext" class="dock-button next phase-night-only">
+    Next ▶
+  </button>
+  <button type="button" id="btnStartNight" class="dock-button start-night phase-day-only">
+    🌙 Start Night
+  </button>
+</div>
+
+<script src="/static/qrcodegen.js"></script>
+<script>
+(() => {
+  const BOARD_SIZE = 1000;          // SVG viewBox units
+  const CHAIR_RADIUS = 51;          // ~50% larger than the original 34
+  const DRAG_SLOP = 10;             // board units the pointer must move before it's a drag
+  const MAX_CHAIR_TEXT = 88;        // widest text we let a chair display (board units)
+  const board = document.getElementById("board");
+  const chairsG = document.getElementById("chairs");
+  const storytellerG = document.getElementById("storyteller");
+  const countEl = document.getElementById("count");
+
+  // Local mirror of server state, keyed by chair id.
+  const chairs = new Map();
+  // The (single) storyteller marker. Width/height come from the server.
+  let storyteller = null;
+
+  // ----- server IO -----
+
+  async function refresh() {
+    const r = await fetch("/api/state");
+    const data = await r.json();
+    chairs.clear();
+    for (const c of data.chairs) chairs.set(c.id, c);
+    storyteller = data.storyteller || null;
+    if (data.character_pool) applyPoolSnapshot(data.character_pool);
+    if (data.engine && typeof updateStartButtonForEngine === "function") {
+      updateStartButtonForEngine(data.engine);
+    }
+    if (typeof maybeUpdateStartButtonReadiness === "function") {
+      maybeUpdateStartButtonReadiness();
+    }
+    render();
+  }
+
+  async function addChair() {
+    // The server re-spreads every chair around the 270-degree arc on
+    // each add. After refreshing we re-apply whichever arrangement the
+    // user last selected so the new chair lands on the same path as
+    // the others (i.e. the chosen layout is preserved across adds).
+    await fetch("/api/chairs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    });
+    await refresh();
+    applyCurrentArrangement();
+  }
+
+  async function removeChair(id) {
+    try {
+      const r = await fetch(`/api/chairs/${id}`, { method: "DELETE" });
+      if (!r.ok && r.status !== 404) {
+        console.warn("remove failed", r.status);
+        return;
+      }
+      // The server renumbers the remaining chairs after a delete, so
+      // do a full refresh rather than just dropping ``id`` locally —
+      // otherwise our cached ids drift out of sync with the server.
+      await refresh();
+      // Re-spread along the chosen arrangement so the gap left by the
+      // removed chair closes cleanly.
+      applyCurrentArrangement();
+    } catch (e) {
+      console.warn("remove failed", e);
+    }
+  }
+
+  async function pushMove(id, x, y) {
+    try {
+      await fetch(`/api/chairs/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ x, y }),
+      });
+    } catch (e) {
+      console.warn("move failed", e);
+    }
+  }
+
+  async function pushChairInfo(id, name, character) {
+    try {
+      const r = await fetch(`/api/chairs/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, character }),
+      });
+      if (r.ok) {
+        const chair = await r.json();
+        chairs.set(chair.id, chair);
+        render();
+      }
+    } catch (e) {
+      console.warn("chair info update failed", e);
+    }
+  }
+
+  async function pushStorytellerMove(x, y) {
+    try {
+      await fetch(`/api/storyteller`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ x, y }),
+      });
+    } catch (e) {
+      console.warn("storyteller move failed", e);
+    }
+  }
+
+  // ----- rendering -----
+
+  // Real BotC reminder tokens that live in /assets/tokens/. The
+  // grimoire shows one of these next to each chair to remind the
+  // storyteller of a status the seat is carrying (drunk, fortune
+  // teller's red herring, monk-protected, poisoned, etc.). Each entry
+  // is the file's basename (the .png suffix is added when the badge is
+  // drawn). Centralized so the rest of the code can refer to status
+  // tokens by symbolic name without sprinkling URLs everywhere.
+  const TOKEN_FILES = {
+    drunk:                   "drunk_is_the_drunk",
+    fortune_teller_red_herring: "fortune_teller_red_herring",
+    poisoned:                "poisoner_poisoned",
+    imp_dead:                "imp_dead",
+    monk_safe:               "monk_safe",
+    butler_master:           "butler_master",
+    investigator_minion:     "investigator_minion",
+    librarian_outsider:      "librarian_outsider",
+    scarlet_woman_is_demon:  "scarlet_woman_is_the_demon",
+    slayer_no_ability:       "slayer_no_ability",
+    undertaker_died_today:   "undertaker_died_today",
+    virgin_no_ability:       "virgin_no_ability",
+    washerwoman_townsfolk:   "washerwoman_townsfolk",
+    washerwoman_wrong:       "washerwoman_wrong",
+  };
+  function tokenUrl(key) {
+    const base = TOKEN_FILES[key];
+    return base ? "/assets/tokens/" + base + ".png" : null;
+  }
+
+  // Append a reminder-token badge to a chair group. The badge is
+  // drawn *outside* the chair circle so the chair interior keeps the
+  // primary role text uncluttered (that's the grimoire-style read the
+  // storyteller wants).
+  //
+  // ``angleDeg`` is measured from straight up (12 o'clock) and grows
+  // clockwise so 45° is upper-right, -45° is upper-left, 135° is
+  // lower-right, etc. The badge's center is placed at distance
+  // ``CHAIR_RADIUS + BADGE_RADIUS`` from the chair center so the two
+  // circles touch externally.
+  //
+  // The token PNGs in /assets/tokens/ are pre-styled circular tokens
+  // (rim + icon + caption baked in), so we render them directly without
+  // an extra background circle. We do draw a thin halo so the token
+  // pops off a busy background.
+  function appendStatusToken(g, tokenKey, angleDeg, opts) {
+    const SVG_NS = "http://www.w3.org/2000/svg";
+    const XLINK_NS = "http://www.w3.org/1999/xlink";
+    const BADGE_RADIUS = (opts && opts.radius) || 24;
+    const ICON_SIZE = BADGE_RADIUS * 2;
+    const url = tokenUrl(tokenKey);
+    if (!url) return;
+
+    // Convert from "0° = up, clockwise" to standard math angle.
+    const theta = (angleDeg - 90) * Math.PI / 180;
+    const dist = CHAIR_RADIUS + BADGE_RADIUS;
+    const cx = dist * Math.cos(theta);
+    const cy = dist * Math.sin(theta);
+
+    // Subtle white halo so the token is legible against any chair
+    // color or background. The token PNG is transparent outside its
+    // own rim, so this just rings the visible token edge.
+    const halo = document.createElementNS(SVG_NS, "circle");
+    halo.setAttribute("class", "chair-status-halo");
+    halo.setAttribute("cx", cx);
+    halo.setAttribute("cy", cy);
+    halo.setAttribute("r", BADGE_RADIUS + 1);
+    halo.setAttribute("fill", "#fff");
+    halo.setAttribute("stroke", "var(--chair-edge)");
+    halo.setAttribute("stroke-width", "1.5");
+    halo.setAttribute("pointer-events", "none");
+    g.appendChild(halo);
+
+    const img = document.createElementNS(SVG_NS, "image");
+    // Use both href (SVG2) and xlink:href (SVG1.1) so the icon shows up
+    // in older renderers as well. Browsers ignore the unknown attr.
+    img.setAttribute("href", url);
+    img.setAttributeNS(XLINK_NS, "xlink:href", url);
+    img.setAttribute("width", ICON_SIZE);
+    img.setAttribute("height", ICON_SIZE);
+    img.setAttribute("x", cx - ICON_SIZE / 2);
+    img.setAttribute("y", cy - ICON_SIZE / 2);
+    img.setAttribute("class", "chair-status-token chair-status-" + tokenKey);
+    if (opts && opts.title) {
+      const t = document.createElementNS(SVG_NS, "title");
+      t.textContent = opts.title;
+      img.appendChild(t);
+    }
+    if (opts && opts.dragKind) {
+      // Marking the token as draggable: it receives pointer events
+      // and remembers which kind of move the drop should fire. The
+      // halo stays pointer-event-transparent so the drag stays glued
+      // to the icon's hit region (a sloppy click on the rim still
+      // counts).
+      img.setAttribute("pointer-events", "auto");
+      img.setAttribute("data-drag-kind", opts.dragKind);
+      img.setAttribute("data-source-chair", String(opts.chairId));
+      img.style.cursor = "grab";
+      attachTokenDrag(img);
+    } else {
+      img.setAttribute("pointer-events", "none");
+    }
+    g.appendChild(img);
+  }
+
+  // ---- token drag-and-drop ----
+  //
+  // Each draggable status token (Drunk / FT red herring / WW
+  // townsfolk) carries ``data-drag-kind`` and ``data-source-chair``
+  // attributes. While dragged we:
+  //
+  //   * highlight every chair whose current ``character`` is eligible
+  //     to receive this token (rules below);
+  //   * follow the pointer with a clone of the token so the drop
+  //     position is visually obvious;
+  //   * on pointerup, hit-test against eligible chairs and POST to
+  //     the corresponding /api/character_pool/move_* endpoint.
+  //
+  // Eligibility rules (also enforced on the server, but checked here
+  // first so the highlight matches what the server will accept):
+  //
+  //   * drunk / washerwoman_townsfolk: chair holds a Townsfolk role
+  //     that is currently in the pool. The source chair itself is
+  //     excluded (drop-on-self is a no-op).
+  //   * ft_red_herring: chair holds a Townsfolk OR Outsider role in
+  //     the pool. (The Drunk's chair is eligible — its character
+  //     field is "Drunk", an Outsider — and per the rules the FT
+  //     can land its red herring on the actual Drunk.)
+  function characterTypeFromPreset(name) {
+    if (!currentPresetData) return null;
+    if ((currentPresetData.Townsfolk || []).includes(name)) return "townsfolk";
+    if ((currentPresetData.Outsiders || []).includes(name)) return "outsider";
+    if ((currentPresetData.Minions || []).includes(name)) return "minion";
+    if ((currentPresetData.Demons || []).includes(name)) return "demon";
+    return null;
+  }
+
+  function isEligibleChair(kind, chair, sourceChairId) {
+    if (!chair) return false;
+    if (chair.id === sourceChairId) return false;
+    const ch = (chair.character || "").trim();
+    if (!ch) return false;
+    if (!(poolState.names || []).includes(ch)) return false;
+    const type = characterTypeFromPreset(ch);
+    if (kind === "drunk" || kind === "washerwoman_townsfolk") {
+      return type === "townsfolk";
+    }
+    if (kind === "ft_red_herring") {
+      return type === "townsfolk" || type === "outsider";
+    }
+    if (kind === "washerwoman_wrong") {
+      // The WRONG token goes by *any* other character — Townsfolk,
+      // Outsider, Minion, or Demon. The only excluded chair is the
+      // Washerwoman herself (her chair holds "Washerwoman", which is
+      // never an eligible drop because it's the WW's own seat) and
+      // the seat that already carries the seen-Townsfolk slot. Other
+      // than that, every chair holding an in-pool role is fair game.
+      if (ch === "Washerwoman") return false;
+      const seenRole = poolState.washerwoman_townsfolk_role;
+      if (seenRole && ch === seenRole) return false;
+      return true;
+    }
+    return false;
+  }
+
+  const TOKEN_MOVE_ENDPOINTS = {
+    drunk:                   "/api/character_pool/move_drunk_token",
+    ft_red_herring:          "/api/character_pool/move_ft_red_herring",
+    washerwoman_townsfolk:   "/api/character_pool/move_washerwoman_token",
+    washerwoman_wrong:       "/api/character_pool/move_washerwoman_wrong_token",
+  };
+
+  // Attach pointerdown → drag → pointerup handlers to a token <image>.
+  //
+  // While dragging we translate the *original* token element via the
+  // SVG ``transform`` attribute — there is no separate ghost element,
+  // so there is nothing to leak if cleanup is interrupted and there
+  // is never more than one visible copy of the token at any time.
+  // Move/up listeners live on ``window`` (rather than the token
+  // itself) so cleanup runs even if a re-render replaces the token
+  // mid-gesture.
+  //
+  // On any drop — eligible target, ineligible target, off-screen,
+  // pointercancel, or escape via document.visibilitychange — the
+  // ``cleanup`` closure resets the transform so the token snaps back
+  // to its source chair. If the drop is on an eligible chair, we
+  // POST to the move endpoint and ``refresh()`` re-renders the
+  // grimoire from the server state.
+  function attachTokenDrag(img) {
+    img.addEventListener("pointerdown", (ev) => {
+      if (ev.button !== 0) return;
+      const kind = img.getAttribute("data-drag-kind");
+      const sourceChairId = parseInt(img.getAttribute("data-source-chair"), 10);
+      if (!kind || !TOKEN_MOVE_ENDPOINTS[kind]) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+
+      try { img.setPointerCapture(ev.pointerId); } catch (e) {}
+      img.style.cursor = "grabbing";
+
+      // Compute eligible chairs once at gesture start; client-side
+      // and server-side eligibility match (see isEligibleChair). The
+      // ``chair-drop-target`` class lights up valid targets.
+      const eligibleIds = new Set();
+      for (const c of chairs.values()) {
+        if (isEligibleChair(kind, c, sourceChairId)) eligibleIds.add(c.id);
+      }
+      const chairGroups = chairsG.querySelectorAll("g[data-id]");
+      chairGroups.forEach(g => {
+        const id = parseInt(g.getAttribute("data-id"), 10);
+        if (eligibleIds.has(id)) g.classList.add("chair-drop-target");
+      });
+
+      // Pointer-events:none on the token while dragging makes
+      // ``elementsFromPoint`` see *through* it to the chair beneath
+      // at drop time (without it the cursor would always be over the
+      // token, since the token follows the cursor). The token still
+      // receives pointer move/up events because it has pointer
+      // capture, which overrides CSS hit-testing for capture targets.
+      img.style.pointerEvents = "none";
+      img.style.filter = "drop-shadow(0 4px 8px rgba(0,0,0,0.5))";
+
+      // We translate via the SVG ``transform`` attribute (composed
+      // after the token's existing x/y placement and the chair g's
+      // own translate). Convert client deltas into SVG units via the
+      // existing clientToBoard helper so the token follows the
+      // cursor 1:1 regardless of how the SVG is scaled in the page.
+      const start = clientToBoard(ev.clientX, ev.clientY);
+
+      let cleaned = false;
+      const cleanup = () => {
+        if (cleaned) return;
+        cleaned = true;
+        // Snap the token back to its source position.
+        img.removeAttribute("transform");
+        img.style.pointerEvents = "";
+        img.style.filter = "";
+        img.style.cursor = "grab";
+        chairGroups.forEach(g => g.classList.remove("chair-drop-target"));
+        window.removeEventListener("pointermove", onMove);
+        window.removeEventListener("pointerup", onUp);
+        window.removeEventListener("pointercancel", onCancel);
+        document.removeEventListener("visibilitychange", onVisChange);
+        try { img.releasePointerCapture(ev.pointerId); } catch (e) {}
+      };
+
+      const onMove = (mev) => {
+        const cur = clientToBoard(mev.clientX, mev.clientY);
+        const dx = cur.x - start.x;
+        const dy = cur.y - start.y;
+        img.setAttribute("transform", `translate(${dx}, ${dy})`);
+      };
+
+      const onUp = (uev) => {
+        // Hit-test before cleanup so the highlight on the target
+        // chair lingers for the user's last frame.
+        const stack = document.elementsFromPoint(uev.clientX, uev.clientY);
+        let chairId = null;
+        for (const el of stack) {
+          const g = el.closest && el.closest("g[data-id]");
+          if (g) {
+            chairId = parseInt(g.getAttribute("data-id"), 10);
+            break;
+          }
+        }
+        cleanup();
+        if (chairId == null || !eligibleIds.has(chairId)) return;
+        if (chairId === sourceChairId) return;
+        commitMove(kind, chairId);
+      };
+
+      const onCancel = () => { cleanup(); };
+      // If the user tab-switches mid-drag, abort. Without this the
+      // OS may swallow pointerup and leave the token glued to the
+      // cursor when the user comes back.
+      const onVisChange = () => { if (document.hidden) cleanup(); };
+
+      window.addEventListener("pointermove", onMove);
+      window.addEventListener("pointerup", onUp);
+      window.addEventListener("pointercancel", onCancel);
+      document.addEventListener("visibilitychange", onVisChange);
+    });
+  }
+
+  // POST the move and refresh from the server. Split out so the drag
+  // handler stays focused on input plumbing.
+  async function commitMove(kind, chairId) {
+    try {
+      const r = await fetch(TOKEN_MOVE_ENDPOINTS[kind], {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chair_id: chairId }),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        console.warn("token move failed", kind, data);
+        return;
+      }
+      // The drunk-move endpoint returns updated chairs as well; the
+      // FT/WW endpoints return only the pool snapshot. In both cases
+      // re-fetching /api/state is the simplest way to resync the
+      // local chair map and the pool state.
+      await refresh();
+    } catch (e) {
+      console.warn("token move failed", e);
+    }
+  }
+
+  // Append the chair's stable seat number near the top of the chair.
+  // No background shape — the bold serif numeral itself is the marker.
+  // Positioned high enough that the player name (centered at y=-13
+  // when both name and role are set) has clearance.
+  function appendChairNumber(g, num) {
+    const t = document.createElementNS("http://www.w3.org/2000/svg", "text");
+    t.setAttribute("class", "chair-num");
+    t.setAttribute("x", "0");
+    t.setAttribute("y", "-37");
+    t.setAttribute("dominant-baseline", "central");
+    t.textContent = String(num);
+    g.appendChild(t);
+  }
+
+  // Compute the clockwise seat position (1..N) for every chair on the
+  // board. Chair badges show this rather than the raw chair id so the
+  // numbers always read clockwise from 12 o'clock — and they line up
+  // with the engine's player_id assignment, which is also clockwise.
+  function clockwiseSeatPositions() {
+    function angle(c) {
+      const dx = c.x - 0.5, dy = c.y - 0.5;
+      // atan2 returns -pi..pi (counter-clockwise from +x). Shift so
+      // 12 o'clock is 0 and the result grows clockwise.
+      const a = Math.atan2(dy, dx);
+      return ((a + Math.PI / 2) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI);
+    }
+    const sorted = [...chairs.values()].sort((a, b) => angle(a) - angle(b));
+    const pos = new Map();
+    sorted.forEach((c, i) => pos.set(c.id, i + 1));
+    return pos;
+  }
+
+  function render() {
+    renderStoryteller();
+
+    chairsG.innerHTML = "";
+    // Pre-compute which chair ids should be highlight-targets so we can
+    // stamp the class onto each <g> at creation time. Without this, the
+    // new <g> elements paint once at the dimmed (opacity 0.25) state
+    // before reapplyHighlight() promotes the targets — and the CSS
+    // transition turns that into a visible flash on every state poll.
+    const targetChairIdsForRender = computeTargetChairIds(
+      _currentHighlightPlayerIds || []
+    );
+    // Draw in id order so overlaps behave predictably. Badge numbers
+    // come from the clockwise position map below — they reflect the
+    // visual seating order, not the chair store's internal id.
+    const seatPos = clockwiseSeatPositions();
+    const ordered = [...chairs.values()].sort((a, b) => a.id - b.id);
+    for (const c of ordered) {
+      const g = document.createElementNS("http://www.w3.org/2000/svg", "g");
+      g.setAttribute("data-id", c.id);
+      if (targetChairIdsForRender.has(c.id)) {
+        g.classList.add("highlight-target");
+      }
+      g.setAttribute("transform", `translate(${c.x * BOARD_SIZE}, ${c.y * BOARD_SIZE})`);
+
+      const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+      circle.setAttribute("class", "chair");
+      circle.setAttribute("r", CHAIR_RADIUS);
+      circle.setAttribute("fill", "var(--chair)");
+      circle.setAttribute("stroke", "var(--chair-edge)");
+      circle.setAttribute("stroke-width", "2");
+      g.appendChild(circle);
+
+      // Seat number. Uses the chair's id, which the server keeps
+      // compacted to 1..N: adding a chair appends N+1, and removing a
+      // chair renumbers the rest so there are no gaps.
+      appendChairNumber(g, seatPos.get(c.id) || c.id);
+
+      const name = (c.name || "").trim();
+      const character = (c.character || "").trim();
+      // The Drunk thinks they are some Townsfolk: on the board we
+      // surface the fake Townsfolk role as the visible character and
+      // mark the chair with a small drunk-token glyph (rendered below).
+      // If the storyteller hasn't picked the fake yet, fall back to
+      // "Drunk" so the chair text isn't blank.
+      const isDrunk = (character === "Drunk");
+      const characterDisplay = (isDrunk && poolState.drunk_fake_role)
+        ? poolState.drunk_fake_role
+        : character;
+      const textsToFit = [];
+      // All offsets are nudged below the chair's vertical center so the
+      // seat number (centered at y=-37) has clearance above the text.
+      // The player name always anchors at y=-5 (its position when a
+      // character is also set), so toggling the character on or off
+      // doesn't shift the name. The character text sits below at y=22
+      // when the chair has a name; on its own it falls back to centered
+      // (y=10). Status reminder tokens sit *outside* the chair
+      // circle so the chair interior keeps the grimoire-style reading:
+      // just the role this player thinks they are.
+      if (name) {
+        const tName = svgText("chair-name", name, 0, -5);
+        g.appendChild(tName);
+        textsToFit.push(tName);
+        if (character) {
+          const tChar = svgText("chair-character", characterDisplay, 0, 22);
+          g.appendChild(tChar);
+          textsToFit.push(tChar);
+        }
+      } else if (character) {
+        const tChar = svgText("chair-character", characterDisplay, 0, 10);
+        g.appendChild(tChar);
+        textsToFit.push(tChar);
+      }
+
+      // Status reminder tokens — small circular tokens from
+      // /assets/tokens/ placed *outside* the chair circle so the chair
+      // interior stays reserved for the role text. Each status that
+      // applies to this seat gets its own token, fanned out around the
+      // top of the chair on a fixed angle so they don't overlap.
+      //
+      //   * Drunk (upper-right, 45°): the player thinks they're a
+      //     Townsfolk; the token reminds the storyteller they're really
+      //     the Drunk.
+      //   * Fortune Teller's red herring (upper-left, -45°): this seat
+      //     is the FT's red herring — the Fortune Teller will register
+      //     them as a Demon when checked.
+      //   * Washerwoman townsfolk (top-center, 0°): this seat holds the
+      //     Townsfolk role the WW was shown on the first night.
+      //
+      // All three tokens are draggable (see attachTokenDrag below); the
+      // ``data-drag-token`` attribute marks each draggable image and
+      // points at the move endpoint that fires on drop.
+      const ftRedHerringRole = poolState.ft_red_herring_role || null;
+      const wwTownsfolkRole = poolState.washerwoman_townsfolk_role || null;
+      const wwWrongRole = poolState.washerwoman_wrong_role || null;
+      const investigatorMinionRole = poolState.investigator_minion_role || null;
+      const librarianOutsiderRole = poolState.librarian_outsider_role || null;
+      const butlerMasterRole = poolState.butler_master_role || null;
+      const monkSafeRole = poolState.monk_safe_role || null;
+      const poisonedRole = poolState.poisoned_role || null;
+      const impDeadRole = poolState.imp_dead_role || null;
+      const undertakerDiedRole = poolState.undertaker_died_today_role || null;
+      const isRedHerring = (
+        ftRedHerringRole !== null && character === ftRedHerringRole
+      );
+      const isWashTownsfolk = (
+        wwTownsfolkRole !== null && character === wwTownsfolkRole
+      );
+      const isWashWrong = (
+        wwWrongRole !== null && character === wwWrongRole
+      );
+      const isInvestigatorMinion = (
+        investigatorMinionRole !== null && character === investigatorMinionRole
+      );
+      const isLibrarianOutsider = (
+        librarianOutsiderRole !== null && character === librarianOutsiderRole
+      );
+      const isButlerMaster = (
+        butlerMasterRole !== null && character === butlerMasterRole
+      );
+      const isMonkSafe = (
+        monkSafeRole !== null && character === monkSafeRole
+      );
+      const isPoisoned = (
+        poisonedRole !== null && character === poisonedRole
+      );
+      const isImpDead = (
+        impDeadRole !== null && character === impDeadRole
+      );
+      const isUndertakerDied = (
+        undertakerDiedRole !== null && character === undertakerDiedRole
+      );
+      const isScarletWomanIsDemon = (
+        !!poolState.scarlet_woman_is_demon && character === "Scarlet Woman"
+      );
+      const isSlayerSpent = (
+        !!poolState.slayer_no_ability && character === "Slayer"
+      );
+      const isVirginSpent = (
+        !!poolState.virgin_no_ability && character === "Virgin"
+      );
+      if (isDrunk) {
+        appendStatusToken(g, "drunk", 45, {
+          title: "Is the Drunk"
+            + (poolState.drunk_fake_role
+                ? ` (thinks they're the ${poolState.drunk_fake_role})`
+                : ""),
+          dragKind: "drunk",
+          chairId: c.id,
+        });
+      }
+      if (isRedHerring) {
+        appendStatusToken(g, "fortune_teller_red_herring", -45, {
+          title: "Fortune Teller's red herring",
+          dragKind: "ft_red_herring",
+          chairId: c.id,
+        });
+      }
+      if (isWashTownsfolk) {
+        appendStatusToken(g, "washerwoman_townsfolk", 0, {
+          title: "Washerwoman saw this Townsfolk",
+          dragKind: "washerwoman_townsfolk",
+          chairId: c.id,
+        });
+      }
+      // ----- additional reminder tokens (one per existing PNG in
+      // /assets/tokens/). Each fires only when the corresponding
+      // poolState/engine field names this chair's role; otherwise the
+      // badge does not render. Angles are spaced around the chair so
+      // the badges don't collide when multiple apply at once.
+      if (isWashWrong) {
+        appendStatusToken(g, "washerwoman_wrong", -30, {
+          title: "Washerwoman's WRONG (this player is the red-herring of the pair)",
+          dragKind: "washerwoman_wrong",
+          chairId: c.id,
+        });
+      }
+      if (isInvestigatorMinion) {
+        appendStatusToken(g, "investigator_minion", -90, {
+          title: "Investigator saw this Minion",
+          dragKind: "investigator_minion",
+          chairId: c.id,
+        });
+      }
+      if (isLibrarianOutsider) {
+        appendStatusToken(g, "librarian_outsider", -60, {
+          title: "Librarian saw this Outsider",
+          dragKind: "librarian_outsider",
+          chairId: c.id,
+        });
+      }
+      if (isButlerMaster) {
+        appendStatusToken(g, "butler_master", 30, {
+          title: "Butler's Master",
+          dragKind: "butler_master",
+          chairId: c.id,
+        });
+      }
+      if (isMonkSafe) {
+        appendStatusToken(g, "monk_safe", 90, {
+          title: "Monk-protected tonight",
+          dragKind: "monk_safe",
+          chairId: c.id,
+        });
+      }
+      if (isPoisoned) {
+        appendStatusToken(g, "poisoned", 60, {
+          title: "Poisoned by the Poisoner",
+          dragKind: "poisoned",
+          chairId: c.id,
+        });
+      }
+      if (isImpDead) {
+        appendStatusToken(g, "imp_dead", 120, {
+          title: "Killed by the Demon last night",
+          dragKind: "imp_dead",
+          chairId: c.id,
+        });
+      }
+      if (isUndertakerDied) {
+        appendStatusToken(g, "undertaker_died_today", 180, {
+          title: "Died today (Undertaker will see this character tonight)",
+          dragKind: "undertaker_died_today",
+          chairId: c.id,
+        });
+      }
+      if (isScarletWomanIsDemon) {
+        appendStatusToken(g, "scarlet_woman_is_demon", 150, {
+          title: "Scarlet Woman has become the Demon",
+          dragKind: "scarlet_woman_is_demon",
+          chairId: c.id,
+        });
+      }
+      if (isSlayerSpent) {
+        appendStatusToken(g, "slayer_no_ability", -150, {
+          title: "Slayer has used their once-per-game shot",
+          dragKind: "slayer_no_ability",
+          chairId: c.id,
+        });
+      }
+      if (isVirginSpent) {
+        appendStatusToken(g, "virgin_no_ability", -120, {
+          title: "Virgin's nominator-execute ability has been used",
+          dragKind: "virgin_no_ability",
+          chairId: c.id,
+        });
+      }
+
+      chairsG.appendChild(g);
+      // Shrink any text that would spill outside the circle. Must run
+      // after the element is in the DOM so getComputedTextLength works.
+      for (const t of textsToFit) fitText(t, MAX_CHAIR_TEXT);
+      attachChairInteractions(g, c);
+    }
+    countEl.textContent = `${chairs.size} player${chairs.size === 1 ? "" : "s"}`;
+    // The chair <g> elements were rebuilt above, dropping any
+    // ``.highlight-target`` classes from the previous render. Re-apply
+    // the cached highlight set so the spotlight survives state-poll
+    // re-renders and only clears when the storyteller advances the
+    // prompt (respondPrompt → applyHighlight([])).
+    if (typeof reapplyHighlight === "function") reapplyHighlight();
+  }
+
+  function svgText(cls, text, x, y) {
+    const el = document.createElementNS("http://www.w3.org/2000/svg", "text");
+    el.setAttribute("class", cls);
+    el.setAttribute("x", x);
+    el.setAttribute("y", y);
+    // dominant-baseline=central so y is the visual midline.
+    el.setAttribute("dominant-baseline", "central");
+    el.textContent = text;
+    return el;
+  }
+
+  // Scale an SVG <text> horizontally so it never exceeds maxWidth. Short
+  // text is left alone so it renders at its natural size.
+  function fitText(el, maxWidth) {
+    let actual = 0;
+    try { actual = el.getComputedTextLength(); } catch (e) { actual = 0; }
+    if (!actual) {
+      // Fallback estimate when layout info isn't available yet.
+      const fs = parseFloat(getComputedStyle(el).fontSize) || 14;
+      actual = (el.textContent || "").length * fs * 0.55;
+    }
+    if (actual > maxWidth) {
+      el.setAttribute("textLength", maxWidth);
+      el.setAttribute("lengthAdjust", "spacingAndGlyphs");
+    }
+  }
+
+  function renderStoryteller() {
+    storytellerG.innerHTML = "";
+    if (!storyteller) return;
+
+    const w = (storyteller.w ?? 0.14) * BOARD_SIZE;
+    const h = (storyteller.h ?? 0.08) * BOARD_SIZE;
+    const cx = storyteller.x * BOARD_SIZE;
+    const cy = storyteller.y * BOARD_SIZE;
+
+    const g = document.createElementNS("http://www.w3.org/2000/svg", "g");
+    g.setAttribute("transform", `translate(${cx}, ${cy})`);
+
+    const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+    rect.setAttribute("class", "storyteller-rect");
+    rect.setAttribute("x", -w / 2);
+    rect.setAttribute("y", -h / 2);
+    rect.setAttribute("width", w);
+    rect.setAttribute("height", h);
+    // Sharp corners as requested.
+    rect.setAttribute("fill", "var(--st-fill)");
+    rect.setAttribute("stroke", "var(--st-edge)");
+    rect.setAttribute("stroke-width", "3");
+    g.appendChild(rect);
+
+    const label = document.createElementNS("http://www.w3.org/2000/svg", "text");
+    label.setAttribute("class", "storyteller-label");
+    label.textContent = "STORYTELLER";
+    g.appendChild(label);
+
+    storytellerG.appendChild(g);
+    attachStorytellerDrag(g, rect, w, h);
+  }
+
+  // ----- dragging -----
+
+  // Convert a client (x, y) to SVG viewBox coordinates.
+  function clientToBoard(clientX, clientY) {
+    const pt = board.createSVGPoint();
+    pt.x = clientX;
+    pt.y = clientY;
+    const ctm = board.getScreenCTM();
+    if (!ctm) return { x: 0, y: 0 };
+    const { x, y } = pt.matrixTransform(ctm.inverse());
+    return { x, y };
+  }
+
+  function attachChairInteractions(g, chair) {
+    // A pointer interaction on a chair is either:
+    //   * a click (press-release with no movement) → open the editor, or
+    //   * a drag (press-move-release) → reposition the chair.
+    // We don't commit to either until we see (or don't see) enough
+    // movement to exceed DRAG_SLOP.
+    let pointerId = null;
+    let startX = 0, startY = 0;       // board-units where the pointer went down
+    let offsetX = 0, offsetY = 0;     // within-chair grab offset
+    let mode = "idle";                // "idle" | "pending" | "drag"
+    let pendingMove = null;
+    const circle = g.querySelector("circle");
+
+    function onDown(ev) {
+      // Left mouse button or any touch/pen. Ignore middle/right buttons.
+      if (ev.button !== 0 && ev.pointerType === "mouse") return;
+      // Chairs are locked once the game has started — neither
+      // click-to-edit nor drag-to-reposition is allowed while the
+      // engine is running. The CSS also drops the grab cursor in
+      // these phases so the visual cue matches.
+      if (document.body.classList.contains("phase-night")
+          || document.body.classList.contains("phase-day")
+          || document.body.classList.contains("phase-finished")) {
+        return;
+      }
+
+      pointerId = ev.pointerId;
+      g.setPointerCapture(pointerId);
+      const { x, y } = clientToBoard(ev.clientX, ev.clientY);
+      startX = x;
+      startY = y;
+      offsetX = x - chair.x * BOARD_SIZE;
+      offsetY = y - chair.y * BOARD_SIZE;
+      mode = "pending";
+      ev.preventDefault();
+    }
+
+    function onMove(ev) {
+      if (ev.pointerId !== pointerId) return;
+      const { x, y } = clientToBoard(ev.clientX, ev.clientY);
+
+      if (mode === "pending") {
+        // Promote to a drag once we move beyond the slop threshold.
+        const dx = x - startX;
+        const dy = y - startY;
+        if (dx * dx + dy * dy < DRAG_SLOP * DRAG_SLOP) return;
+        mode = "drag";
+        circle.classList.add("dragging");
+      }
+
+      if (mode !== "drag") return;
+
+      const minPx = CHAIR_RADIUS;
+      const maxPx = BOARD_SIZE - CHAIR_RADIUS;
+      const nx = Math.min(maxPx, Math.max(minPx, x - offsetX));
+      const ny = Math.min(maxPx, Math.max(minPx, y - offsetY));
+      chair.x = nx / BOARD_SIZE;
+      chair.y = ny / BOARD_SIZE;
+      g.setAttribute("transform", `translate(${nx}, ${ny})`);
+
+      if (!pendingMove) {
+        pendingMove = requestAnimationFrame(() => {
+          pendingMove = null;
+          pushMove(chair.id, chair.x, chair.y);
+        });
+      }
+    }
+
+    function onUp(ev) {
+      if (ev.pointerId !== pointerId) return;
+      const wasClick = mode === "pending";
+      const wasDrag = mode === "drag";
+      mode = "idle";
+      circle.classList.remove("dragging");
+      try { g.releasePointerCapture(pointerId); } catch {}
+      pointerId = null;
+
+      if (wasDrag) {
+        pushMove(chair.id, chair.x, chair.y);
+      } else if (wasClick) {
+        openChairEditor(chair);
+      }
+    }
+
+    g.addEventListener("pointerdown", onDown);
+    g.addEventListener("pointermove", onMove);
+    g.addEventListener("pointerup", onUp);
+    g.addEventListener("pointercancel", onUp);
+    // Suppress the OS right-click menu on chairs; the board-level
+    // handler takes care of it elsewhere.
+    g.addEventListener("contextmenu", (ev) => ev.preventDefault());
+  }
+
+  function attachStorytellerDrag(g, rect, w, h) {
+    let dragging = false;
+    let offsetX = 0, offsetY = 0;
+    let pointerId = null;
+    let pendingMove = null;
+
+    function onDown(ev) {
+      // Same lock as the chair handler: once the game has started,
+      // the storyteller marker stays put.
+      if (document.body.classList.contains("phase-night")
+          || document.body.classList.contains("phase-day")
+          || document.body.classList.contains("phase-finished")) {
+        return;
+      }
+      dragging = true;
+      pointerId = ev.pointerId;
+      g.setPointerCapture(pointerId);
+      rect.classList.add("dragging");
+      const { x, y } = clientToBoard(ev.clientX, ev.clientY);
+      offsetX = x - storyteller.x * BOARD_SIZE;
+      offsetY = y - storyteller.y * BOARD_SIZE;
+      ev.preventDefault();
+    }
+
+    function onMove(ev) {
+      if (!dragging || ev.pointerId !== pointerId) return;
+      const { x, y } = clientToBoard(ev.clientX, ev.clientY);
+      // Keep the full rectangle inside the board.
+      const minX = w / 2;
+      const minY = h / 2;
+      const maxX = BOARD_SIZE - w / 2;
+      const maxY = BOARD_SIZE - h / 2;
+      const nx = Math.min(maxX, Math.max(minX, x - offsetX));
+      const ny = Math.min(maxY, Math.max(minY, y - offsetY));
+      storyteller.x = nx / BOARD_SIZE;
+      storyteller.y = ny / BOARD_SIZE;
+      g.setAttribute("transform", `translate(${nx}, ${ny})`);
+
+      if (!pendingMove) {
+        pendingMove = requestAnimationFrame(() => {
+          pendingMove = null;
+          pushStorytellerMove(storyteller.x, storyteller.y);
+        });
+      }
+    }
+
+    function onUp() {
+      if (!dragging) return;
+      dragging = false;
+      rect.classList.remove("dragging");
+      try { g.releasePointerCapture(pointerId); } catch {}
+      pointerId = null;
+      pushStorytellerMove(storyteller.x, storyteller.y);
+    }
+
+    g.addEventListener("pointerdown", onDown);
+    g.addEventListener("pointermove", onMove);
+    g.addEventListener("pointerup", onUp);
+    g.addEventListener("pointercancel", onUp);
+  }
+
+  // ----- player editor modal -----
+
+  const editBackdrop = document.getElementById("editBackdrop");
+  const editForm = document.getElementById("editForm");
+  const editTitle = document.getElementById("editTitle");
+  const editName = document.getElementById("editName");
+  const editCharPicker = document.getElementById("editCharPicker");
+  const editCancel = document.getElementById("editCancel");
+  const editRemove = document.getElementById("editRemove");
+  let editingChairId = null;
+  // Currently-selected character within the editor modal. Empty string
+  // means "no character assigned to this player".
+  let editSelectedCharacter = "";
+
+  function openChairEditor(chair) {
+    editingChairId = chair.id;
+    editSelectedCharacter = chair.character || "";
+    editTitle.textContent = `Edit Player #${chair.id}`;
+    editName.value = chair.name || "";
+    renderEditCharPicker();
+    editBackdrop.classList.add("open");
+    // Small delay lets the modal render before we focus so iOS doesn't
+    // fight us over the keyboard.
+    setTimeout(() => editName.focus(), 30);
+  }
+
+  function closeChairEditor() {
+    editingChairId = null;
+    editSelectedCharacter = "";
+    editBackdrop.classList.remove("open");
+  }
+
+  // Map each pool name to its type using whatever preset metadata we
+  // already have. Falls back to the empty string for names we don't
+  // recognise so the picker can still display them.
+  function buildPoolNameTypeMap() {
+    const map = {};
+    if (currentPresetData) {
+      for (const [k, v] of Object.entries({
+        townsfolk: currentPresetData.Townsfolk || [],
+        outsider: currentPresetData.Outsiders || [],
+        minion: currentPresetData.Minions || [],
+        demon: currentPresetData.Demons || [],
+      })) {
+        for (const n of v) map[n] = k;
+      }
+    }
+    return map;
+  }
+
+  function renderEditCharPicker() {
+    const names = (poolState.names || []).slice();
+    const nameType = buildPoolNameTypeMap();
+    const buckets = { townsfolk: [], outsider: [], minion: [], demon: [], other: [] };
+    for (const n of names) {
+      const t = nameType[n] || "other";
+      if (buckets[t]) buckets[t].push(n);
+      else buckets.other.push(n);
+    }
+
+    // Build a map of characters already assigned to *other* chairs so
+    // the Storyteller can see which roles are taken at a glance. The
+    // chair currently being edited is excluded so the role it already
+    // holds isn't flagged as a duplicate of itself.
+    const assignedTo = {}; // character name -> sorted list of chair ids
+    for (const c of chairs.values()) {
+      if (c.id === editingChairId) continue;
+      const ch = (c.character || "").trim();
+      if (!ch) continue;
+      (assignedTo[ch] = assignedTo[ch] || []).push(c.id);
+    }
+    for (const k of Object.keys(assignedTo)) assignedTo[k].sort((a, b) => a - b);
+
+    const html = [];
+    // "None" is always the first option so the Storyteller can clear
+    // an assignment without having to pick a real role.
+    const isNone = !editSelectedCharacter;
+    html.push(
+      `<div class="pick-item${isNone ? " selected" : ""}" data-name="">` +
+      `<span class="name">— None —</span>` +
+      `<span class="ind">${isNone ? "\u2713" : ""}</span>` +
+      `</div>`);
+
+    // Render a name with the Drunk's fake-role parenthetical when
+    // applicable, mirroring the annotation used in the pool sidebar.
+    const labelForName = (n) => {
+      if (n === "Drunk" && poolState.drunk_fake_role) {
+        return `${escapeHtml(n)} <span style="opacity:.7;font-style:italic">` +
+               `(${escapeHtml(poolState.drunk_fake_role)})</span>`;
+      }
+      return escapeHtml(n);
+    };
+
+    // Build the "assigned to #N" tag for a given character name. Returns
+    // an empty string when the character is free.
+    const assignedTagFor = (n) => {
+      const ids = assignedTo[n];
+      if (!ids || !ids.length) return "";
+      const label = ids.length === 1
+        ? `#${ids[0]}`
+        : ids.map(i => `#${i}`).join(", ");
+      return `<span class="assigned-tag" title="Already assigned to ${escapeAttr(label)}">${escapeHtml(label)}</span>`;
+    };
+
+    // Compose the class string for a pick-item, including the
+    // ``assigned`` marker when applicable.
+    const pickClasses = (name, sel) => {
+      const cls = ["pick-item"];
+      if (sel) cls.push("selected");
+      if (assignedTo[name]) cls.push("assigned");
+      return cls.join(" ");
+    };
+
+    // If the chair already has a character that isn't in the pool
+    // (e.g. set on a previous run before the pool was populated), keep
+    // it visible at the top so the Storyteller doesn't lose it.
+    if (editSelectedCharacter && !names.includes(editSelectedCharacter)) {
+      html.push(
+        `<div class="${pickClasses(editSelectedCharacter, true)}" data-name="${escapeAttr(editSelectedCharacter)}">` +
+        `<span class="name">${labelForName(editSelectedCharacter)}</span>` +
+        assignedTagFor(editSelectedCharacter) +
+        `<span class="ind">\u2713</span>` +
+        `</div>`);
+    }
+
+    const sectionOrder = [
+      ["townsfolk", "Townsfolk"],
+      ["outsider", "Outsiders"],
+      ["minion", "Minions"],
+      ["demon", "Demons"],
+      ["other", "Other"],
+    ];
+    for (const [key, label] of sectionOrder) {
+      const items = buckets[key];
+      if (!items || !items.length) continue;
+      html.push(`<div class="pick-section">${label}</div>`);
+      for (const name of items) {
+        const sel = name === editSelectedCharacter;
+        html.push(
+          `<div class="${pickClasses(name, sel)}" data-name="${escapeAttr(name)}">` +
+          `<span class="name">${labelForName(name)}</span>` +
+          assignedTagFor(name) +
+          `<span class="ind">${sel ? "\u2713" : "+"}</span>` +
+          `</div>`);
+      }
+    }
+
+    if (names.length === 0 && !editSelectedCharacter) {
+      html.push(
+        `<div class="pick-empty">No characters in the pool yet. Use ` +
+        `the “Add Characters” button to fill it.</div>`);
+    }
+
+    editCharPicker.innerHTML = html.join("");
+
+    editCharPicker.querySelectorAll(".pick-item").forEach(el => {
+      el.addEventListener("click", () => {
+        editSelectedCharacter = el.getAttribute("data-name") || "";
+        renderEditCharPicker();
+      });
+    });
+  }
+
+  editCancel.addEventListener("click", closeChairEditor);
+  editRemove.addEventListener("click", () => {
+    if (editingChairId === null) return;
+    const id = editingChairId;
+    const chair = chairs.get(id);
+    const label = chair && (chair.name || chair.character)
+      ? `${chair.name || "—"} (${chair.character || "no role"})`
+      : `Player #${id}`;
+    if (!window.confirm(`Remove ${label}?`)) return;
+    closeChairEditor();
+    removeChair(id);
+  });
+  editBackdrop.addEventListener("click", (ev) => {
+    if (ev.target === editBackdrop) closeChairEditor();
+  });
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key === "Escape" && editBackdrop.classList.contains("open")) {
+      closeChairEditor();
+    }
+  });
+  editForm.addEventListener("submit", (ev) => {
+    ev.preventDefault();
+    if (editingChairId === null) return;
+    const id = editingChairId;
+    const name = editName.value.trim();
+    const character = (editSelectedCharacter || "").trim();
+    closeChairEditor();
+    pushChairInfo(id, name, character);
+  });
+
+  // Suppress the browser default context menu on the whole board so
+  // right-click on empty board space doesn't pop the OS menu.
+  board.addEventListener("contextmenu", (ev) => ev.preventDefault());
+
+  // ----- QR-code modal -----
+
+  const qrBackdrop = document.getElementById("qrBackdrop");
+  const qrUrlInput = document.getElementById("qrUrl");
+  const qrCodeInput = document.getElementById("qrCode");
+  const qrSvgWrap = document.getElementById("qrSvgWrap");
+  const qrLinkWrap = document.getElementById("qrLinkWrap");
+  const qrCandidates = document.getElementById("qrCandidates");
+  const qrWarn = document.getElementById("qrWarn");
+  const qrClose = document.getElementById("qrClose");
+
+  function baseUrlFor(ip, port) {
+    // Raw LAN IPs only speak HTTP; TLS on a bare IP requires a cert.
+    const portPart = port ? ":" + port : "";
+    return `http://${ip}${portPart}`;
+  }
+
+  async function detectBestUrl() {
+    try {
+      const r = await fetch("/api/host_info", { cache: "no-store" });
+      if (!r.ok) throw new Error("host_info status " + r.status);
+      const info = await r.json();
+      if (info && info.lan_ip) {
+        return {
+          url: baseUrlFor(info.lan_ip, info.port || window.location.port),
+          candidates: info.candidates || [],
+          port: info.port || window.location.port || null,
+        };
+      }
+    } catch (e) {
+      console.warn("host_info failed:", e);
+    }
+    // Fallback: whatever origin the storyteller loaded the page from.
+    return {
+      url: window.location.origin,
+      candidates: [],
+      port: window.location.port || null,
+    };
+  }
+
+  function renderCandidatePills(candidates, port) {
+    qrCandidates.innerHTML = "";
+    if (!candidates || candidates.length <= 1) return;
+    const labelEl = document.createElement("span");
+    labelEl.className = "label";
+    labelEl.textContent = "other IPs:";
+    qrCandidates.appendChild(labelEl);
+    for (const ip of candidates) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "pill";
+      b.textContent = ip;
+      b.addEventListener("click", () => {
+        qrUrlInput.value = baseUrlFor(ip, port);
+        renderQr();
+      });
+      qrCandidates.appendChild(b);
+    }
+  }
+
+  async function openQrModal() {
+    // Open immediately with a placeholder, then upgrade when the
+    // server tells us the LAN IP.
+    qrUrlInput.value = window.location.origin;
+    qrCodeInput.value = "";
+    qrCandidates.innerHTML = "";
+    qrBackdrop.classList.add("open");
+    renderQr();
+
+    const info = await detectBestUrl();
+    // Only overwrite if the user hasn't already typed something.
+    if (qrUrlInput.value === window.location.origin) {
+      qrUrlInput.value = info.url;
+    }
+    renderCandidatePills(info.candidates, info.port);
+    renderQr();
+  }
+
+  function closeQrModal() {
+    qrBackdrop.classList.remove("open");
+  }
+
+  function renderQr() {
+    const base = qrUrlInput.value.trim().replace(/\/+$/, "");
+    const code = qrCodeInput.value.trim();
+
+    // Build the phone URL: base + /phone [+ ?code=...].
+    let url = base;
+    if (!url) {
+      qrSvgWrap.innerHTML = "";
+      qrLinkWrap.textContent = "";
+      qrWarn.style.display = "block";
+      qrWarn.textContent = "Enter a base URL to generate a QR code.";
+      return;
+    }
+    url += "/phone";
+    if (code) url += "?code=" + encodeURIComponent(code);
+
+    qrLinkWrap.textContent = url;
+
+    // Warn if the URL would only work on the Storyteller's own machine.
+    try {
+      const host = new URL(url).hostname;
+      if (host === "localhost" || host === "127.0.0.1" || host === "::1") {
+        qrWarn.style.display = "block";
+        qrWarn.textContent =
+          "This URL only works on this computer. For a phone you'll want a " +
+          "LAN IP (e.g. 192.168.x.x:8000) or a tunnel URL (Cloudflare, ngrok).";
+      } else {
+        qrWarn.style.display = "none";
+      }
+    } catch {
+      qrWarn.style.display = "block";
+      qrWarn.textContent = "That doesn't look like a valid URL.";
+      qrSvgWrap.innerHTML = "";
+      return;
+    }
+
+    // Encode. Higher error-correction (Q) tolerates some camera glare /
+    // small rendering artifacts.
+    const QRC = qrcodegen.QrCode;
+    let qr;
+    try {
+      qr = QRC.encodeText(url, QRC.Ecc.QUARTILE);
+    } catch (e) {
+      qrSvgWrap.innerHTML = "";
+      qrWarn.style.display = "block";
+      qrWarn.textContent = "URL too long for a QR code: " + e.message;
+      return;
+    }
+    qrSvgWrap.innerHTML = qrMatrixToSvg(qr, 4);
+  }
+
+  // Build an SVG with one rect per dark module. ``border`` is the
+  // "quiet zone" in modules; the QR spec recommends at least 4.
+  function qrMatrixToSvg(qr, border) {
+    const n = qr.size + border * 2;
+    const parts = [];
+    parts.push(
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${n} ${n}" ` +
+      `shape-rendering="crispEdges">`);
+    // White background so the quiet zone stays light.
+    parts.push(`<rect width="100%" height="100%" fill="#ffffff"/>`);
+    // Build a single path for all dark modules — many fewer SVG nodes
+    // than one <rect> per module.
+    let d = "";
+    for (let y = 0; y < qr.size; y++) {
+      for (let x = 0; x < qr.size; x++) {
+        if (qr.getModule(x, y)) {
+          d += `M${x + border},${y + border}h1v1h-1z`;
+        }
+      }
+    }
+    parts.push(`<path d="${d}" fill="#000000"/>`);
+    parts.push(`</svg>`);
+    return parts.join("");
+  }
+
+  document.getElementById("btnQR").addEventListener("click", openQrModal);
+  qrClose.addEventListener("click", closeQrModal);
+  qrBackdrop.addEventListener("click", (ev) => {
+    if (ev.target === qrBackdrop) closeQrModal();
+  });
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key === "Escape" && qrBackdrop.classList.contains("open")) {
+      closeQrModal();
+    }
+  });
+  qrUrlInput.addEventListener("input", renderQr);
+  qrCodeInput.addEventListener("input", renderQr);
+
+  // ----- toolbar -----
+
+  document.getElementById("btnAdd").addEventListener("click", addChair);
+
+  // ----- Debug mode -----
+  //
+  // A development convenience: toggling debug mode reveals extra
+  // toolbar buttons that streamline test setup. The mode itself is
+  // just a CSS class on <body>; persistence lives in localStorage so
+  // a developer who reloads the page doesn't have to re-enable it.
+  //
+  // Currently provided:
+  //   * Auto-fill — assign random names + characters from the pool
+  //                 to every existing chair.
+  //   * Quick Setup — ensure 8 chairs exist, randomize the pool from
+  //                   the current preset, then auto-fill.
+  const DEBUG_STORAGE_KEY = "botcDebugMode";
+  const DEBUG_NAMES = [
+    "Alice", "Bob", "Charlie", "Dana", "Eve", "Frank", "Grace", "Hank",
+    "Iris", "Jack", "Kira", "Liam", "Mia", "Noah", "Olive", "Pat",
+    "Quinn", "Ruth", "Sam", "Tara", "Uma", "Vince", "Wren", "Xan",
+    "Yara", "Zane",
+  ];
+  const DEBUG_QUICK_SETUP_TARGET = 8;  // # chairs Quick Setup will leave you with
+
+  let debugMode = false;
+  try {
+    debugMode = localStorage.getItem(DEBUG_STORAGE_KEY) === "1";
+  } catch (e) { /* private mode etc. */ }
+
+  function setDebugMode(on) {
+    debugMode = !!on;
+    document.body.classList.toggle("debug-mode", debugMode);
+    try {
+      localStorage.setItem(DEBUG_STORAGE_KEY, debugMode ? "1" : "0");
+    } catch (e) {}
+  }
+
+  function shuffled(arr) {
+    const a = arr.slice();
+    for (let i = a.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [a[i], a[j]] = [a[j], a[i]];
+    }
+    return a;
+  }
+
+  // Assign a random name + character from the pool to every chair.
+  // Names are pulled from DEBUG_NAMES (suffixed with a number if there
+  // are more chairs than names); characters are pulled from the pool
+  // without repetition (a chair gets "" once the pool is exhausted).
+  async function debugAutoFill() {
+    const ordered = [...chairs.values()].sort((a, b) => a.id - b.id);
+    if (ordered.length === 0) {
+      window.alert("No chairs to fill. Add players first " +
+                   "(or use Quick Setup).");
+      return;
+    }
+    const names = shuffled(DEBUG_NAMES);
+    const poolNames = shuffled((poolState.names || []).slice());
+    for (let i = 0; i < ordered.length; i++) {
+      const chair = ordered[i];
+      // Cycle the name list and append a numeric suffix once we wrap,
+      // so duplicates remain distinguishable on the board.
+      const baseName = names[i % names.length];
+      const cycle = Math.floor(i / names.length);
+      const name = cycle === 0 ? baseName : `${baseName} ${cycle + 1}`;
+      const character = poolNames[i] || "";
+      // Sequential await: the server applies updates in arrival order,
+      // so any retries / errors stay attached to the right chair.
+      // eslint-disable-next-line no-await-in-loop
+      await pushChairInfo(chair.id, name, character);
+    }
+  }
+
+  // Get to a runnable game state in one click: top up to N chairs,
+  // randomize a roster from the current preset, fill names/characters.
+  async function debugQuickSetup() {
+    // Top up chairs.
+    while (chairs.size < DEBUG_QUICK_SETUP_TARGET) {
+      // eslint-disable-next-line no-await-in-loop
+      await addChair();
+    }
+    // Randomize the pool if a preset is selected; otherwise warn but
+    // proceed (auto-fill will just leave characters blank).
+    if (currentPreset) {
+      await randomizePool(currentPreset);
+    } else {
+      console.warn("Quick Setup: no preset selected — characters left blank");
+    }
+    await debugAutoFill();
+  }
+
+  document.getElementById("btnDebugMode").addEventListener("click", () => {
+    setDebugMode(!debugMode);
+  });
+  document.getElementById("btnDebugFill").addEventListener("click", debugAutoFill);
+  document.getElementById("btnDebugSeed").addEventListener("click", debugQuickSetup);
+  // Apply persisted debug-mode state on first paint.
+  setDebugMode(debugMode);
+
+  // ----- Start Game button -----
+  //
+  // Tells the server to materialise the chairs into engine players,
+  // validate setup (>= 5 players, exactly one Demon, every seat has a
+  // character), and spin up the engine — including launching the
+  // night-phase worker so prompts start flowing as soon as the
+  // storyteller clicks "Start Night" next.
+  //
+  // The server's POST /api/engine/start_game does the actual work:
+  //   1. Sync chairs → engine seats / characters.
+  //   2. Engine.start_game() (validates seat count, demon count, etc.).
+  //   3. The engine spawns its own worker thread for the night phase
+  //      (see Engine._run_night), so the storyteller's UI thread isn't
+  //      blocked while abilities are resolving.
+  const startBtn = document.getElementById("btnStartGame");
+  const resetBtn = document.getElementById("btnResetGame");
+  const startStatus = document.getElementById("startStatus");
+
+  function setStartStatus(msg, kind) {
+    startStatus.textContent = msg || "";
+    startStatus.classList.remove("error", "ok");
+    if (kind === "error") startStatus.classList.add("error");
+    else if (kind === "ok") startStatus.classList.add("ok");
+  }
+
+  function updateStartButtonForEngine(engineSnapshot) {
+    if (!engineSnapshot) return;
+    const phase = engineSnapshot.phase || "setup";
+    // Map engine phases to body classes the CSS uses to flip between
+    // setup / night / day layouts.
+    const klassByPhase = {
+      "setup": "phase-setup",
+      "first_night": "phase-night",
+      "night": "phase-night",
+      "day": "phase-day",
+      "finished": "phase-finished",
+    };
+    document.body.classList.remove(
+      "phase-setup", "phase-night", "phase-day", "phase-finished"
+    );
+    document.body.classList.add(klassByPhase[phase] || "phase-setup");
+
+    if (phase === "setup") {
+      // Setup. Re-enable / re-text the Start Game button (state may
+      // need to flip if the storyteller resets and replays).
+      startBtn.textContent = "▶ Start Game";
+      // Disabled-or-not is decided by maybeUpdateStartButtonReadiness().
+    } else if (phase === "finished") {
+      // Same toolbar layout as Night/Day; nothing else to do here.
+      setStartStatus("Game finished.", "ok");
+    } else {
+      if (!startStatus.textContent) {
+        setStartStatus("Engine is in " + phase + " phase.", "ok");
+      }
+    }
+    maybeUpdateStartButtonReadiness();
+  }
+
+  // Disable Start Game until every chair has both a player name and a
+  // character, AND the multiset of chair characters matches the
+  // characters listed in the right-side pool panel. Called whenever
+  // chairs / characters change so the button reflects the current
+  // setup state in real time.
+  function maybeUpdateStartButtonReadiness() {
+    const phase = document.body.classList.contains("phase-setup")
+      ? "setup" : "other";
+    if (phase !== "setup") {
+      // Let CSS hide the button entirely.
+      startBtn.disabled = true;
+      return;
+    }
+    const list = [...chairs.values()];
+    const seatedCount = list.length;
+
+    // Step 1: every chair must have a name and a character.
+    const allFilled = list.every(c =>
+      (c.name || "").trim() !== ""
+      && (c.character || "").trim() !== ""
+    );
+    if (seatedCount < 5) {
+      startBtn.disabled = true;
+      startBtn.title = `Need at least 5 players (${seatedCount}/5).`;
+      return;
+    }
+    if (!allFilled) {
+      const missing = list.filter(c =>
+        !(c.name || "").trim() || !(c.character || "").trim()
+      ).length;
+      startBtn.disabled = true;
+      startBtn.title = `${missing} chair${missing === 1 ? "" : "s"} need a character.`;
+      return;
+    }
+
+    // Step 2: chair characters must multiset-match the pool.
+    const chairBag = new Map();
+    for (const c of list) {
+      const ch = (c.character || "").trim();
+      if (ch) chairBag.set(ch, (chairBag.get(ch) || 0) + 1);
+    }
+    const poolBag = new Map();
+    for (const n of (poolState.names || [])) {
+      poolBag.set(n, (poolBag.get(n) || 0) + 1);
+    }
+    let mismatch = null;
+    if (poolBag.size === 0) {
+      mismatch = "Add characters to the pool first.";
+    } else if (chairBag.size !== poolBag.size) {
+      mismatch = "Chair characters and the pool don't match.";
+    } else {
+      for (const [name, count] of chairBag) {
+        if (poolBag.get(name) !== count) {
+          mismatch = `Chair characters and the pool don't match (${name}).`;
+          break;
+        }
+      }
+      if (!mismatch) {
+        for (const [name, count] of poolBag) {
+          if (chairBag.get(name) !== count) {
+            mismatch = `Pool has a ${name} that no chair holds.`;
+            break;
+          }
+        }
+      }
+    }
+    if (mismatch) {
+      startBtn.disabled = true;
+      startBtn.title = mismatch;
+      return;
+    }
+    startBtn.disabled = false;
+    startBtn.title = "All chairs ready — click to start the game.";
+  }
+
+  async function startGame() {
+    startBtn.disabled = true;
+    setStartStatus("Starting…");
+    try {
+      const body = {};
+      if (currentPreset) body.preset = currentPreset;
+      const r = await fetch("/api/engine/start_game", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        setStartStatus(data.error || "Start failed.", "error");
+        startBtn.disabled = false;
+        return;
+      }
+      updateStartButtonForEngine(data);
+      setStartStatus("Game started — first night.", "ok");
+      // Refresh the rest of the UI so any seat-state badges sync up.
+      await refresh();
+      // Begin polling the engine for prompts so the storyteller sees
+      // the wake-up sheet for the first night.
+      startPromptPolling();
+    } catch (err) {
+      setStartStatus("Network error: " + err.message, "error");
+      startBtn.disabled = false;
+    }
+  }
+
+  startBtn.addEventListener("click", startGame);
+
+  // ----- Reset Game button -----
+  //
+  // Confirms with the storyteller, then POSTs /api/engine/reset which
+  // tears down the engine subprocess, recreates the in-process engine
+  // in setup phase, and clears the chair → engine player_id bindings
+  // so a future Start Game re-seats everyone. The UI hides the prompt
+  // drawer, stops polling, and flips the toolbar back to "Start Game".
+  async function resetGame() {
+    const ok = window.confirm(
+      "Reset the game?\n\n" +
+      "This will kill the running engine subprocess and return to the " +
+      "town square. Chair layout, player names, and character pool " +
+      "are preserved — the in-progress game state is discarded."
+    );
+    if (!ok) return;
+    resetBtn.disabled = true;
+    setStartStatus("Resetting…");
+    try {
+      const r = await fetch("/api/engine/reset", { method: "POST" });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        setStartStatus(data.error || "Reset failed.", "error");
+        resetBtn.disabled = false;
+        return;
+      }
+      // Stop polling for prompts; hide the panel.
+      if (_pollTimer) {
+        clearInterval(_pollTimer);
+        _pollTimer = null;
+      }
+      _currentPrompt = null;
+      _selectedPlayerIds = [];
+      _selectedCharacter = null;
+      _selectedYesNo = null;
+      phaseDock.classList.add("no-prompt");
+      applyHighlight([]);
+
+      setStartStatus(
+        data.subprocess_killed
+          ? "Reset — engine subprocess killed."
+          : "Reset — back to setup.",
+        "ok"
+      );
+      // Refresh the rest of the UI; updateStartButtonForEngine will
+      // flip the toolbar back to "Start Game" since the engine is
+      // in setup phase again.
+      await refresh();
+    } catch (err) {
+      setStartStatus("Network error: " + err.message, "error");
+    } finally {
+      resetBtn.disabled = false;
+    }
+  }
+
+  resetBtn.addEventListener("click", resetGame);
+
+  // ----- Prompt panel (storyteller-facing prompt drawer) -----
+  //
+  // Polls /api/prompt for the current prompt and renders it in a
+  // bottom-of-screen drawer. When the engine emits an info payload
+  // intended for a player's phone (e.g. a Washerwoman info display),
+  // the storyteller sees it covered with a "Show" button so they can
+  // hand the device to the player at the right moment without leaking
+  // the info ahead of time.
+  //
+  // The drawer self-hides when no prompt is pending.
+
+  const phaseDock = document.getElementById("phaseDock");
+  const promptPanel = document.getElementById("promptPanel");
+  const promptTitle = document.getElementById("promptTitle");
+  const promptDescription = document.getElementById("promptDescription");
+  const promptWakeup = document.getElementById("promptWakeup");
+  const promptStages = document.getElementById("promptStages");
+  const promptPayload = document.getElementById("promptPayload");
+  const promptPayloadHeader = document.getElementById("promptPayloadHeader");
+  const promptPayloadTokens = document.getElementById("promptPayloadTokens");
+  const promptOptions = document.getElementById("promptOptions");
+  const promptHint = document.getElementById("promptHint");
+  const promptRandomize = document.getElementById("promptRandomize");
+  const promptYes = document.getElementById("promptYes");
+  const promptNo = document.getElementById("promptNo");
+  const promptNext = document.getElementById("promptNext");
+  const backBtn = document.getElementById("btnBack");
+  const startNightBtn = document.getElementById("btnStartNight");
+
+  let _currentPrompt = null;
+  let _pollTimer = null;
+  let _selectedPlayerIds = [];   // for multi-player select
+  let _selectedCharacter = null; // for character select
+  let _selectedCount = null;     // for "0/1/2" numeric pick (Empath/Chef)
+  let _selectedYesNo = null;     // for yes/no toggle (true / false / null)
+
+  // Accumulating-panel state.
+  //
+  // The storyteller's prompt panel groups all the prompts the engine
+  // sends for one ability (or one minion/demon-info recipient) into a
+  // single, growing card so the storyteller doesn't have to re-read
+  // the rule line every step. The panel is keyed by
+  // (character, target_player_id) and wipes itself when that key
+  // changes — i.e. when the engine moves on to the next character.
+  //
+  // Each completed selection shows up as a labeled answer-pill below
+  // the question; the active prompt's controls (#promptOptions,
+  // #promptYes, #promptNo, #promptNext) live where they always have so
+  // existing button wiring keeps working.
+  let _panelSession = null;     // { key, character, target_pid, stages: [...] }
+  // Parity flag that flips each time the panel session changes. Used
+  // to alternate the prompt panel background between two slightly
+  // different shades, giving the storyteller a clear visual cue that
+  // the engine has advanced from one character to the next (especially
+  // helpful when adjacent prompts otherwise look very similar).
+  let _panelAlt = false;
+  // Stages accumulated in the current session.
+  // Each stage = {question, answer, kind: "input" | "info"}.
+
+  function panelKey(p) {
+    const meta = p.meta || {};
+    // Group strictly by (character, recipient). Without target_pid in
+    // the key, MINION_INFO would coalesce all minions into one panel
+    // and DEMON_INFO would coalesce multiple demons (rare but legal).
+    if (meta.character) {
+      return `char:${meta.character}:${p.target_player_id ?? ""}`;
+    }
+    if (meta.step_kind === "preset_step") {
+      return `step:${meta.step_name || ""}`;
+    }
+    return `prompt:${p.id}`;
+  }
+
+  function lookupPlayerName(pid) {
+    if (pid == null) return null;
+    for (const ch of chairs.values()) {
+      const cpid = ch.player_id || ch.id;
+      if (cpid === pid) return ch.name || ("seat " + ch.id);
+    }
+    return "Player " + pid;
+  }
+
+  // Translate a prompt-response value into a human-readable string for
+  // the answer pill on the completed stage.
+  function formatAnswer(prompt, value) {
+    if (prompt.type === "yes_no") return value ? "Yes" : "No";
+    if (prompt.type === "select_player" || prompt.type === "select_players") {
+      const ids = Array.isArray(value) ? value : (value == null ? [] : [value]);
+      const names = ids.map(id => lookupPlayerName(id) || ("Player " + id));
+      return names.join(", ") || "(none)";
+    }
+    if (prompt.type === "select_character") {
+      return String(value ?? "");
+    }
+    return value == null ? "OK" : String(value);
+  }
+
+  // Short, panel-friendly label for the kind of question being asked.
+  function stageQuestionLabel(prompt) {
+    const meta = prompt.meta || {};
+    const step = meta.step;
+    // Some steps (e.g. select_players) are used by both player-driven
+    // prompts (Fortune Teller picks 2) and storyteller-driven prompts
+    // (drunk/poisoned Washerwoman picks the 2 players to display). The
+    // stage tells us which: "st_pre" / "st_post" => Storyteller, else
+    // Player. We map (step, isStorytellerStage) -> label.
+    const isStStage = meta.stage === "st_pre" || meta.stage === "st_post";
+    const playerStepLabels = {
+      select_target: "Player selects a target",
+      select_player: "Player selects a player",
+      select_players: "Player selects players",
+      select_two: "Player selects two players",
+      select_master: "Butler selects their master",
+      select_character: "Storyteller picks a character",
+      select_wrong_player: "Storyteller picks the wrong player",
+      select_shown_character: "Storyteller picks the character to show",
+      select_count: "Storyteller picks the count to show",
+      select_yes_no: "Storyteller picks the answer to show",
+      select_new_imp: "Pick a Minion to become the new Imp",
+      select_zero_or_pair: "Storyteller picks 0 vs 1-of-2",
+    };
+    const stStepLabels = {
+      select_target: "Storyteller selects a target",
+      select_player: "Storyteller selects a player",
+      select_players: "Storyteller selects players",
+      select_two: "Storyteller selects two players",
+    };
+    if (step && isStStage && stStepLabels[step]) return stStepLabels[step];
+    if (step && playerStepLabels[step]) return playerStepLabels[step];
+    return prompt.text || "(prompt)";
+  }
+
+  function startPromptPolling() {
+    if (_pollTimer) return;
+    _pollTimer = setInterval(pollPrompt, 400);
+    pollPrompt();
+  }
+
+  async function pollPrompt() {
+    try {
+      const r = await fetch("/api/prompt");
+      if (!r.ok) return;
+      const data = await r.json();
+      const p = data.prompt;
+      const samePrompt = p && _currentPrompt && p.id === _currentPrompt.id;
+      if (!samePrompt) {
+        _currentPrompt = p || null;
+        _selectedPlayerIds = [];
+        _selectedCharacter = null;
+        _selectedCount = null;
+        _selectedYesNo = null;
+        renderPrompt();
+      }
+      // Stop polling if the engine has finished (game over): the night
+      // thread will idle.
+      const snap = data.engine || null;
+      if (snap && snap.phase === "finished") {
+        clearInterval(_pollTimer);
+        _pollTimer = null;
+      }
+    } catch (e) { /* ignore network blips */ }
+  }
+
+  // Build the per-token list shown inside the player payload area.
+  // Each entry is {label, body}: the label is the physical token
+  // name (e.g. "THESE ARE YOUR MINIONS", a character name like
+  // "SOLDIER", a number like "1", or "YES"/"NO") and the body is
+  // the names/values to read off alongside that token. Returns an
+  // array because some prompts (minion-info, demon-info) show two
+  // tokens at once.
+  function buildInfoTokens(p, meta, namesById, description) {
+    const tokens = [];
+    const namesFor = (ids) => (ids || [])
+      .map(id => namesById.get(id) || ("Player " + id));
+    const stepKind = meta.step_kind;
+    // Some characters store their step under "step" rather than
+    // "step_kind" (e.g. Spy uses meta.step = "grimoire").
+    const step = meta.step;
+    const character = meta.character;
+
+    // ----- Minion / Demon intros ----------------------------------
+    if (stepKind === "minion_info") {
+      const demonNames = (meta.demon_player_names || []).join(", ");
+      // Other minions = every minion except the one receiving the
+      // info (so the recipient isn't told "you are your own minion").
+      const targetName = meta.target_player_name
+        || (p.target_player_id != null
+            ? namesById.get(p.target_player_id) : null);
+      const otherMinionNames = (meta.minion_player_names || [])
+        .filter(n => n !== targetName)
+        .join(", ");
+      if (demonNames) {
+        tokens.push({label: "THIS IS THE DEMON", body: demonNames});
+      }
+      if (otherMinionNames) {
+        tokens.push({
+          label: "THESE ARE YOUR MINIONS",
+          body: otherMinionNames,
+        });
+      }
+      return tokens;
+    }
+    if (stepKind === "demon_info") {
+      const minionNames = (meta.minion_player_names || []).join(", ");
+      const bluffs = (meta.bluff_characters || []).join(", ");
+      if (minionNames) {
+        tokens.push({label: "THESE ARE YOUR MINIONS", body: minionNames});
+      }
+      if (bluffs) {
+        tokens.push({
+          label: "THESE CHARACTERS ARE NOT IN PLAY",
+          body: bluffs,
+        });
+      }
+      return tokens;
+    }
+
+    // ----- Spy: grimoire snapshot --------------------------------
+    if (stepKind === "grimoire" || step === "grimoire"
+        || character === "Spy") {
+      tokens.push({
+        label: "GRIMOIRE",
+        body: "Study the grimoire on the Storyteller's screen.",
+      });
+      return tokens;
+    }
+
+    const chars = p.highlight_characters || [];
+    const playerNames = namesFor(p.highlight_player_ids).join(", ");
+
+    // ----- Librarian "no Outsiders" special case -----------------
+    // Librarian fires an info prompt with NO highlights when there
+    // are zero Outsiders in play — the canonical token is "0".
+    if (character === "Librarian" && chars.length === 0
+        && (!p.highlight_player_ids
+            || p.highlight_player_ids.length === 0)) {
+      tokens.push({
+        label: "0",
+        body: "There are no Outsiders in play.",
+      });
+      return tokens;
+    }
+
+    // ----- Fortune Teller: YES / NO token ------------------------
+    if (character === "Fortune Teller") {
+      // The text either starts with "Yes" or "No" — derive the
+      // token from that.
+      const yes = /^\s*Yes/i.test(p.text || "");
+      tokens.push({
+        label: yes ? "YES" : "NO",
+        body: playerNames,
+      });
+      return tokens;
+    }
+
+    // ----- Chef / Empath: pure count tokens ----------------------
+    // The player physically just sees a number, so use the count
+    // itself as the token label and leave the body empty.
+    if (character === "Chef" || character === "Empath") {
+      const m = (p.text || "").match(/(\d+)/);
+      const count = m ? m[1] : "?";
+      tokens.push({label: count, body: ""});
+      return tokens;
+    }
+
+    // ----- Washerwoman / Librarian / Investigator -----------------
+    // The character token alone can be hard to read on a small
+    // phone, so prepend an explicit "ONE OF THESE IS THE <CHAR>"
+    // line and list both players underneath. This way the
+    // storyteller (and, when shown_to_player=true, the player) see
+    // unambiguous text alongside the character token image.
+    if (chars.length > 0
+        && (character === "Washerwoman"
+            || character === "Librarian"
+            || character === "Investigator")) {
+      const charName = chars
+        .map(c => String(c).toUpperCase())
+        .join(" / ");
+      tokens.push({
+        label: "ONE OF THESE IS THE " + charName,
+        body: playerNames || "",
+      });
+      return tokens;
+    }
+
+    // ----- Generic character-token info --------------------------
+    // Ravenkeeper / Undertaker — show the character token as the
+    // label and the matching player name(s) as the body.
+    if (chars.length > 0) {
+      const charLabel = chars
+        .map(c => String(c).toUpperCase())
+        .join(" / ");
+      tokens.push({label: charLabel, body: playerNames || ""});
+      return tokens;
+    }
+
+    // ----- Fallback ---------------------------------------------
+    // Unknown info prompt: use the character name as the label and
+    // the prompt's text as the body, suppressing any duplicate of
+    // the description we've already rendered above the payload.
+    let bodyText = p.text || "";
+    if (bodyText === description) bodyText = "";
+    tokens.push({
+      label: (character || "INFO").toUpperCase(),
+      body: bodyText,
+    });
+    return tokens;
+  }
+
+  // Render the accumulated stages list from the current panel session.
+  // Past stages are summarised with a dimmed question + bright answer
+  // pill; the active stage is rendered as just the question (the
+  // actual input controls live in #promptOptions and #promptActions,
+  // kept where they always have been). The "Wake up <Role> (<Player>)"
+  // line is inserted as a marker stage between any st_pre stages and
+  // the first non-st_pre stage — i.e. visually right after the
+  // storyteller's pre-wake decisions and right before the player
+  // physically wakes.
+  function renderStagesList() {
+    promptStages.innerHTML = "";
+    if (!_panelSession) return;
+    const sess = _panelSession;
+    const hasNonPre = sess.stages.some(s => s.kind !== "st_pre");
+    const showWakeup = sess.character && sess.wakeupName
+      && (hasNonPre || sess.wakeupReached);
+    let wakeupRendered = false;
+    for (const stage of sess.stages) {
+      // If the next stage is no longer pre-wake, this is where the
+      // wake-up marker belongs.
+      if (showWakeup && !wakeupRendered && stage.kind !== "st_pre") {
+        renderWakeupMarker(sess);
+        wakeupRendered = true;
+      }
+      const div = document.createElement("div");
+      div.className = "stage" + (stage.active ? " current" : "");
+      const q = document.createElement("div");
+      q.className = "stage-question";
+      q.textContent = stage.question;
+      div.appendChild(q);
+      if (!stage.active && stage.answer) {
+        const a = document.createElement("div");
+        a.className = "stage-answer";
+        a.textContent = stage.answer;
+        div.appendChild(a);
+      }
+      promptStages.appendChild(div);
+    }
+    // No non-st_pre stage in the list yet, but the session's flagged
+    // wakeupReached (e.g. an info-only payload arrived) — render the
+    // marker at the end.
+    if (showWakeup && !wakeupRendered) {
+      renderWakeupMarker(sess);
+    }
+  }
+
+  function renderWakeupMarker(sess) {
+    const div = document.createElement("div");
+    div.className = "wakeup-marker";
+    div.textContent =
+      `Wake up ${sess.character} (${sess.wakeupName})`;
+    promptStages.appendChild(div);
+  }
+
+  function renderPrompt() {
+    const p = _currentPrompt;
+    if (!p) {
+      // No prompt — fade the prompt panel inside the dock but leave
+      // the dock + Next/Back buttons in place (the storyteller still
+      // needs to step forward when the engine is idle between
+      // ability-driven prompts). _panelSession is intentionally NOT
+      // cleared here: the engine often takes a few ms between prompts
+      // for the same ability, and we want the accumulated stages to
+      // survive that gap. When the next prompt arrives, the panelKey
+      // check below decides whether to keep the session or start a
+      // fresh one for the new character.
+      phaseDock.classList.add("no-prompt");
+      applyHighlight([]);
+      return;
+    }
+    phaseDock.classList.remove("no-prompt");
+    promptPanel.classList.toggle("alt", _panelAlt);
+
+    const meta = p.meta || {};
+
+    // Decide whether this prompt continues the current panel session
+    // or starts a fresh one (e.g. the engine has moved on to the next
+    // character, or the next minion in MINION INFO). When starting a
+    // fresh session we capture the title / description / wake-up line
+    // and freeze them — sections 1, 2, 3 are meant to stay constant
+    // for the entire ability, even though the *individual* prompts
+    // the engine sends afterwards (select_character, select_wrong_player,
+    // information) carry their own narrower text.
+    const newKey = panelKey(p);
+    if (!_panelSession || _panelSession.key !== newKey) {
+      // New character / recipient — flip the alt-background flag so
+      // adjacent panels don't look identical.
+      _panelAlt = !_panelAlt;
+      const stepName = meta.step_name || meta.character || "Storyteller";
+      const description = meta.description || p.text || "";
+      const wakeupName = meta.target_player_name
+        || lookupPlayerName(p.target_player_id);
+      _panelSession = {
+        key: newKey,
+        character: meta.character || null,
+        target_pid: p.target_player_id ?? null,
+        title: stepName,
+        description: description,
+        wakeupName: (meta.character && wakeupName) ? wakeupName : null,
+        // Set true once the storyteller has moved past the pre-wake
+        // stages (or there were none) — used by renderStagesList to
+        // decide whether to show the "Wake up X (Y)" marker.
+        wakeupReached: false,
+        stages: [],
+        // Drunk/poisoned label ("drunk", "poisoned", "drunk and
+        // poisoned"); appended to the title when set so the ST
+        // immediately sees that the active player is impaired.
+        drunkPoisonState: meta.drunk_poison_state || null,
+      };
+    } else {
+      // Same session, but a later prompt may carry better wake-up
+      // info than the first did (e.g. the announce_step prompt names
+      // the player but the ability prompts that follow may not). We
+      // only fill the cached fields in if they're currently empty.
+      if (!_panelSession.wakeupName) {
+        const wakeupName = meta.target_player_name
+          || lookupPlayerName(p.target_player_id);
+        if (_panelSession.character && wakeupName) {
+          _panelSession.wakeupName = wakeupName;
+        }
+      }
+      // Pick up the drunk/poisoned label from a later prompt if the
+      // first prompt didn't carry one (e.g. the panel was opened by
+      // an announce_step that doesn't know the impaired state yet).
+      if (!_panelSession.drunkPoisonState && meta.drunk_poison_state) {
+        _panelSession.drunkPoisonState = meta.drunk_poison_state;
+      }
+    }
+
+    // Section 1 — title (the role / step name). Append the
+    // drunk/poisoned label in parentheses when set, italicized so the
+    // ST sees at a glance that the active player is impaired.
+    if (_panelSession.drunkPoisonState) {
+      promptTitle.innerHTML =
+        `${escapeHtml(_panelSession.title)} `
+        + `<em class="impaired-label">`
+        + `(${escapeHtml(_panelSession.drunkPoisonState)})`
+        + `</em>`;
+    } else {
+      promptTitle.textContent = _panelSession.title;
+    }
+
+    // Section 2 — rulebook description (preset).
+    promptDescription.textContent = _panelSession.description;
+
+    // The legacy top-of-panel wake-up line is no longer the right
+    // home for the marker — it now lives between st_pre and the rest
+    // of the stages (rendered by renderStagesList). Always hide it
+    // here.
+    promptWakeup.style.display = "none";
+
+    // The current prompt becomes the new active stage at the bottom of
+    // the stages list. Sections 4 / 5 (input prompts) get a stage
+    // entry; section 6 (the player-facing payload) is rendered below
+    // the stages list so the existing payload styling still applies.
+    // Pure information prompts (Dusk / Dawn / etc.) don't add a stage
+    // card either — the description above is enough.
+    const isInfo = p.type === "information";
+    const isPayload = isInfo && !!p.shown_to_player;
+
+    // Stage kind drives both the position of the wake-up marker and
+    // (eventually) any visual differentiation of "ST decision" vs
+    // "player decision" cards. The engine tags each prompt with
+    // meta.stage; for prompts without an explicit tag we assume
+    // "player" (post-wake) since that's the most common case.
+    const stageKind = meta.stage || (isInfo ? "info" : "player");
+    // The preset announce_step prompt fires *before* any of the
+    // character's ability prompts and isn't itself a wake-up trigger:
+    // for a Washerwoman the order is announce → select_character
+    // (st_pre) → select_wrong_player (st_pre) → information. Treating
+    // announce as wakeupReached would put the marker above the
+    // st_pre stages — exactly wrong. So we only trip the flag for
+    // real ability prompts.
+    const isAnnouncement = meta.step_kind === "preset_step";
+    if (stageKind !== "st_pre" && !isAnnouncement) {
+      _panelSession.wakeupReached = true;
+    }
+
+    // Drop any leftover "active" stage from the prior render of the
+    // same session (we're about to push the new active stage).
+    _panelSession.stages = _panelSession.stages.filter(s => !s.active);
+    if (!isInfo) {
+      _panelSession.stages.push({
+        active: true,
+        kind: stageKind,
+        question: stageQuestionLabel(p),
+      });
+    }
+    renderStagesList();
+
+    // Player payload: shown when the prompt is meant for a player's
+    // phone (shown_to_player=true) AND there's an info payload to
+    // display.
+    const showPayload = isPayload;
+    if (showPayload) {
+      // Look up player names so we can both personalize the header
+      // ("SHOW THIS TO <NAME>") and translate highlight_player_ids
+      // into human-readable lists for each token.
+      const namesById = new Map();
+      for (const ch of chairs.values()) {
+        const pid = ch.player_id || ch.id;
+        namesById.set(pid, ch.name || ("seat " + ch.id));
+      }
+      const targetName = (p.target_player_id != null
+        && namesById.has(p.target_player_id))
+        ? namesById.get(p.target_player_id)
+        : (meta.target_player_name || "the player");
+      promptPayloadHeader.textContent = "Show this to " + targetName;
+
+      // Build the list of token rows. Each row is a labeled bit of
+      // info the storyteller will physically show the player (e.g.
+      // "THESE ARE YOUR MINIONS: Alice, Bob"). For most prompts
+      // there's just one row; minion/demon-info shows two.
+      // ``description`` here is the cached session description (from
+      // the rulebook) used by buildInfoTokens to suppress duplicate
+      // body text — *not* the per-prompt question.
+      const description = _panelSession.description || "";
+      const tokens = buildInfoTokens(p, meta, namesById, description);
+      promptPayloadTokens.innerHTML = "";
+      for (const t of tokens) {
+        const row = document.createElement("div");
+        row.className = "token-row";
+        const labelEl = document.createElement("div");
+        labelEl.className = "token-label";
+        labelEl.textContent = t.label;
+        row.appendChild(labelEl);
+        if (t.body) {
+          const bodyEl = document.createElement("div");
+          bodyEl.className = "token-body";
+          bodyEl.textContent = t.body;
+          row.appendChild(bodyEl);
+        }
+        promptPayloadTokens.appendChild(row);
+      }
+      promptPayload.style.display = "";
+    } else {
+      promptPayload.style.display = "none";
+    }
+
+    // Highlight: dim every chair on the board except the targets the
+    // engine has flagged for this prompt. Eligible-selection prompts
+    // also highlight (so the storyteller's eye snaps to who can be
+    // picked); information prompts highlight the explicitly-listed
+    // ``highlight_player_ids`` plus the source player.
+    const highlightIds = collectHighlightIds(p, meta);
+    applyHighlight(highlightIds);
+
+    // Buttons.
+    promptOptions.innerHTML = "";
+    promptYes.style.display = "none";
+    promptNo.style.display = "none";
+    promptRandomize.style.display = "none";
+    promptNext.style.display = "";
+    promptHint.textContent = "";
+
+    if (p.type === "yes_no") {
+      // Render Yes/No as toggleable .option buttons so the layout
+      // matches every other multiple-choice prompt: ST clicks to
+      // toggle their pick and presses Next to send. The engine's
+      // pre-filled (wrong, when drunk/poisoned) answer is highlighted
+      // via .default-hint; if the engine also reports the *correct*
+      // answer we ring it in green via .correct-hint.
+      promptYes.style.display = "none";
+      promptNo.style.display = "none";
+      const def = meta.default;
+      const correct = meta.correct;
+      // Pre-pick the engine's default so a single Next click works.
+      if (def === true || def === false) {
+        _selectedYesNo = def;
+      } else {
+        _selectedYesNo = null;
+      }
+      [["Yes", true], ["No", false]].forEach(([label, val]) => {
+        const opt = document.createElement("button");
+        opt.type = "button";
+        opt.className = "option";
+        opt.textContent = label;
+        opt.dataset.yesno = String(val);
+        if (def === val) opt.classList.add("default-hint");
+        if (correct === val) opt.classList.add("correct-hint");
+        opt.addEventListener("click", () => {
+          _selectedYesNo = val;
+          renderSelectionState();
+        });
+        promptOptions.appendChild(opt);
+      });
+      promptHint.textContent = (def === true)
+        ? "Default: Yes"
+        : (def === false ? "Default: No" : "");
+      renderSelectionState();
+    } else if (p.type === "select_player" || p.type === "select_players") {
+      const eligible = p.eligible_player_ids || [];
+      const count = p.count || 1;
+      const allowSelf = p.allow_self !== false;
+      promptHint.textContent = `Pick ${count} player${count > 1 ? "s" : ""}.`;
+      const namesById = new Map();
+      for (const ch of chairs.values()) {
+        const pid = ch.player_id || ch.id; // engine player_id, falls back
+        namesById.set(pid, ch.name || ("seat " + ch.id));
+      }
+      // Pre-select default players if the engine pre-picked some
+      // (e.g. drunk/poisoned info ability with a random-wrong default).
+      // The ST may change the picks; the only control is Next.
+      const defPids = meta.default;
+      if (Array.isArray(defPids)) {
+        _selectedPlayerIds = defPids.slice(0, count);
+      } else if (typeof defPids === "number") {
+        _selectedPlayerIds = [defPids];
+      }
+      // The engine may surface the *correct* set of players alongside
+      // the prefilled wrong default (drunk/poisoned scenarios). Each
+      // matching option gets a small green border so the storyteller
+      // can see at a glance which picks would be the truth.
+      const correctRaw = meta.correct;
+      const correctIds = Array.isArray(correctRaw)
+        ? correctRaw.map(Number)
+        : (typeof correctRaw === "number" ? [correctRaw] : []);
+      // Ask /api/state for fresh player names if needed.
+      eligible.forEach(pid => {
+        const opt = document.createElement("button");
+        opt.type = "button";
+        opt.className = "option";
+        opt.textContent = (namesById.get(pid) || ("Player " + pid))
+          + " (#" + pid + ")";
+        if (_selectedPlayerIds.includes(pid)) {
+          opt.classList.add("default-hint");
+        }
+        if (correctIds.includes(pid)) {
+          opt.classList.add("correct-hint");
+        }
+        opt.addEventListener("click", () => {
+          if (count === 1) {
+            _selectedPlayerIds = [pid];
+          } else {
+            const idx = _selectedPlayerIds.indexOf(pid);
+            if (idx >= 0) _selectedPlayerIds.splice(idx, 1);
+            else if (_selectedPlayerIds.length < count) {
+              _selectedPlayerIds.push(pid);
+            }
+          }
+          renderSelectionState();
+        });
+        opt.dataset.pid = String(pid);
+        promptOptions.appendChild(opt);
+      });
+      if (p.allow_randomize !== false) {
+        promptRandomize.style.display = "";
+      }
+      renderSelectionState();
+    } else if (p.type === "select_character") {
+      const eligible = p.eligible_characters || [];
+      const def = meta.default;
+      promptHint.textContent = "Pick a character" + (def ? ` (default: ${def})` : "");
+      const correct = meta.correct;
+      eligible.forEach(name => {
+        const opt = document.createElement("button");
+        opt.type = "button";
+        opt.className = "option";
+        opt.textContent = name;
+        opt.dataset.name = name;
+        if (def === name) opt.classList.add("default-hint");
+        if (correct === name) opt.classList.add("correct-hint");
+        opt.addEventListener("click", () => {
+          _selectedCharacter = name;
+          renderSelectionState();
+        });
+        promptOptions.appendChild(opt);
+      });
+      if (p.allow_randomize !== false) {
+        promptRandomize.style.display = "";
+      }
+      // Pre-pick the default if any so a one-click "Next" works.
+      if (def) {
+        _selectedCharacter = def;
+        renderSelectionState();
+      }
+    }
+  }
+
+  function renderSelectionState() {
+    const opts = promptOptions.querySelectorAll(".option");
+    opts.forEach(opt => {
+      const pid = parseInt(opt.dataset.pid || "", 10);
+      const name = opt.dataset.name || "";
+      const yn = opt.dataset.yesno;
+      const ynSel = (yn === "true" && _selectedYesNo === true)
+        || (yn === "false" && _selectedYesNo === false);
+      const sel = (!isNaN(pid) && _selectedPlayerIds.includes(pid))
+        || (name && name === _selectedCharacter)
+        || ynSel;
+      opt.classList.toggle("selected", !!sel);
+    });
+  }
+
+  // Collect the chair ids the engine wants to spotlight for the
+  // current prompt. Falls back to a sensible default when the engine
+  // didn't send an explicit highlight set:
+  //   * For Information prompts WITH explicit highlight_player_ids →
+  //     ONLY those (the TARGET of the info — e.g. the Demon for the
+  //     Minion info phase). The receiving/source player is NOT added,
+  //     so they too are dampened along with everyone else.
+  //   * For Information prompts without explicit highlights →
+  //     fall back to target_player_id (the source receiving the info).
+  //   * For SelectPlayer / SelectPlayers prompts → eligible_player_ids
+  //     plus target_player_id (so the source's chair stays bright too).
+  //   * For everything else → just the target_player_id.
+  function collectHighlightIds(p, meta) {
+    const ids = new Set();
+    const explicit = Array.isArray(p.highlight_player_ids)
+      && p.highlight_player_ids.length > 0;
+    if (explicit) {
+      for (const id of p.highlight_player_ids) ids.add(Number(id));
+    }
+    if (Array.isArray(p.eligible_player_ids)
+        && (p.type === "select_player" || p.type === "select_players")) {
+      for (const id of p.eligible_player_ids) ids.add(Number(id));
+    }
+    // For information prompts, an explicit highlight_player_ids list
+    // means "highlight ONLY the target" — don't add the receiving
+    // player back in. For all other prompt types (and info prompts
+    // that didn't ship an explicit highlight) we still want the
+    // source/target_player_id lit up.
+    const isInfoWithExplicitHighlight = (p.type === "information") && explicit;
+    if (p.target_player_id && !isInfoWithExplicitHighlight) {
+      ids.add(Number(p.target_player_id));
+    }
+    return [...ids].filter(n => Number.isFinite(n));
+  }
+
+  // The current highlight set, cached so it survives re-renders.
+  // ``render()`` rebuilds chairsG.innerHTML, which wipes the per-chair
+  // ``.highlight-target`` classes; reapplying this set after each render
+  // keeps the highlight visible until the storyteller clicks Next (at
+  // which point ``respondPrompt`` clears it via ``applyHighlight([])``).
+  let _currentHighlightPlayerIds = [];
+
+  function applyHighlight(playerIds) {
+    // Cache so reapplyHighlight() can restore after a chair re-render.
+    _currentHighlightPlayerIds = Array.isArray(playerIds)
+      ? playerIds.slice()
+      : [];
+    reapplyHighlight();
+  }
+
+  // Translate engine player_ids → chair ids via the chair store's
+  // player_id field. Returns a Set of chair ids to brighten.
+  function computeTargetChairIds(playerIds) {
+    const playerToChair = new Map();
+    for (const chair of chairs.values()) {
+      if (chair.player_id != null) playerToChair.set(chair.player_id, chair);
+    }
+    const targetChairIds = new Set();
+    for (const pid of playerIds || []) {
+      const ch = playerToChair.get(pid);
+      if (ch) targetChairIds.add(ch.id);
+    }
+    return targetChairIds;
+  }
+
+  function reapplyHighlight() {
+    const chairsRoot = document.getElementById("chairs");
+    if (!chairsRoot) return;
+    const targetChairIds = computeTargetChairIds(_currentHighlightPlayerIds);
+    if (targetChairIds.size === 0) {
+      chairsRoot.classList.remove("highlight-active");
+      chairsRoot.querySelectorAll("g[data-id]").forEach(g => {
+        g.classList.remove("highlight-target");
+      });
+      return;
+    }
+    chairsRoot.classList.add("highlight-active");
+    chairsRoot.querySelectorAll("g[data-id]").forEach(g => {
+      const id = parseInt(g.getAttribute("data-id"), 10);
+      g.classList.toggle("highlight-target", targetChairIds.has(id));
+    });
+  }
+
+  promptYes.addEventListener("click", () => respondPrompt(true));
+  promptNo.addEventListener("click", () => respondPrompt(false));
+  promptNext.addEventListener("click", () => {
+    const p = _currentPrompt;
+    if (!p) return;
+    if (p.type === "yes_no") {
+      if (_selectedYesNo !== true && _selectedYesNo !== false) {
+        promptHint.textContent = "Pick Yes or No first.";
+        return;
+      }
+      respondPrompt(_selectedYesNo);
+    } else if (p.type === "select_player" || p.type === "select_players") {
+      const count = p.count || 1;
+      if (_selectedPlayerIds.length === 0) {
+        promptHint.textContent = "Pick at least one player first.";
+        return;
+      }
+      const value = (count === 1) ? _selectedPlayerIds[0] : _selectedPlayerIds;
+      respondPrompt(value);
+    } else if (p.type === "select_character") {
+      if (!_selectedCharacter) {
+        promptHint.textContent = "Pick a character first.";
+        return;
+      }
+      respondPrompt(_selectedCharacter);
+    } else {
+      respondPrompt(null);
+    }
+  });
+
+  promptRandomize.addEventListener("click", () => {
+    const p = _currentPrompt;
+    if (!p) return;
+    if (p.type === "select_player" || p.type === "select_players") {
+      const eligible = p.eligible_player_ids || [];
+      const count = p.count || 1;
+      if (eligible.length === 0) return;
+      const shuffled = [...eligible].sort(() => Math.random() - 0.5);
+      _selectedPlayerIds = shuffled.slice(0, count);
+      renderSelectionState();
+    } else if (p.type === "select_character") {
+      const eligible = p.eligible_characters || [];
+      if (eligible.length === 0) return;
+      _selectedCharacter = eligible[Math.floor(Math.random() * eligible.length)];
+      renderSelectionState();
+    }
+  });
+
+  async function respondPrompt(value) {
+    const p = _currentPrompt;
+    if (!p) return;
+    promptHint.textContent = "Sending…";
+
+    // Freeze the just-answered prompt as a completed stage so the
+    // storyteller sees the answer pill immediately, before the next
+    // prompt arrives via polling. For information prompts shown to a
+    // player there is no stage card (the payload is rendered below the
+    // stages list instead) — clicking "Next" simply tears the panel
+    // session down so the next ability starts fresh.
+    if (_panelSession) {
+      const isInfo = p.type === "information";
+      const meta = p.meta || {};
+      const stageKind = meta.stage || (isInfo ? "info" : "player");
+      // Remove any active stage; replace with a completed one. We
+      // only mint a completed-stage card for selection-type prompts;
+      // information prompts (Dusk / Dawn announcements, payload
+      // info shown to a player) don't get summarised as a stage.
+      _panelSession.stages = _panelSession.stages.filter(s => !s.active);
+      if (!isInfo) {
+        _panelSession.stages.push({
+          active: false,
+          kind: stageKind,
+          question: stageQuestionLabel(p),
+          answer: formatAnswer(p, value),
+        });
+      }
+      renderStagesList();
+    }
+
+    try {
+      const r = await fetch("/api/engine/respond", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt_id: p.id, response: value }),
+      });
+      await r.json().catch(() => ({}));
+    } catch (e) { /* ignore */ }
+    // Clear the live prompt's local state. The session itself is
+    // preserved — the next prompt for the same character will hang off
+    // it. (If the next prompt is a different character, the panelKey
+    // check in renderPrompt() will tear the session down.) We also
+    // tear down the now-stale input controls (option buttons, Yes/No,
+    // Randomize) so the panel doesn't keep advertising buttons that
+    // no longer apply while we wait for the next prompt to arrive.
+    _currentPrompt = null;
+    _selectedPlayerIds = [];
+    _selectedCharacter = null;
+    _selectedYesNo = null;
+    promptOptions.innerHTML = "";
+    promptYes.style.display = "none";
+    promptNo.style.display = "none";
+    promptRandomize.style.display = "none";
+    promptHint.textContent = "";
+    applyHighlight([]);
+    // Resync chair state alongside polling for the next prompt: the
+    // ability we just answered may have flipped game state that the
+    // chair render keys off (e.g. Poisoner picks → poisoned_role,
+    // Butler picks → butler_master_role). Without this refresh, the
+    // chair badges would lag a render cycle behind the engine.
+    refresh().catch(() => {});
+    setTimeout(pollPrompt, 80);
+  }
+
+  // ----- Back / Start Night -----
+  // Back is wired up but doesn't do anything yet — the storyteller can
+  // see the affordance in the dock; future work adds rewind support.
+  if (backBtn) {
+    backBtn.addEventListener("click", () => {
+      promptHint.textContent = "Back is not implemented yet.";
+    });
+  }
+
+  // Start Night: only visible during the Day. POSTs
+  // /api/engine/advance_to_night so the engine flips into Night and
+  // auto-runs the next night's preset sheet.
+  if (startNightBtn) {
+    startNightBtn.addEventListener("click", async () => {
+      startNightBtn.disabled = true;
+      try {
+        const r = await fetch("/api/engine/advance_to_night", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: "{}",
+        });
+        if (!r.ok) {
+          const data = await r.json().catch(() => ({}));
+          setStartStatus(data.error || "Could not start night.", "error");
+          return;
+        }
+        // Then kick the night thread.
+        await fetch("/api/engine/start_night", { method: "POST" });
+        await refresh();
+        startPromptPolling();
+      } catch (err) {
+        setStartStatus("Network error: " + err.message, "error");
+      } finally {
+        startNightBtn.disabled = false;
+      }
+    });
+  }
+
+  // ----- chair-arrangement options (right side) -----
+  //
+  // Two layouts: a 270° semi-circle and a "semi-square" three-sided
+  // grid. Both place the chairs strictly above the Storyteller marker
+  // so the Storyteller occupies its own row at the bottom of the
+  // board. The user's last choice is remembered in localStorage and
+  // re-applied automatically whenever a chair is added or removed.
+
+  const ARRANGE_STORAGE_KEY = "botcArrangement";
+  let currentArrangement = "circle";
+  try {
+    const saved = localStorage.getItem(ARRANGE_STORAGE_KEY);
+    if (saved === "circle" || saved === "square") currentArrangement = saved;
+  } catch (e) { /* private mode etc. — fall back to default */ }
+
+  function _setArrangementSelected(name) {
+    currentArrangement = name;
+    try { localStorage.setItem(ARRANGE_STORAGE_KEY, name); } catch (e) {}
+    const c = document.getElementById("arrangeCircle");
+    const s = document.getElementById("arrangeSquare");
+    if (c) c.classList.toggle("selected", name === "circle");
+    if (s) s.classList.toggle("selected", name === "square");
+  }
+
+  function _applyArrangement(positions) {
+    // Apply the array of {x, y} (one per chair, in chair-id order) to
+    // the local cache, render, and push each move to the server.
+    const ordered = [...chairs.values()].sort((a, b) => a.id - b.id);
+    if (ordered.length !== positions.length) return;
+    for (let i = 0; i < ordered.length; i++) {
+      const c = ordered[i];
+      c.x = positions[i].x;
+      c.y = positions[i].y;
+    }
+    render();
+    for (const c of ordered) pushMove(c.id, c.x, c.y);
+  }
+
+  function _circlePositions(n) {
+    // 270° arc: lower-left through the top to lower-right. Mirrors the
+    // server's `_relayout_arc`. Bottom of the arc clears the
+    // Storyteller's row by roughly half the chair-to-chair spacing.
+    const cx = 0.5, cy = 0.5, r = 0.38;
+    const arc = 1.5 * Math.PI;
+    const start = 0.75 * Math.PI;     // lower-left
+    const out = [];
+    for (let i = 0; i < n; i++) {
+      const theta = (n > 1) ? (start + arc * i / (n - 1))
+                            : (start + arc / 2);
+      out.push({
+        x: cx + r * Math.cos(theta),
+        y: cy + r * Math.sin(theta),
+      });
+    }
+    return out;
+  }
+
+  function _squarePositions(n) {
+    // Grid-aligned U: a top row plus matched left and right columns.
+    // Q = floor((n-1)/3) chairs per side column, T = n - 2Q chairs
+    // across the top row. Rows are spaced uniformly between y_top and
+    // y_st (the Storyteller's row); the Storyteller occupies half a
+    // row's worth of vertical space — i.e. it sits dy/2 below the
+    // lowest chair, not a full dy.
+    const x_left = 0.12, x_right = 0.88;
+    const y_top = 0.10;               // top row of chairs (above prior 0.12)
+    const y_st = 0.88;                // Storyteller's row
+    let Q = Math.max(0, Math.floor((n - 1) / 3));
+    let T = n - 2 * Q;
+    if (T < 1) { T = 1; Q = Math.max(0, Math.floor((n - T) / 2)); }
+    // Q chair-row gaps + 1 half-gap to the Storyteller = (Q + 0.5) * dy
+    const dy = (y_st - y_top) / (Q + 0.5);
+    const out = [];
+    // Path: lower-left side → up → across top → down right side.
+    for (let i = Q; i >= 1; i--) {
+      out.push({ x: x_left, y: y_top + i * dy });
+    }
+    for (let i = 0; i < T; i++) {
+      const x = (T === 1)
+        ? (x_left + x_right) / 2
+        : x_left + (x_right - x_left) * i / (T - 1);
+      out.push({ x, y: y_top });
+    }
+    for (let i = 1; i <= Q; i++) {
+      out.push({ x: x_right, y: y_top + i * dy });
+    }
+    return out;
+  }
+
+  function arrangeAsCircle() {
+    _setArrangementSelected("circle");
+    const n = chairs.size;
+    if (n === 0) return;
+    _applyArrangement(_circlePositions(n));
+  }
+
+  function arrangeAsSquare() {
+    _setArrangementSelected("square");
+    const n = chairs.size;
+    if (n === 0) return;
+    _applyArrangement(_squarePositions(n));
+  }
+
+  function applyCurrentArrangement() {
+    // Re-spread chairs along whatever layout the user last picked.
+    // Used after add/remove so new chairs land on the chosen path.
+    if (chairs.size === 0) return;
+    if (currentArrangement === "square") {
+      _applyArrangement(_squarePositions(chairs.size));
+    } else {
+      _applyArrangement(_circlePositions(chairs.size));
+    }
+  }
+
+  document.getElementById("arrangeCircle")
+    .addEventListener("click", arrangeAsCircle);
+  document.getElementById("arrangeSquare")
+    .addEventListener("click", arrangeAsSquare);
+  // Mark the persisted arrangement as selected on first paint.
+  _setArrangementSelected(currentArrangement);
+
+  // ----- Add-Characters panel -----
+  //
+  // The Storyteller maintains a "character pool" — the list of roles
+  // they'll deal out to players. The panel lets them pick a preset
+  // (e.g. Trouble Brewing) and toggle each role on/off. The bottom-
+  // right FAB shows how many roles still need to be added compared
+  // to the recommended counts for the current chair count, and a
+  // small side panel mirrors the pool whenever the modal is closed.
+
+  const TYPE_ORDER = ["townsfolk", "outsider", "minion", "demon"];
+  const TYPE_LABEL = {
+    townsfolk: "Townsfolk",
+    outsider: "Outsiders",
+    minion: "Minions",
+    demon: "Demons",
+  };
+
+  const fab = document.getElementById("btnAddChars");
+  const fabBadge = document.getElementById("addCharsBadge");
+  const addBackdrop = document.getElementById("addCharsBackdrop");
+  const presetSlider = document.getElementById("presetSlider");
+  const neededBanner = document.getElementById("addCharsNeeded");
+  const addScroll = document.getElementById("addCharsScroll");
+  const addClose = document.getElementById("addCharsClose");
+  const addClear = document.getElementById("addCharsClear");
+  const addRandomize = document.getElementById("addCharsRandomize");
+  const poolSide = document.getElementById("poolSide");
+  const poolSideTotal = document.getElementById("poolSideTotal");
+  const poolSideBody = document.getElementById("poolSideBody");
+
+  // Last server snapshot of the character pool. Mutated by the
+  // pool-API helpers and re-read on every render.
+  let poolState = {
+    names: [],
+    counts: { townsfolk: 0, outsider: 0, minion: 0, demon: 0 },
+    recommended: { townsfolk: 0, outsider: 0, minion: 0, demon: 0 },
+    recommended_adjusted: { townsfolk: 0, outsider: 0, minion: 0, demon: 0 },
+    needed: { townsfolk: 0, outsider: 0, minion: 0, demon: 0 },
+    total_needed: 0,
+    chair_count: 0,
+    has_recommendation: false,
+    drunk_fake_role: null,
+    pending_drunk_fake: false,
+    ft_red_herring_role: null,
+    pending_ft_red_herring: false,
+    washerwoman_townsfolk_role: null,
+    pending_washerwoman_townsfolk: false,
+    pending_washerwoman_wrong: false,
+    // Game-time / setup-time picks for the remaining Trouble Brewing
+    // reminder tokens. Each names the role currently carrying that
+    // token (so the chair render keys off chair.character === role),
+    // or null when no chair carries it. The server populates these
+    // from the engine state (or from setup-time storyteller picks);
+    // until that wiring lands, they default to null and the
+    // corresponding chair badge simply does not render.
+    washerwoman_wrong_role: null,
+    investigator_minion_role: null,
+    librarian_outsider_role: null,
+    butler_master_role: null,
+    monk_safe_role: null,
+    poisoned_role: null,
+    imp_dead_role: null,
+    undertaker_died_today_role: null,
+    scarlet_woman_is_demon: false,
+    slayer_no_ability: false,
+    virgin_no_ability: false,
+  };
+  let presets = [];
+  let currentPreset = null;          // name string
+  let currentPresetData = null;      // { Townsfolk: [...], Outsiders: [...], ... }
+
+  async function fetchPool() {
+    try {
+      const r = await fetch("/api/character_pool", { cache: "no-store" });
+      if (!r.ok) return;
+      const data = await r.json();
+      applyPoolSnapshot(data);
+    } catch (e) {
+      console.warn("character_pool fetch failed", e);
+    }
+  }
+
+  function applyPoolSnapshot(data) {
+    if (!data) return;
+    poolState = Object.assign({}, poolState, data);
+    renderFab();
+    renderPoolSide();
+    if (addBackdrop.classList.contains("open")) renderCharList();
+    // If the edit-Player modal happens to be open, refresh the
+    // character picker so newly-added/removed pool entries appear.
+    if (editBackdrop.classList.contains("open")) renderEditCharPicker();
+  }
+
+  async function addCharToPool(name) {
+    try {
+      const r = await fetch("/api/character_pool", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      });
+      if (r.ok) applyPoolSnapshot(await r.json());
+    } catch (e) {
+      console.warn("add char failed", e);
+    }
+  }
+
+  async function removeCharFromPool(name) {
+    try {
+      const r = await fetch(
+        "/api/character_pool/" + encodeURIComponent(name),
+        { method: "DELETE" });
+      if (r.ok) applyPoolSnapshot(await r.json());
+    } catch (e) {
+      console.warn("remove char failed", e);
+    }
+  }
+
+  async function clearPool() {
+    try {
+      const r = await fetch("/api/character_pool/clear", { method: "POST" });
+      if (r.ok) applyPoolSnapshot(await r.json());
+    } catch (e) {
+      console.warn("clear pool failed", e);
+    }
+  }
+
+  async function setDrunkFake(role) {
+    try {
+      const r = await fetch("/api/character_pool/drunk_fake", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ role }),
+      });
+      const data = await r.json();
+      if (r.ok) {
+        applyPoolSnapshot(data);
+      } else {
+        console.warn("drunk_fake set failed", data);
+      }
+    } catch (e) {
+      console.warn("drunk_fake set failed", e);
+    }
+  }
+
+  async function setFtRedHerring(role) {
+    try {
+      const r = await fetch("/api/character_pool/ft_red_herring", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ role }),
+      });
+      const data = await r.json();
+      if (r.ok) {
+        applyPoolSnapshot(data);
+      } else {
+        console.warn("ft_red_herring set failed", data);
+      }
+    } catch (e) {
+      console.warn("ft_red_herring set failed", e);
+    }
+  }
+
+  async function randomizePool(preset) {
+    if (!preset) {
+      window.alert("Pick a preset first.");
+      return;
+    }
+    try {
+      const r = await fetch("/api/character_pool/randomize", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ preset }),
+      });
+      const data = await r.json();
+      if (!r.ok) {
+        window.alert("Randomize failed: " + (data.error || r.status));
+        return;
+      }
+      applyPoolSnapshot(data);
+    } catch (e) {
+      console.warn("randomize failed", e);
+      window.alert("Randomize failed: " + e.message);
+    }
+  }
+
+  async function fetchPresets() {
+    try {
+      const r = await fetch("/api/presets", { cache: "no-store" });
+      if (!r.ok) return;
+      const data = await r.json();
+      presets = data.presets || [];
+      populatePresetSlider();
+    } catch (e) {
+      console.warn("presets fetch failed", e);
+    }
+  }
+
+  function populatePresetSlider() {
+    presetSlider.innerHTML = "";
+    if (!presets.length) {
+      const empty = document.createElement("div");
+      empty.className = "preset-chip empty";
+      empty.textContent = "(no presets found)";
+      presetSlider.appendChild(empty);
+      return;
+    }
+    for (const name of presets) {
+      const chip = document.createElement("button");
+      chip.type = "button";
+      chip.className = "preset-chip";
+      chip.setAttribute("role", "tab");
+      chip.setAttribute("data-preset", name);
+      chip.setAttribute("aria-selected", "false");
+      chip.textContent = prettyPresetName(name);
+      chip.addEventListener("click", () => selectPreset(name));
+      presetSlider.appendChild(chip);
+    }
+    // Default to Trouble Brewing if available, else the first preset.
+    const preferred = presets.includes("trouble_brewing")
+      ? "trouble_brewing" : presets[0];
+    selectPreset(preferred, { force: currentPreset !== preferred });
+  }
+
+  function selectPreset(name, opts) {
+    opts = opts || {};
+    // Update visual selection on the slider.
+    const chips = presetSlider.querySelectorAll(".preset-chip");
+    let selectedChip = null;
+    chips.forEach(chip => {
+      const isSel = chip.getAttribute("data-preset") === name;
+      chip.classList.toggle("selected", isSel);
+      chip.setAttribute("aria-selected", isSel ? "true" : "false");
+      if (isSel) selectedChip = chip;
+    });
+    if (selectedChip && typeof selectedChip.scrollIntoView === "function") {
+      // Center the selected chip in the scrollable bar.
+      try {
+        selectedChip.scrollIntoView({
+          behavior: "smooth", block: "nearest", inline: "center"
+        });
+      } catch (e) { /* older browsers */ }
+    }
+    if (currentPreset !== name || opts.force) {
+      loadPreset(name);
+    }
+  }
+
+  function prettyPresetName(slug) {
+    return slug.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+  }
+
+  async function loadPreset(name) {
+    currentPreset = name;
+    currentPresetData = null;
+    if (!name) { renderCharList(); return; }
+    try {
+      const r = await fetch("/api/presets/" + encodeURIComponent(name),
+                            { cache: "no-store" });
+      if (!r.ok) return;
+      const data = await r.json();
+      currentPresetData = data.characters || {};
+      renderCharList();
+    } catch (e) {
+      console.warn("preset load failed", e);
+    }
+  }
+
+  function renderFab() {
+    const n = poolState.total_needed || 0;
+    fabBadge.classList.toggle("zero", n <= 0);
+    if (poolState.has_recommendation) {
+      fabBadge.textContent = String(n);
+    } else {
+      // Without a recommendation (e.g. fewer than 5 chairs), show how
+      // many are currently in the pool instead.
+      fabBadge.textContent = String((poolState.names || []).length);
+    }
+  }
+
+  function renderCharList() {
+    if (!currentPresetData) {
+      addScroll.innerHTML = "<div class=\"empty\">Pick a preset to see characters.</div>";
+      neededBanner.innerHTML = "";
+      return;
+    }
+
+    // Banner: show recommended counts vs the current pool.
+    const rec = poolState.recommended_adjusted || {};
+    const cur = poolState.counts || {};
+    const parts = [];
+    for (const ct of TYPE_ORDER) {
+      const r = rec[ct] || 0;
+      const c = cur[ct] || 0;
+      const cls = c === r ? "ok" : (c < r ? "short" : "over");
+      parts.push(
+        `<span><b>${TYPE_LABEL[ct]}:</b> ` +
+        `<span class="${cls}">${c}/${r}</span></span>`);
+    }
+    if (poolState.has_recommendation) {
+      neededBanner.innerHTML =
+        `<span style="color:var(--muted)">For ${poolState.chair_count} ` +
+        `players:</span>` + parts.join("");
+    } else {
+      neededBanner.innerHTML =
+        `<span style="color:var(--muted)">Add at least 5 players for ` +
+        `recommended counts.</span>`;
+    }
+
+    // Render each section in canonical order.
+    const inPool = new Set(poolState.names || []);
+    const drunkFake = poolState.drunk_fake_role || null;
+    const pendingFake = !!poolState.pending_drunk_fake;
+    const ftRedHerring = poolState.ft_red_herring_role || null;
+    const wwTownsfolk = poolState.washerwoman_townsfolk_role || null;
+    const wwWrong = poolState.washerwoman_wrong_role || null;
+    // Reflect the pending state on the modal root so the CSS rule
+    // and the Drunk banner can react. (FT and WW auto-pick on add
+    // and are re-rolled on the grimoire, so they have no pending UI
+    // here anymore.)
+    const modal = addScroll.closest(".add-chars");
+    if (modal) {
+      modal.classList.toggle("pending-fake", pendingFake);
+    }
+
+    const sectionMap = {
+      townsfolk: currentPresetData.Townsfolk || [],
+      outsider: currentPresetData.Outsiders || [],
+      minion: currentPresetData.Minions || [],
+      demon: currentPresetData.Demons || [],
+    };
+    const html = [];
+    for (const ct of TYPE_ORDER) {
+      const items = sectionMap[ct];
+      if (!items || !items.length) continue;
+      const r = (rec[ct] || 0);
+      const c = (cur[ct] || 0);
+      const cntCls = c === r ? "ok" : (c < r ? "short" : "over");
+      html.push(`<div class="group" data-type="${ct}">`);
+      html.push(
+        `<h3>${TYPE_LABEL[ct]}` +
+        `<span class="count-pill"><span class="${cntCls}">${c}/${r}</span></span>` +
+        `</h3>`);
+      html.push(`<div class="char-list">`);
+      for (const name of items) {
+        const has = inPool.has(name);
+        const isFake = !has && name === drunkFake;
+        const cls = ["char-item"];
+        if (has) cls.push("in-pool");
+        if (isFake) cls.push("drunk-fake");
+        // Annotate special rows: Drunk shows its fake role, FT shows
+        // its (auto-picked) red herring, WW shows its (auto-picked)
+        // seen Townsfolk. Same italic-parenthetical style.
+        let annotated = escapeHtml(name);
+        if (name === "Drunk" && has && drunkFake) {
+          annotated += ` <span style="opacity:.75;font-style:italic">` +
+                       `(${escapeHtml(drunkFake)})</span>`;
+        } else if (name === "Fortune Teller" && has && ftRedHerring) {
+          annotated += ` <span style="opacity:.75;font-style:italic">` +
+                       `(${escapeHtml(ftRedHerring)})</span>`;
+        } else if (name === "Washerwoman" && has && wwTownsfolk) {
+          // Show both the seen Townsfolk and the WRONG role next to
+          // the WW row so the storyteller can see at a glance which
+          // pair the WW will be pointed at.
+          const annot = wwWrong
+            ? `${escapeHtml(wwTownsfolk)} / ${escapeHtml(wwWrong)} WRONG`
+            : escapeHtml(wwTownsfolk);
+          annotated += ` <span style="opacity:.75;font-style:italic">` +
+                       `(${annot})</span>`;
+        }
+        const indicator = isFake ? "\u2606" : (has ? "\u2713" : "+");
+        html.push(
+          `<div class="${cls.join(" ")}" data-name="${escapeAttr(name)}">` +
+          `<span class="name">${annotated}</span>` +
+          `<span class="ind">${indicator}</span>` +
+          `</div>`);
+      }
+      html.push(`</div>`);
+      html.push(`</div>`);
+    }
+    addScroll.innerHTML = html.join("");
+
+    // Wire up clicks. The Drunk's pretend role is the only slot still
+    // picked explicitly here — FT and WW are randomized on add and
+    // re-rolled on the grimoire by dragging the reminder token.
+    //
+    //   * click on the current Drunk-fake row → clear it
+    //   * pending Drunk-fake + click on a Townsfolk NOT in the pool
+    //     → set it as the Drunk's fake
+    //   * otherwise: regular add/remove toggle (server auto-clears
+    //     and re-rolls the FT / WW slot if needed).
+    addScroll.querySelectorAll(".char-item").forEach(el => {
+      el.addEventListener("click", () => {
+        const name = el.getAttribute("data-name");
+        if (!name) return;
+        const has = inPool.has(name);
+        const isFake = !has && name === drunkFake;
+
+        if (isFake) {
+          setDrunkFake(null);
+          return;
+        }
+        if (pendingFake && !has) {
+          // Only Townsfolk can be the Drunk's pretend role; for non-
+          // Townsfolk fall through to normal add behavior so the user
+          // isn't trapped in pending state.
+          const isTownsfolk =
+            (currentPresetData.Townsfolk || []).includes(name);
+          if (isTownsfolk) {
+            setDrunkFake(name);
+            return;
+          }
+        }
+        if (has) {
+          removeCharFromPool(name);
+        } else {
+          addCharToPool(name);
+        }
+      });
+    });
+  }
+
+  function renderPoolSide() {
+    const names = poolState.names || [];
+    const open = !addBackdrop.classList.contains("open") && names.length > 0;
+    poolSide.classList.toggle("open", open);
+    if (!open) return;
+
+    poolSideTotal.textContent = `${names.length}` +
+      (poolState.has_recommendation
+        ? ` of ${(poolState.recommended_adjusted.townsfolk || 0)
+            + (poolState.recommended_adjusted.outsider || 0)
+            + (poolState.recommended_adjusted.minion || 0)
+            + (poolState.recommended_adjusted.demon || 0)}`
+        : "");
+
+    // Bucket names by type using the script metadata embedded in
+    // the current preset (if any) or by name lookup against
+    // the in-pool counts.
+    const buckets = { townsfolk: [], outsider: [], minion: [], demon: [] };
+    const nameType = {};
+    if (currentPresetData) {
+      for (const [k, v] of Object.entries({
+        townsfolk: currentPresetData.Townsfolk || [],
+        outsider: currentPresetData.Outsiders || [],
+        minion: currentPresetData.Minions || [],
+        demon: currentPresetData.Demons || [],
+      })) {
+        for (const n of v) nameType[n] = k;
+      }
+    }
+    for (const n of names) {
+      const t = nameType[n] || "townsfolk";
+      buckets[t].push(n);
+    }
+
+    const html = [];
+    for (const ct of TYPE_ORDER) {
+      if (!buckets[ct].length) continue;
+      const r = (poolState.recommended_adjusted || {})[ct] || 0;
+      const c = (poolState.counts || {})[ct] || 0;
+      const cls = c === r ? "" : (c < r ? "needed" : "over");
+      html.push(`<div class="pool-group">`);
+      html.push(
+        `<div class="label">${TYPE_LABEL[ct]} ` +
+        `<span class="${cls}">${c}/${r}</span></div>`);
+      for (const n of buckets[ct]) {
+        let label = escapeHtml(n);
+        if (n === "Drunk" && poolState.drunk_fake_role) {
+          label += ` <span style="opacity:.7;font-style:italic">` +
+                   `(${escapeHtml(poolState.drunk_fake_role)})</span>`;
+        } else if (n === "Drunk" && poolState.pending_drunk_fake) {
+          label += ` <span style="opacity:.7;font-style:italic;` +
+                   `color:#9ec5e8">(?)</span>`;
+        } else if (n === "Fortune Teller" && poolState.ft_red_herring_role) {
+          label += ` <span style="opacity:.7;font-style:italic">` +
+                   `(${escapeHtml(poolState.ft_red_herring_role)})</span>`;
+        } else if (n === "Washerwoman" && poolState.washerwoman_townsfolk_role) {
+          label += ` <span style="opacity:.7;font-style:italic">` +
+                   `(${escapeHtml(poolState.washerwoman_townsfolk_role)})</span>`;
+        }
+        html.push(`<div class="pool-row"><span>${label}</span></div>`);
+      }
+      html.push(`</div>`);
+    }
+    poolSideBody.innerHTML = html.join("") ||
+      `<div class="empty">Pool is empty.</div>`;
+    // Read-only: no click handlers — open the panel to edit.
+  }
+
+  function escapeHtml(s) {
+    return String(s)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+  }
+  function escapeAttr(s) { return escapeHtml(s); }
+
+  function openAddChars() {
+    addBackdrop.classList.add("open");
+    renderPoolSide();
+    // Make sure presets are loaded; cheap if we already have them.
+    if (!presets.length) {
+      fetchPresets().then(() => {
+        if (!currentPreset && presets.length) {
+          // populatePresetSlider already kicked off a loadPreset for the
+          // default; only fall through if it didn't.
+          renderCharList();
+        } else {
+          renderCharList();
+        }
+      });
+    } else if (!currentPresetData && currentPreset) {
+      loadPreset(currentPreset);
+    } else {
+      renderCharList();
+    }
+  }
+  function closeAddChars() {
+    addBackdrop.classList.remove("open");
+    renderPoolSide();
+  }
+
+  fab.addEventListener("click", openAddChars);
+  addClose.addEventListener("click", closeAddChars);
+  addBackdrop.addEventListener("click", (ev) => {
+    if (ev.target === addBackdrop) closeAddChars();
+  });
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key === "Escape" && addBackdrop.classList.contains("open")) {
+      closeAddChars();
+    }
+  });
+  addClear.addEventListener("click", () => {
+    if (!poolState.names || !poolState.names.length) return;
+    if (!window.confirm("Remove all characters from the pool?")) return;
+    clearPool();
+  });
+  addRandomize.addEventListener("click", () => {
+    const preset = currentPreset;
+    if (!preset) {
+      window.alert("Pick a preset first.");
+      return;
+    }
+    if ((poolState.names || []).length > 0) {
+      if (!window.confirm("Replace the current pool with a random roster?")) {
+        return;
+      }
+    }
+    randomizePool(preset);
+  });
+
+  // Initial bootstrap.
+  fetchPresets();
+  fetchPool();
+
+  // Initial load.
+  refresh();
+
+  // Light polling so another browser's changes show up here too.
+  setInterval(() => {
+    // Skip polling while the user is mid-drag.
+    if (board.querySelector(".dragging")) return;
+    refresh();
+    fetchPool();
+  }, 2000);
+})();
+</script>
+
+</body>
+</html>

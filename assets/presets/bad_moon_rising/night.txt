@@ -1,0 +1,62 @@
+Dusk
+Start the Night Phase.
+
+Sailor
+The Sailor chooses a living player.
+
+Courtier
+The Courtier might choose a character.
+
+Innkeeper
+The Innkeeper chooses 2 players.
+
+Gambler
+The Gambler chooses a player & a character.
+
+Devil's Advocate
+The Devil's Advocate chooses a living player.
+
+Lunatic
+Do whatever needs to be done to simulate the Demon acting. Put the Lunatic to sleep. Wake the Demon. Show the Lunatic token & point to them, then their target(s).
+
+Exorcist
+The Exorcist chooses a player.  Put the Exorcist to sleep. If the Exorcist chose the Demon: Wake the Demon. Show the THIS CHARACTER SELECTED YOU & Exorcist tokens. Point to the Exorcist.
+
+Zombuul
+If no one died today, the Zombuul chooses a player.
+
+Pukka
+The Pukka chooses a player. The previously poisoned player dies then becomes healthy.
+
+Shabaloth
+A previously chosen player might be resurrected. The Shabaloth chooses 2 players.
+
+Po
+The Po may choose a player OR chooses 3 players if they chose no-one last night.
+
+Assassin
+The Assassin might choose a player.
+
+Godfather
+If an Outsider died today, the Godfather chooses a player.
+
+Gossip
+If the Gossip is due to kill a player, they die.
+
+Professor
+The Professor might choose a dead player.
+
+Tinker
+The Tinker might die.
+
+Moonchild
+If the Moonchild is due to kill a good player, they die.
+
+Grandmother
+If the grandchild was killed by the Demon, the Grandmother dies too.
+
+Chambermaid
+The Chambermaid chooses 2 living players. Give a finger signal.
+
+Dawn
+Wait for a few seconds. End the Night Phase.

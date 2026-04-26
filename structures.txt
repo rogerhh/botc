@@ -1,0 +1,21 @@
+botc/
+    engine/             
+        characters/
+        README.md
+        player.py
+        character.py
+        engine.py
+    ui/                 
+        README.md
+        ui.py
+    logger/
+        README.md
+        logger.py
+    logs/
+    assets/
+        characters/        # one PDF per character (description sheets)
+        tokens/            # PNG token images, transparent background
+        presets/
+            trouble_brewing/
+                characters.csv
+        README.md

@@ -1,0 +1,418 @@
+{
+  "Assassin": {
+    "icon": "assassin.png",
+    "reminders": [
+      {
+        "icon": "assassin_dead.png",
+        "name": "DEAD"
+      },
+      {
+        "icon": "assassin_no_ability.png",
+        "name": "NO ABILITY"
+      }
+    ],
+    "slug": "assassin"
+  },
+  "Baron": {
+    "icon": null,
+    "reminders": [],
+    "slug": "baron"
+  },
+  "Butler": {
+    "icon": null,
+    "reminders": [
+      {
+        "icon": "butler_master.png",
+        "name": "MASTER"
+      }
+    ],
+    "slug": "butler"
+  },
+  "Chambermaid": {
+    "icon": "chambermaid.png",
+    "reminders": [],
+    "slug": "chambermaid"
+  },
+  "Chef": {
+    "icon": null,
+    "reminders": [],
+    "slug": "chef"
+  },
+  "Courtier": {
+    "icon": "courtier.png",
+    "reminders": [
+      {
+        "icon": "courtier_drunk_1.png",
+        "name": "DRUNK 1"
+      },
+      {
+        "icon": "courtier_drunk_2.png",
+        "name": "DRUNK 2"
+      },
+      {
+        "icon": "courtier_drunk_3.png",
+        "name": "DRUNK 3"
+      },
+      {
+        "icon": "courtier_no_ability.png",
+        "name": "NO ABILITY"
+      }
+    ],
+    "slug": "courtier"
+  },
+  "Devil's Advocate": {
+    "icon": "devils_advocate.png",
+    "reminders": [
+      {
+        "icon": "devils_advocate_survives_execution.png",
+        "name": "SURVIVES EXECUTION"
+      }
+    ],
+    "slug": "devils_advocate"
+  },
+  "Drunk": {
+    "icon": null,
+    "reminders": [
+      {
+        "icon": "drunk_is_the_drunk.png",
+        "name": "IS THE DRUNK"
+      }
+    ],
+    "slug": "drunk"
+  },
+  "Empath": {
+    "icon": null,
+    "reminders": [],
+    "slug": "empath"
+  },
+  "Exorcist": {
+    "icon": "exorcist.png",
+    "reminders": [
+      {
+        "icon": "exorcist_chosen.png",
+        "name": "CHOSEN"
+      }
+    ],
+    "slug": "exorcist"
+  },
+  "Fool": {
+    "icon": "fool.png",
+    "reminders": [
+      {
+        "icon": "fool_no_ability.png",
+        "name": "NO ABILITY"
+      }
+    ],
+    "slug": "fool"
+  },
+  "Fortune Teller": {
+    "icon": null,
+    "reminders": [
+      {
+        "icon": "fortune_teller_red_herring.png",
+        "name": "RED HERRING"
+      }
+    ],
+    "slug": "fortune_teller"
+  },
+  "Gambler": {
+    "icon": "gambler.png",
+    "reminders": [
+      {
+        "icon": "gambler_dead.png",
+        "name": "DEAD"
+      }
+    ],
+    "slug": "gambler"
+  },
+  "Godfather": {
+    "icon": "godfather.png",
+    "reminders": [
+      {
+        "icon": "godfather_dead.png",
+        "name": "DEAD"
+      },
+      {
+        "icon": "godfather_died_today.png",
+        "name": "DIED TODAY"
+      }
+    ],
+    "slug": "godfather"
+  },
+  "Goon": {
+    "icon": "goon.png",
+    "reminders": [
+      {
+        "icon": "goon_drunk.png",
+        "name": "DRUNK"
+      }
+    ],
+    "slug": "goon"
+  },
+  "Gossip": {
+    "icon": "gossip.png",
+    "reminders": [
+      {
+        "icon": "gossip_dead.png",
+        "name": "DEAD"
+      }
+    ],
+    "slug": "gossip"
+  },
+  "Grandmother": {
+    "icon": "grandmother.png",
+    "reminders": [
+      {
+        "icon": "grandmother_dead.png",
+        "name": "DEAD"
+      },
+      {
+        "icon": "grandmother_grandchild.png",
+        "name": "GRANDCHILD"
+      }
+    ],
+    "slug": "grandmother"
+  },
+  "Imp": {
+    "icon": null,
+    "reminders": [
+      {
+        "icon": "imp_dead.png",
+        "name": "DEAD"
+      }
+    ],
+    "slug": "imp"
+  },
+  "Innkeeper": {
+    "icon": "innkeeper.png",
+    "reminders": [
+      {
+        "icon": "innkeeper_drunk.png",
+        "name": "DRUNK"
+      },
+      {
+        "icon": "innkeeper_safe.png",
+        "name": "SAFE"
+      }
+    ],
+    "slug": "innkeeper"
+  },
+  "Investigator": {
+    "icon": null,
+    "reminders": [
+      {
+        "icon": "investigator_minion.png",
+        "name": "MINION"
+      }
+    ],
+    "slug": "investigator"
+  },
+  "Librarian": {
+    "icon": null,
+    "reminders": [
+      {
+        "icon": "librarian_outsider.png",
+        "name": "OUTSIDER"
+      }
+    ],
+    "slug": "librarian"
+  },
+  "Lunatic": {
+    "icon": "lunatic.png",
+    "reminders": [
+      {
+        "icon": "lunatic_chosen.png",
+        "name": "CHOSEN"
+      }
+    ],
+    "slug": "lunatic"
+  },
+  "Mastermind": {
+    "icon": "mastermind.png",
+    "reminders": [],
+    "slug": "mastermind"
+  },
+  "Mayor": {
+    "icon": null,
+    "reminders": [],
+    "slug": "mayor"
+  },
+  "Minstrel": {
+    "icon": "minstrel.png",
+    "reminders": [
+      {
+        "icon": "minstrel_everyone_is_drunk.png",
+        "name": "EVERYONE IS DRUNK"
+      }
+    ],
+    "slug": "minstrel"
+  },
+  "Monk": {
+    "icon": null,
+    "reminders": [
+      {
+        "icon": "monk_safe.png",
+        "name": "SAFE"
+      }
+    ],
+    "slug": "monk"
+  },
+  "Moonchild": {
+    "icon": "moonchild.png",
+    "reminders": [
+      {
+        "icon": "moonchild_dead.png",
+        "name": "DEAD"
+      }
+    ],
+    "slug": "moonchild"
+  },
+  "Pacifist": {
+    "icon": "pacifist.png",
+    "reminders": [],
+    "slug": "pacifist"
+  },
+  "Po": {
+    "icon": "po.png",
+    "reminders": [
+      {
+        "icon": "po_3_attacks.png",
+        "name": "3 ATTACKS"
+      },
+      {
+        "icon": "po_dead.png",
+        "name": "DEAD"
+      }
+    ],
+    "slug": "po"
+  },
+  "Poisoner": {
+    "icon": null,
+    "reminders": [
+      {
+        "icon": "poisoner_poisoned.png",
+        "name": "POISONED"
+      }
+    ],
+    "slug": "poisoner"
+  },
+  "Professor": {
+    "icon": "professor.png",
+    "reminders": [
+      {
+        "icon": "professor_alive.png",
+        "name": "ALIVE"
+      }
+    ],
+    "slug": "professor"
+  },
+  "Pukka": {
+    "icon": "pukka.png",
+    "reminders": [],
+    "slug": "pukka"
+  },
+  "Ravenkeeper": {
+    "icon": "ravenkeeper.png",
+    "reminders": [],
+    "slug": "ravenkeeper"
+  },
+  "Recluse": {
+    "icon": "recluse.png",
+    "reminders": [],
+    "slug": "recluse"
+  },
+  "Sailor": {
+    "icon": "sailor.png",
+    "reminders": [],
+    "slug": "sailor"
+  },
+  "Saint": {
+    "icon": "saint.png",
+    "reminders": [],
+    "slug": "saint"
+  },
+  "Scarlet Woman": {
+    "icon": "scarlet_woman.png",
+    "reminders": [
+      {
+        "icon": "scarlet_woman_is_the_demon.png",
+        "name": "IS THE DEMON"
+      }
+    ],
+    "slug": "scarlet_woman"
+  },
+  "Shabaloth": {
+    "icon": "shabaloth.png",
+    "reminders": [],
+    "slug": "shabaloth"
+  },
+  "Slayer": {
+    "icon": "slayer.png",
+    "reminders": [
+      {
+        "icon": "slayer_no_ability.png",
+        "name": "NO ABILITY"
+      }
+    ],
+    "slug": "slayer"
+  },
+  "Soldier": {
+    "icon": "soldier.png",
+    "reminders": [],
+    "slug": "soldier"
+  },
+  "Spy": {
+    "icon": "spy.png",
+    "reminders": [],
+    "slug": "spy"
+  },
+  "Tea Lady": {
+    "icon": "tea_lady.png",
+    "reminders": [],
+    "slug": "tea_lady"
+  },
+  "Tinker": {
+    "icon": "tinker.png",
+    "reminders": [],
+    "slug": "tinker"
+  },
+  "Undertaker": {
+    "icon": "undertaker.png",
+    "reminders": [
+      {
+        "icon": "undertaker_died_today.png",
+        "name": "DIED TODAY"
+      }
+    ],
+    "slug": "undertaker"
+  },
+  "Virgin": {
+    "icon": "virgin.png",
+    "reminders": [
+      {
+        "icon": "virgin_no_ability.png",
+        "name": "NO ABILITY"
+      }
+    ],
+    "slug": "virgin"
+  },
+  "Washerwoman": {
+    "icon": "washerwoman.png",
+    "reminders": [
+      {
+        "icon": "washerwoman_townsfolk.png",
+        "name": "TOWNSFOLK"
+      },
+      {
+        "icon": "washerwoman_wrong.png",
+        "name": "WRONG"
+      }
+    ],
+    "slug": "washerwoman"
+  },
+  "Zombuul": {
+    "icon": null,
+    "reminders": [],
+    "slug": "zombuul"
+  }
+}

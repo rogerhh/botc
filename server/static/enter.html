@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Enter access code</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<meta name="theme-color" content="#1a1410" />
+<style>
+  :root {
+    --bg: #1a1410;
+    --panel: #221c17;
+    --text: #ece3d3;
+    --muted: #a99880aa;
+    --accent: #f0c27a;
+    --accent-dim: #8a5a1c;
+    --error: #c7453a;
+    --input-bg: #14100d;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    min-height: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  }
+
+  body {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    min-height: 100vh;
+  }
+
+  .card {
+    width: 100%;
+    max-width: 360px;
+    background: var(--panel);
+    border: 1px solid #00000088;
+    border-radius: 10px;
+    padding: 24px;
+    box-shadow: 0 12px 40px #000000cc;
+  }
+
+  h1 {
+    margin: 0 0 4px 0;
+    font-size: 18px;
+    font-weight: 700;
+    font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, "Times New Roman", serif;
+    color: var(--accent);
+  }
+
+  .subtitle {
+    margin: 0 0 18px 0;
+    font-size: 13px;
+    color: var(--muted);
+  }
+
+  label {
+    display: block;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: var(--muted);
+    margin-bottom: 6px;
+  }
+
+  input[type="text"] {
+    width: 100%;
+    font-size: 22px;
+    font-weight: 600;
+    letter-spacing: 0.18em;
+    text-align: center;
+    padding: 14px 12px;
+    background: var(--input-bg);
+    color: var(--text);
+    border: 1px solid #00000099;
+    border-radius: 8px;
+    outline: none;
+    text-transform: uppercase;
+    font-family: "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  }
+  input[type="text"]:focus { border-color: var(--accent); }
+
+  .error {
+    margin-top: 10px;
+    padding: 8px 10px;
+    background: #3a1a17;
+    border: 1px solid var(--error);
+    border-radius: 6px;
+    color: #ffd1cc;
+    font-size: 13px;
+  }
+
+  button {
+    margin-top: 18px;
+    width: 100%;
+    background: var(--accent-dim);
+    color: var(--text);
+    border: 1px solid #00000055;
+    border-radius: 8px;
+    padding: 12px 14px;
+    font-size: 15px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    cursor: pointer;
+    transition: background 0.12s;
+  }
+  button:hover { background: #a9731f; }
+  button:active { transform: translateY(1px); }
+
+  .hint {
+    margin-top: 14px;
+    text-align: center;
+    font-size: 12px;
+    color: var(--muted);
+  }
+</style>
+</head>
+<body>
+
+<form class="card" method="POST" action="/enter" autocomplete="off">
+  <h1>Blood on the Clocktower</h1>
+  <p class="subtitle">Enter the access code from the Storyteller.</p>
+
+  <label for="code">Access code</label>
+  <input id="code" name="code"
+         type="text"
+         inputmode="text"
+         autocapitalize="characters"
+         autocorrect="off"
+         spellcheck="false"
+         autocomplete="off"
+         maxlength="32"
+         autofocus />
+
+  <div class="error" style="{{error_style}}">
+    That code didn't work. Try again.
+  </div>
+
+  <input type="hidden" name="next" value="{{next}}" />
+  <button type="submit">Enter</button>
+
+  <div class="hint">Ask the Storyteller if you don't have it.</div>
+</form>
+
+</body>
+</html>

@@ -1,0 +1,23 @@
+name,team
+Washerwoman,Townsfolk
+Librarian,Townsfolk
+Investigator,Townsfolk
+Chef,Townsfolk
+Empath,Townsfolk
+Fortune Teller,Townsfolk
+Undertaker,Townsfolk
+Monk,Townsfolk
+Ravenkeeper,Townsfolk
+Virgin,Townsfolk
+Slayer,Townsfolk
+Soldier,Townsfolk
+Mayor,Townsfolk
+Butler,Outsider
+Drunk,Outsider
+Recluse,Outsider
+Saint,Outsider
+Poisoner,Minion
+Spy,Minion
+Scarlet Woman,Minion
+Baron,Minion
+Imp,Demon

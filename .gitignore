@@ -1,0 +1,17 @@
+# Locally cached headless Chrome for scripts/print_character_pdfs.py
+.cache/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+*.swp
+.vscode/
+.idea/

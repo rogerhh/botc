@@ -1,0 +1,290 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Town Square</title>
+<!-- Full-bleed mobile viewport; no user zoom so the board keeps its
+     aspect ratio and the double-tap-to-zoom gesture doesn't interfere
+     with future tap interactions. -->
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="theme-color" content="#1a1410" />
+<style>
+  :root {
+    --bg: #1a1410;
+    --panel: #221c17;
+    --board-edge: #8a6a4b;
+    --chair: #d9c9a8;
+    --chair-edge: #5a3f27;
+    --st-fill: #6e1f1b;
+    --st-edge: #f0c27a;
+    --st-text: #f5e6c4;
+    --text: #ece3d3;
+    --muted: #a99880aa;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    overflow: hidden;
+    /* Disable all text selection and tap highlighting for a chrome-free
+       display. */
+    -webkit-tap-highlight-color: transparent;
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+  }
+
+  header {
+    padding: 10px 14px max(10px, env(safe-area-inset-top));
+    background: var(--panel);
+    border-bottom: 1px solid #00000066;
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+  }
+
+  header h1 {
+    margin: 0;
+    font-size: 14px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    flex: 1;
+  }
+
+  header .tag {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: var(--muted);
+  }
+
+  main {
+    position: absolute;
+    top: 44px;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    padding: 8px;
+    padding-bottom: max(8px, env(safe-area-inset-bottom));
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  /* The board is a true square sized to the shorter of the two
+     available dimensions, so it always fits a portrait phone. */
+  #boardWrap {
+    position: relative;
+    aspect-ratio: 1 / 1;
+    width: min(100%, calc(100dvh - 60px));
+    max-width: 100%;
+  }
+
+  #board {
+    width: 100%;
+    height: 100%;
+    background: radial-gradient(ellipse at center, #4a3525 0%, #2a1c13 100%);
+    border: 2px solid var(--board-edge);
+    border-radius: 6px;
+    box-shadow: 0 4px 24px #00000088, inset 0 0 60px #00000077;
+    /* No touch interactions on the board — pan/zoom on the page is
+       already disabled but we also want to be explicit. */
+    touch-action: none;
+  }
+
+  /* Chairs — styled like the storyteller view but without any
+     pointer/cursor affordances. */
+  .chair {
+    /* cursor left at auto so it doesn't invite dragging. */
+  }
+
+  .chair-name {
+    font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, "Times New Roman", serif;
+    font-size: 24px;
+    font-weight: 700;
+    fill: #2a1c13;
+    text-anchor: middle;
+  }
+  .chair-character {
+    font-size: 19px;
+    font-weight: 500;
+    font-style: italic;
+    fill: #5a3f27;
+    text-anchor: middle;
+  }
+
+  .storyteller-label {
+    font-size: 15px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    fill: var(--st-text);
+    dominant-baseline: central;
+    text-anchor: middle;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Town Square</h1>
+  <span class="tag">view only</span>
+</header>
+
+<main>
+  <div id="boardWrap">
+    <svg id="board" viewBox="0 0 1000 1000" preserveAspectRatio="xMidYMid meet">
+      <g id="storyteller"></g>
+      <g id="chairs"></g>
+    </svg>
+  </div>
+</main>
+
+<script>
+(() => {
+  const BOARD_SIZE = 1000;
+  const CHAIR_RADIUS = 51;
+  const MAX_CHAIR_TEXT = 88;
+  const POLL_MS = 1500;
+
+  const chairsG = document.getElementById("chairs");
+  const storytellerG = document.getElementById("storyteller");
+
+  const chairs = new Map();
+  let storyteller = null;
+
+  async function refresh() {
+    try {
+      const r = await fetch("/api/state", { cache: "no-store" });
+      if (!r.ok) return;
+      const data = await r.json();
+      chairs.clear();
+      for (const c of data.chairs) chairs.set(c.id, c);
+      storyteller = data.storyteller || null;
+      render();
+    } catch (e) {
+      // Transient network error; next tick will retry.
+    }
+  }
+
+  function render() {
+    renderStoryteller();
+    renderChairs();
+  }
+
+  function renderChairs() {
+    chairsG.innerHTML = "";
+    const ordered = [...chairs.values()].sort((a, b) => a.id - b.id);
+    for (const c of ordered) {
+      const g = document.createElementNS("http://www.w3.org/2000/svg", "g");
+      g.setAttribute("transform",
+        `translate(${c.x * BOARD_SIZE}, ${c.y * BOARD_SIZE})`);
+
+      const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+      circle.setAttribute("class", "chair");
+      circle.setAttribute("r", CHAIR_RADIUS);
+      circle.setAttribute("fill", "var(--chair)");
+      circle.setAttribute("stroke", "var(--chair-edge)");
+      circle.setAttribute("stroke-width", "2");
+      g.appendChild(circle);
+
+      const name = (c.name || "").trim();
+      const character = (c.character || "").trim();
+      const fit = [];
+      if (name && character) {
+        const tN = svgText("chair-name", name, 0, -13);
+        const tC = svgText("chair-character", character, 0, 15);
+        g.appendChild(tN);
+        g.appendChild(tC);
+        fit.push(tN, tC);
+      } else if (name) {
+        const tN = svgText("chair-name", name, 0, 2);
+        g.appendChild(tN);
+        fit.push(tN);
+      } else if (character) {
+        const tC = svgText("chair-character", character, 0, 2);
+        g.appendChild(tC);
+        fit.push(tC);
+      }
+
+      chairsG.appendChild(g);
+      for (const t of fit) fitText(t, MAX_CHAIR_TEXT);
+    }
+  }
+
+  function renderStoryteller() {
+    storytellerG.innerHTML = "";
+    if (!storyteller) return;
+
+    const w = (storyteller.w ?? 0.14) * BOARD_SIZE;
+    const h = (storyteller.h ?? 0.08) * BOARD_SIZE;
+    const cx = storyteller.x * BOARD_SIZE;
+    const cy = storyteller.y * BOARD_SIZE;
+
+    const g = document.createElementNS("http://www.w3.org/2000/svg", "g");
+    g.setAttribute("transform", `translate(${cx}, ${cy})`);
+
+    const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+    rect.setAttribute("x", -w / 2);
+    rect.setAttribute("y", -h / 2);
+    rect.setAttribute("width", w);
+    rect.setAttribute("height", h);
+    rect.setAttribute("fill", "var(--st-fill)");
+    rect.setAttribute("stroke", "var(--st-edge)");
+    rect.setAttribute("stroke-width", "3");
+    g.appendChild(rect);
+
+    const label = document.createElementNS("http://www.w3.org/2000/svg", "text");
+    label.setAttribute("class", "storyteller-label");
+    label.textContent = "STORYTELLER";
+    g.appendChild(label);
+
+    storytellerG.appendChild(g);
+  }
+
+  function svgText(cls, text, x, y) {
+    const el = document.createElementNS("http://www.w3.org/2000/svg", "text");
+    el.setAttribute("class", cls);
+    el.setAttribute("x", x);
+    el.setAttribute("y", y);
+    el.setAttribute("dominant-baseline", "central");
+    el.textContent = text;
+    return el;
+  }
+
+  function fitText(el, maxWidth) {
+    let actual = 0;
+    try { actual = el.getComputedTextLength(); } catch (e) { actual = 0; }
+    if (!actual) {
+      const fs = parseFloat(getComputedStyle(el).fontSize) || 14;
+      actual = (el.textContent || "").length * fs * 0.55;
+    }
+    if (actual > maxWidth) {
+      el.setAttribute("textLength", maxWidth);
+      el.setAttribute("lengthAdjust", "spacingAndGlyphs");
+    }
+  }
+
+  // Swallow any accidental context menu / selection.
+  document.addEventListener("contextmenu", (ev) => ev.preventDefault());
+
+  // Initial load + steady polling.
+  refresh();
+  setInterval(refresh, POLL_MS);
+
+  // Refresh immediately when the phone comes back from lock/background.
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") refresh();
+  });
+})();
+</script>
+
+</body>
+</html>

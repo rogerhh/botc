@@ -1,0 +1,35 @@
+Dusk
+Start the Night Phase.
+
+Minion Info
+If there are 7 or more players, wake all Minions: Show the THIS IS THE DEMON token. Point to the Demon. Show the THESE ARE YOUR MINIONS token. Point to the other Minions.
+
+Lunatic
+If there are 7 or more players, wake the Lunatic: Show the THESE ARE YOUR MINIONS token. Point to any players. Show the THESE CHARACTERS ARE NOT IN PLAY token. Show 3 good character tokens. Put the Lunatic to sleep. Wake the Demon. Show the YOU ARE info token and the Demon token. Show the THIS PLAYER IS info token and the Lunatic token, then point to the Lunatic.
+
+Demon Info
+If there are 7 or more players, wake the Demon: Show the THESE ARE YOUR MINIONS token. Point to all Minions. Show the THESE CHARACTERS ARE NOT IN PLAY token. Show 3 not-in-play good character tokens.
+
+Sailor
+The Sailor chooses a living player.
+
+Courtier
+The Courtier might choose a character.
+
+Godfather
+Show the character tokens of all in-play Outsiders.
+
+Devil's Advocate
+The Devil's Advocate chooses a living player.
+
+Pukka
+The Pukka chooses a player.
+
+Grandmother
+Point to the grandchild player & show their character token.
+
+Chambermaid
+The Chambermaid chooses 2 living players. Give a finger signal.
+
+Dawn
+Wait for a few seconds. End the Night Phase.
