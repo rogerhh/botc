@@ -38,6 +38,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from engine import preset as preset_module
 from engine import script as script_data
+from engine.chairs import ChairStore
 from engine.character import Character
 from engine.enums import Alignment, CharType, DeathCause, Phase
 from engine.event import Event, EventType
@@ -65,6 +66,8 @@ class Engine:
     def __init__(
         self,
         preset: Optional["preset_module.Preset"] = None,
+        *,
+        default_seats: int = 8,
     ) -> None:
         self._phase: Phase = Phase.SETUP
         self._night_number: int = 0
@@ -72,6 +75,17 @@ class Engine:
 
         self._players: List[Player] = []
         self._next_player_id = itertools.count(1)
+
+        # Default number of chair slots seeded into ``self.chairs`` on
+        # construction; also used by the entry-point CLI so the operator
+        # can run e.g. ``python3 botc.py --players 12``.
+        self._default_seats = default_seats
+
+        # The town-square layout (chair positions, names, typed-in
+        # character roles, the chair -> Player binding once the game
+        # starts). Owned by the engine so any copy of the engine
+        # snapshots-and-renders identically — see ``Engine.snapshot``.
+        self.chairs = ChairStore(default_seats=default_seats)
 
         # Players killed overnight, pending announcement at dawn.
         self._pending_night_deaths: List[Player] = []
@@ -1225,7 +1239,12 @@ class Engine:
     # ==================================================================
 
     def snapshot(self) -> dict:
-        """A storyteller-view JSON-serializable snapshot of the game."""
+        """A storyteller-view JSON-serializable snapshot of the game.
+
+        Includes the town-square layout (``chairs`` + ``storyteller``)
+        so any consumer of the snapshot can reconstruct the entire UI
+        without external state.
+        """
         return {
             "phase": self._phase.value,
             "night_number": self._night_number,
@@ -1237,6 +1256,8 @@ class Engine:
             "winner": self._winner.value if self._winner else None,
             "win_reason": self._win_reason,
             "log_tail": self._log[-50:],
+            "chairs": self.chairs.list(),
+            "storyteller": self.chairs.get_storyteller(),
         }
 
     def player_view(self, player_id: int) -> dict:

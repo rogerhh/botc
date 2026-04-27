@@ -55,210 +55,31 @@ STATIC_DIR = os.path.join(_HERE, "static")
 
 
 # ---------------------------------------------------------------------------
-# In-memory chair state (visual layout of the town square).
+# Chair / town-square state.
+#
+# As of the engine-driver refactor, chair layout lives on the engine
+# (see ``engine/chairs.py``). The module-level ``STORE`` symbol below
+# is preserved as a thin proxy so the request-handler code reads
+# unchanged: every ``STORE.foo(...)`` call is forwarded to
+# ``ENGINE.chairs.foo(...)`` at access time, so a fresh ENGINE
+# (e.g. after ``/api/engine/reset``) is picked up automatically.
 # ---------------------------------------------------------------------------
 
 
-class ChairStore:
-    """Holds the visual chair arrangement.
+from engine.chairs import ChairStore  # noqa: E402, F401  (re-exported)
 
-    Each chair is a dict::
 
-        {"id": int, "x": float, "y": float, "name": str, "character": str,
-         "player_id": Optional[int]}
+class _ChairStoreProxy:
+    """Thin pass-through that forwards every attribute to ``ENGINE.chairs``.
 
-    Chairs are *purely visual* until the storyteller clicks "Start
-    Game", at which point each chair with a non-empty name is mapped to
-    an engine Player (and the chair's ``player_id`` records the link).
+    This exists so the rest of ``ui.py`` (which still says ``STORE.list()``
+    everywhere) doesn't need to know that the chair store moved onto the
+    engine. The proxy does the lookup at call time, so an ``ENGINE_replace``
+    swaps the underlying store without leaving stale references behind.
     """
 
-    def __init__(self, *, default_seats: int = 8) -> None:
-        self._chairs: Dict[int, Dict[str, Any]] = {}
-        self._next_id = itertools.count(1)
-        self._lock = threading.Lock()
-        # Storyteller default position sits at the bottom-center of the
-        # would-be full circle, closing the 270-degree arc of chairs
-        # seeded below.
-        self._storyteller: Dict[str, float] = {
-            "x": 0.5, "y": 0.88, "w": 0.175, "h": 0.08,
-        }
-        self._seed_default_ring(count=default_seats)
-
-    def reseed(self, count: int) -> None:
-        """Replace the chair set with ``count`` freshly-seeded chairs.
-
-        Called from :func:`serve` so ``--players N`` on ``botc.py`` is
-        respected without rebuilding the module-level ``STORE``.
-        """
-        with self._lock:
-            self._chairs = {}
-            self._next_id = itertools.count(1)
-            self._seed_default_ring(count=count)
-
-    def _seed_default_ring(self, count: int) -> None:
-        # Create the chairs as placeholders, then call the shared
-        # arc-layout helper so seeding and adding produce identical
-        # geometry.
-        for _ in range(count):
-            cid = next(self._next_id)
-            self._chairs[cid] = {
-                "id": cid, "x": 0.5, "y": 0.5,
-                "name": "", "character": "",
-                "player_id": None,
-            }
-        self._relayout_arc()
-
-    def _relayout_arc(self) -> None:
-        """Spread every chair evenly along the 270-degree arc.
-
-        The arc sits over the top half of the board, leaving the bottom
-        90 degrees open for the storyteller (bottom-center, see
-        ``__init__``) to close the ring. The arc runs clockwise (in
-        screen coords, where +y is down) from the lower-left at
-        theta = 3pi/4, through the top, around to the lower-right at
-        theta = pi/4. Endpoints are included so the outer chairs sit
-        flush with where the storyteller's gap begins. Chairs are
-        ordered by id, so adding a new chair always appends to the
-        right end of the arc and shifts every existing chair slightly
-        to make room — exactly the "reset and re-spread" behaviour the
-        UI wants when a player joins.
-        """
-        import math
-        cx, cy, r = 0.5, 0.5, 0.38
-        arc = 1.5 * math.pi  # 270 degrees
-        start = 0.75 * math.pi  # lower-left
-        chairs_in_order = sorted(self._chairs.values(), key=lambda c: c["id"])
-        n = len(chairs_in_order)
-        for i, chair in enumerate(chairs_in_order):
-            if n > 1:
-                theta = start + arc * i / (n - 1)
-            else:
-                theta = start + arc / 2
-            chair["x"] = cx + r * math.cos(theta)
-            chair["y"] = cy + r * math.sin(theta)
-
-    def list(self) -> list:
-        with self._lock:
-            return sorted(self._chairs.values(), key=lambda c: c["id"])
-
-    def add(self, x: Optional[float] = None, y: Optional[float] = None) -> dict:
-        # Adding a chair re-spreads every chair around the 270-degree
-        # arc so the layout always looks intentional. The optional x/y
-        # arguments are accepted for API compatibility but ignored when
-        # the layout reset takes over.
-        with self._lock:
-            cid = next(self._next_id)
-            chair = {
-                "id": cid, "x": 0.5, "y": 0.5,
-                "name": "", "character": "", "player_id": None,
-            }
-            self._chairs[cid] = chair
-            self._relayout_arc()
-            return chair
-
-    def update(
-        self,
-        cid: int,
-        x: Optional[float] = None,
-        y: Optional[float] = None,
-        name: Optional[str] = None,
-        character: Optional[str] = None,
-        player_id: Optional[int] = None,
-        clear_player_id: bool = False,
-    ) -> Optional[dict]:
-        with self._lock:
-            chair = self._chairs.get(cid)
-            if chair is None:
-                return None
-            if x is not None:
-                chair["x"] = _clamp01(x)
-            if y is not None:
-                chair["y"] = _clamp01(y)
-            if name is not None:
-                chair["name"] = str(name)[:64]
-            if character is not None:
-                chair["character"] = str(character)[:64]
-            if player_id is not None:
-                chair["player_id"] = int(player_id)
-            elif clear_player_id:
-                chair["player_id"] = None
-            return chair
-
-    def remove(self, cid: int) -> Optional[dict]:
-        with self._lock:
-            removed = self._chairs.pop(cid, None)
-            if removed is not None:
-                self._renumber()
-            return removed
-
-    def remove_last(self) -> Optional[int]:
-        with self._lock:
-            if not self._chairs:
-                return None
-            cid = max(self._chairs)
-            del self._chairs[cid]
-            self._renumber()
-            return cid
-
-    def _renumber(self) -> None:
-        """Compact chair ids to 1..N preserving their existing order.
-
-        Chair ids double as the seat numbers shown in the UI. After a
-        removal we renumber so the surviving chairs read 1..N again with
-        no gaps. The relative order is preserved (chairs are reassigned
-        in ascending order of their old ids), and ``_next_id`` is reset
-        so the next added chair picks up at N+1.
-        """
-        ordered = sorted(self._chairs.values(), key=lambda c: c["id"])
-        new_chairs: Dict[int, Dict[str, Any]] = {}
-        for new_id, chair in enumerate(ordered, start=1):
-            chair["id"] = new_id
-            new_chairs[new_id] = chair
-        self._chairs = new_chairs
-        # Reset the id allocator so subsequent adds continue from N+1.
-        self._next_id = itertools.count(len(self._chairs) + 1)
-
-    def get(self, cid: int) -> Optional[dict]:
-        with self._lock:
-            return dict(self._chairs[cid]) if cid in self._chairs else None
-
-    def get_storyteller(self) -> dict:
-        with self._lock:
-            return dict(self._storyteller)
-
-    def move_storyteller(self, x: float, y: float) -> dict:
-        with self._lock:
-            self._storyteller["x"] = _clamp01(x)
-            self._storyteller["y"] = _clamp01(y)
-            return dict(self._storyteller)
-
-    def chairs_in_clockwise_order(self) -> list:
-        """Return chairs sorted by clockwise angle around the board center."""
-        import math
-        with self._lock:
-            chairs = list(self._chairs.values())
-        # Sort by angle from center, starting at the top (12 o'clock).
-        def angle(c):
-            dx, dy = c["x"] - 0.5, c["y"] - 0.5
-            # atan2 is counter-clockwise; flip sign so we go clockwise
-            # and offset so 12 o'clock is the start.
-            a = math.atan2(dy, dx)  # -pi (left) .. pi
-            # 12 o'clock = -pi/2; want it to be 0.
-            a = (a + math.pi / 2) % (2 * math.pi)
-            return a
-        return sorted(chairs, key=angle)
-
-
-def _clamp01(v: float) -> float:
-    try:
-        v = float(v)
-    except (TypeError, ValueError):
-        return 0.5
-    if v < 0.0:
-        return 0.0
-    if v > 1.0:
-        return 1.0
-    return v
+    def __getattr__(self, name: str):
+        return getattr(ENGINE.chairs, name)
 
 
 # ---------------------------------------------------------------------------
@@ -1028,8 +849,8 @@ def _move_washerwoman_wrong_token(dest_chair_id: int) -> Optional[str]:
 # Globals (set up in main()).
 # ---------------------------------------------------------------------------
 
-STORE = ChairStore()
 ENGINE = Engine()
+STORE = _ChairStoreProxy()
 POOL = CharacterPool()
 
 # Selected preset name (e.g. "trouble_brewing"). Set when the
@@ -1809,22 +1630,32 @@ class Handler(BaseHTTPRequestHandler):
             # Steps:
             #   1. Kill the engine runner subprocess so it stops
             #      generating prompts on stderr and releases resources.
-            #   2. Replace the in-process engine with a fresh instance —
-            #      preserves chair layout / character pool / preset
-            #      selection (those live on STORE / POOL /
-            #      SELECTED_PRESET, not on ENGINE), but discards every
-            #      Player, Character, and event log entry from the
-            #      previous game.
-            #   3. Clear the chair → engine player_id mappings so that
-            #      a future Start Game re-creates engine players from
-            #      the current chair list.
+            #   2. Snapshot the existing chair layout (positions, names,
+            #      typed-in characters) — chairs now live on the engine
+            #      itself, so a fresh Engine() would otherwise wipe them.
+            #   3. Replace the in-process engine with a fresh instance,
+            #      then restore the snapshotted chair layout (with all
+            #      ``player_id`` bindings cleared, since the old engine's
+            #      Player ids no longer exist).
+            #   4. POOL / SELECTED_PRESET still live on the UI side;
+            #      they're untouched so the storyteller doesn't have to
+            #      re-pick the bag after a reset.
             killed = kill_engine_runner_subprocess()
-            ENGINE_replace(Engine())
-            # Each chair currently records the engine player_id it was
-            # bound to last time we hit Start Game. After resetting,
-            # those ids no longer exist, so wipe them.
-            for chair in STORE.list():
-                STORE.update(chair["id"], clear_player_id=True)
+            saved_chairs = ENGINE.chairs.list()
+            saved_storyteller = ENGINE.chairs.get_storyteller()
+            new_engine = Engine(default_seats=0)
+            for chair in saved_chairs:
+                new_chair = new_engine.chairs.add()
+                new_engine.chairs.update(
+                    new_chair["id"],
+                    x=chair["x"], y=chair["y"],
+                    name=chair["name"], character=chair["character"],
+                    clear_player_id=True,
+                )
+            new_engine.chairs.move_storyteller(
+                saved_storyteller["x"], saved_storyteller["y"],
+            )
+            ENGINE_replace(new_engine)
             self._send_json(HTTPStatus.OK, {
                 "engine": ENGINE.snapshot(),
                 "subprocess_killed": killed,
@@ -2322,15 +2153,6 @@ def serve(
     ENGINE_replace(engine)
     ACCESS_CODE = access_code
     SERVER_PORT = port
-
-    # If the entry point told the engine how many seats to start with,
-    # reseed the chair store to match. This is the staged hook for
-    # Phase 2 of the refactor (chairs into the engine); for now the
-    # value lives on engine._default_seats and the chair layout still
-    # comes from STORE.
-    default_seats = getattr(engine, "_default_seats", None)
-    if isinstance(default_seats, int) and default_seats > 0:
-        STORE.reseed(default_seats)
 
     server = ThreadingHTTPServer((host, port), Handler)
     print(f"BotC server listening on http://{host}:{port}")

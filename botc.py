@@ -32,21 +32,11 @@ from ui import ui as ui_module  # noqa: E402
 def _make_engine(default_seats: int) -> Engine:
     """Construct the engine with ``default_seats`` empty seats pre-seeded.
 
-    The seat-seeding lives on the engine post-refactor; for now the
-    chair seeding still happens UI-side at server startup (see
-    ``ui.ChairStore.__init__``). Once Phase 2 of the refactor lands,
-    this function will instead push the seats onto the engine directly.
+    The engine seeds its own ``ChairStore`` from this count (see
+    ``engine/chairs.py``). The UI is a thin renderer over the resulting
+    ``engine.chairs`` instance.
     """
-    engine = Engine()
-    # NOTE: per the staged refactor, the engine doesn't yet own chair
-    # seating. That migration is Phase 2 of the refactor described in
-    # the project README. Until then, the UI's ChairStore (which seeds
-    # 8 chairs by default) and the engine remain decoupled at startup;
-    # the chair → engine.Player mapping happens on /api/engine/start_game.
-    # The ``default_seats`` arg is plumbed here so the entry-point
-    # contract is correct from day one.
-    engine._default_seats = default_seats  # noqa: SLF001 — staged refactor
-    return engine
+    return Engine(default_seats=default_seats)
 
 
 def main() -> None:
