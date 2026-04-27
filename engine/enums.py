@@ -52,3 +52,27 @@ class DeathCause(str, Enum):
     DEMON_KILL = "demon_kill"
     ABILITY = "ability"
     STORYTELLER = "storyteller"
+
+
+class SetupMode(str, Enum):
+    """Context in which a character's on-setup ability is running.
+
+    The Storyteller's interaction surface differs between phase=SETUP
+    (before the game starts) and the running game (after start_game):
+
+    * ``SETUP_PHASE`` — phase=SETUP. The UI is in control. The on-setup
+      ability *absorbs* whatever pool / chair / token state the
+      storyteller has currently set, writing it onto Player + Character
+      members. **No prompts are emitted.** A storyteller drag/drop on
+      a token re-triggers the on-setup ability with this mode so the
+      change is immediately reflected.
+
+    * ``IN_GAME`` — phase has advanced past SETUP. The character is
+      being instantiated (or re-instantiated mid-game, e.g. Scarlet
+      Woman -> Imp). The on-setup ability **prompts the storyteller**
+      for any picks that aren't already nailed down by pool / member
+      state.
+    """
+
+    SETUP_PHASE = "setup_phase"
+    IN_GAME = "in_game"

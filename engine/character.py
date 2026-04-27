@@ -24,7 +24,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, List, Optional
 
-from engine.enums import CharType
+from engine.enums import CharType, SetupMode
 from engine.event import Event, EventType
 from engine.prompt import InformationPrompt, SelectCharacterPrompt
 
@@ -115,36 +115,50 @@ class Character:
         return None
 
     def setup_ability(self, engine: "Engine") -> None:
-        """Run the character's setup-time ability, if any.
+        """Run the character's setup-time ability, if any (legacy entry).
 
-        Setup-time abilities resolve once, before the first night
-        begins, while the engine is still in :class:`Phase.SETUP`. They
-        are the right home for any storyteller decision a character
-        needs *baked in before play starts*. Examples:
+        This is the original prompt-the-storyteller hook used by
+        :meth:`Engine._run_setup_actions`. As of the on_setup_ability
+        refactor, the engine's preferred entry is
+        :meth:`on_setup_ability`, which is mode-aware
+        (:class:`SetupMode`). The default ``on_setup_ability`` calls
+        through to this method for ``SetupMode.IN_GAME`` so existing
+        characters keep working unchanged.
 
-          * The Drunk's pretend Townsfolk role (a :class:`Character`
-            pick — the Drunk thinks they are some other Townsfolk).
-          * The Fortune Teller's red herring (a :class:`Player` pick —
-            the good player who registers as the Demon to the FT).
-
-        The interaction surface is identical to :meth:`ability`:
-        implementations call :meth:`engine.send_prompt` to ask the
-        storyteller a question (a :class:`SelectCharacterPrompt`,
-        :class:`SelectPlayerPrompt`, …), and dispatch events through
-        :meth:`engine.dispatch` so other characters can react.
-
-        Default: no-op. Override on subclasses. Setup_orders are not a
-        dimension we sort by — the engine just iterates over players in
-        seat order and fires whichever characters opt in.
-
-        The engine guarantees:
-          * ``self.player`` is set and seated.
-          * Every player has a character assigned.
-          * Setup deltas (:attr:`setup_outsider_delta`,
-            :attr:`setup_townsfolk_delta`) have already shaped the
-            character distribution; this hook runs after that.
+        Default: no-op. Subclasses may override either method.
+        ``setup_ability`` is appropriate when the character only has
+        one path (always prompt the ST, no UI-driven shortcut). For
+        characters whose setup picks can also be set via the UI's
+        token UI (Drunk, Fortune Teller, Washerwoman), override
+        ``on_setup_ability`` instead so the SETUP_PHASE branch can
+        absorb the UI state without prompting.
         """
         return None
+
+    def on_setup_ability(
+        self,
+        engine: "Engine",
+        mode: SetupMode = SetupMode.IN_GAME,
+    ) -> None:
+        """Run the character's on-setup ability under the given mode.
+
+        See :class:`engine.enums.SetupMode` for the meaning of each mode.
+
+        Default behaviour:
+          * ``SetupMode.SETUP_PHASE``: no-op. The UI is still in
+            control; characters with no setup picks have nothing to
+            absorb.
+          * ``SetupMode.IN_GAME``: delegate to the legacy
+            :meth:`setup_ability` so existing characters keep working.
+
+        Override on any character whose setup-time decision can also
+        be set via the UI's pool / token state — branch on ``mode`` to
+        either absorb that state silently (SETUP_PHASE) or emit
+        Storyteller prompts (IN_GAME).
+        """
+        if mode is SetupMode.IN_GAME:
+            self.setup_ability(engine)
+        # SETUP_PHASE: default no-op.
 
     def ability(self, engine: "Engine", night_number: int) -> None:
         """Run the character's nightly ability.

@@ -24,7 +24,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Optional
 
 from engine.character import Character
-from engine.enums import CharType
+from engine.enums import CharType, SetupMode
 from engine.event import Event, EventType
 from engine.prompt import (
     InformationPrompt,
@@ -86,6 +86,47 @@ class FortuneTeller(Character):
     # ------------------------------------------------------------------
     # Setup.
     # ------------------------------------------------------------------
+
+    def on_setup_ability(
+        self,
+        engine: "Engine",
+        mode: SetupMode = SetupMode.IN_GAME,
+    ) -> None:
+        """Mode-aware on-setup ability.
+
+        ``SETUP_PHASE``: silently absorb pool state. If the storyteller
+        already set ``engine.pool.ft_red_herring()`` (or moved the
+        RED HERRING token onto a chair), instantiate that role on
+        ``self.members`` and resolve ``self._red_herring`` to the
+        seated player. Leaves the slot empty if nothing is set yet.
+
+        ``IN_GAME``: prompt the storyteller (legacy
+        :meth:`setup_ability`).
+        """
+        if self.player is None:
+            return
+        if mode is SetupMode.SETUP_PHASE:
+            if self.members:
+                # Already populated; just refresh the resolved player.
+                if self._red_herring is None:
+                    self._red_herring = self._resolve_red_herring_player(engine)
+                return
+            rh_name = engine.pool.ft_red_herring()
+            if rh_name:
+                try:
+                    rh = engine.build_character(rh_name)
+                except KeyError:
+                    return
+                self.members.append(rh)
+                self._red_herring = self._resolve_red_herring_player(engine)
+                if self._red_herring is not None:
+                    engine.log(
+                        f"{self._red_herring.name} ({rh_name}) absorbed as "
+                        f"red herring for {self.player.name} (Fortune Teller)."
+                    )
+            return
+        # IN_GAME: legacy prompt path.
+        self.setup_ability(engine)
 
     def setup_ability(self, engine: "Engine") -> None:
         """Storyteller picks a good *role* to be the red herring.

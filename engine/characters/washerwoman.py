@@ -20,7 +20,7 @@ import random as _rand
 from typing import TYPE_CHECKING, Optional
 
 from engine.character import Character
-from engine.enums import CharType
+from engine.enums import CharType, SetupMode
 from engine.event import Event, EventType
 from engine.prompt import (
     InformationPrompt,
@@ -60,6 +60,38 @@ class Washerwoman(Character):
         # set (and the WW is sober + healthy), the ability skips every
         # storyteller prompt — both tokens were placed during setup.
         self._chosen_wrong: Optional[str] = None
+
+    def on_setup_ability(
+        self,
+        engine: "Engine",
+        mode: SetupMode = SetupMode.IN_GAME,
+    ) -> None:
+        """Mode-aware on-setup ability.
+
+        ``SETUP_PHASE``: absorb the pool's seen-Townsfolk and WRONG
+        slots into ``self._chosen_townsfolk`` / ``self._chosen_wrong``
+        so the first-night ability can skip prompts. Pure read-and-copy;
+        no Storyteller prompts.
+
+        ``IN_GAME``: delegate to legacy ``setup_ability`` (no-op for
+        the Washerwoman — its real work runs in
+        :meth:`ability(night_number=1)`). The first-night ability is
+        what emits prompts when the slots aren't pre-filled.
+        """
+        if self.player is None:
+            return
+        if mode is SetupMode.SETUP_PHASE:
+            tf = engine.pool.washerwoman_townsfolk()
+            wrong = engine.pool.washerwoman_wrong()
+            if tf:
+                self._chosen_townsfolk = tf
+            if wrong:
+                self._chosen_wrong = wrong
+            return
+        # IN_GAME: legacy delegation. Washerwoman's prompt-emitting
+        # work happens inside its first-night ability(), so this is
+        # a no-op for the legacy path too.
+        self.setup_ability(engine)
 
     def ability(self, engine: "Engine", night_number: int) -> None:
         # CHECK_CONDITION: only the first night, only if alive.

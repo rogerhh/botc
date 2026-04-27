@@ -20,7 +20,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Optional
 
 from engine.character import Character
-from engine.enums import CharType
+from engine.enums import CharType, SetupMode
 
 if TYPE_CHECKING:
     from engine.engine import Engine
@@ -80,6 +80,53 @@ class Drunk(Character):
     # ------------------------------------------------------------------
     # Setup.
     # ------------------------------------------------------------------
+
+    def on_setup_ability(
+        self,
+        engine: "Engine",
+        mode: SetupMode = SetupMode.IN_GAME,
+    ) -> None:
+        """Mode-aware on-setup ability.
+
+        ``SETUP_PHASE``: silently absorb pool state. If the storyteller
+        already set ``engine.pool.drunk_fake()`` (or the IS-THE-DRUNK
+        token has been moved onto a chair), instantiate that Townsfolk
+        on ``self.members`` and write the Drunk's
+        ``perceived_character_name``. If nothing is set yet, leave the
+        slot empty — a later token-drag or pool change will re-trigger.
+
+        ``IN_GAME``: delegate to the legacy :meth:`setup_ability`,
+        which prompts the Storyteller for a Townsfolk to fake.
+        """
+        if self.player is None:
+            return
+        # Mark the Drunk as drunk in either mode.
+        self.player.set_drunk(True)
+        if mode is SetupMode.SETUP_PHASE:
+            # Already populated (e.g. by a previous token-drag) —
+            # ensure perceived_character_name is in sync, then return.
+            if self.members:
+                existing = self.members[0]
+                if self.player.perceived_character_name != existing.name:
+                    self.player.perceived_character_name = existing.name
+                return
+            # Otherwise read engine.pool.drunk_fake; if set, build the
+            # impersonated TF onto self.members.
+            fake_name = engine.pool.drunk_fake()
+            if fake_name:
+                try:
+                    fake = engine.build_character(fake_name)
+                except KeyError:
+                    return
+                self.members.append(fake)
+                self.player.perceived_character_name = fake.name
+                engine.log(
+                    f"{self.player.name} (Drunk) absorbs pool pick: "
+                    f"believes they are the {fake.name}."
+                )
+            return
+        # IN_GAME: prompt the storyteller (legacy path).
+        self.setup_ability(engine)
 
     def setup_ability(self, engine: "Engine") -> None:
         """Storyteller picks the Townsfolk the Drunk thinks they are.

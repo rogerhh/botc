@@ -41,7 +41,7 @@ from engine import script as script_data
 from engine.chairs import ChairStore
 from engine.character import Character
 from engine.pool import CharacterPool
-from engine.enums import Alignment, CharType, DeathCause, Phase
+from engine.enums import Alignment, CharType, DeathCause, Phase, SetupMode
 from engine.event import Event, EventType
 from engine.player import Player
 from engine.prompt import (
@@ -301,7 +301,14 @@ class Engine:
         player.name = name
 
     def assign_character(self, player_id: int, character_name: str) -> None:
-        """Assign a character to a player (by name)."""
+        """Assign a character to a player (by name).
+
+        After wiring up the new Character, the engine immediately runs
+        its on-setup ability in ``SETUP_PHASE`` mode (when the engine
+        is in ``Phase.SETUP``) or ``IN_GAME`` mode (otherwise). The
+        SETUP_PHASE pass silently absorbs whatever pool / token state
+        is currently set; the IN_GAME pass prompts the storyteller.
+        """
         player = self.get_player(player_id)
         char = script_data.build_character(character_name)
         player.assign_character(char)
@@ -312,6 +319,15 @@ class Engine:
             if player.perceived_character_name is None:
                 player.perceived_character_name = "Townsfolk"
         self.log(f"Assigned {character_name} to {player.name!r} (id={player_id}).")
+        # Trigger the on-setup ability in the appropriate mode. During
+        # phase=SETUP the UI is in control, so SETUP_PHASE is silent
+        # absorption; mid-game (e.g. Scarlet Woman -> Imp via assign)
+        # uses IN_GAME so the ST is prompted for any picks.
+        mode = SetupMode.SETUP_PHASE if self._phase is Phase.SETUP else SetupMode.IN_GAME
+        try:
+            char.on_setup_ability(self, mode)
+        except Exception as exc:  # pragma: no cover (defensive)
+            self.log(f"Error in {char.name} on_setup_ability ({mode}): {exc!r}")
 
     def apply_setup_data(self, data: dict) -> None:
         """Pre-populate setup-time picks chosen in the UI.
@@ -500,6 +516,10 @@ class Engine:
             self.pool.set_drunk_fake(new_fake)
         except ValueError:
             pass
+        # Re-trigger SETUP_PHASE absorption on any seated Drunk so the
+        # Player's perceived_character_name and the Drunk's members
+        # both reflect the new fake.
+        self._retrigger_setup_for_role("Drunk")
         return None
 
     def move_ft_red_herring_token(self, dest_chair_id: int) -> Optional[str]:
@@ -520,6 +540,8 @@ class Engine:
             self.pool.set_ft_red_herring(dest_char)
         except ValueError as exc:
             return str(exc)
+        # Re-absorb on the FT so its members[0] / _red_herring update.
+        self._retrigger_setup_for_role("Fortune Teller", reset_first=True)
         return None
 
     def move_washerwoman_townsfolk_token(self, dest_chair_id: int) -> Optional[str]:
@@ -540,6 +562,8 @@ class Engine:
             self.pool.set_washerwoman_townsfolk(dest_char)
         except ValueError as exc:
             return str(exc)
+        # Re-absorb so the WW's _chosen_townsfolk reflects the move.
+        self._retrigger_setup_for_role("Washerwoman")
         return None
 
     def move_washerwoman_wrong_token(self, dest_chair_id: int) -> Optional[str]:
@@ -558,7 +582,44 @@ class Engine:
             self.pool.set_washerwoman_wrong(dest_char)
         except ValueError as exc:
             return str(exc)
+        # Re-absorb so the WW's _chosen_wrong reflects the move.
+        self._retrigger_setup_for_role("Washerwoman")
         return None
+
+    def _retrigger_setup_for_role(
+        self, role_name: str, *, reset_first: bool = False
+    ) -> None:
+        """Re-run on_setup_ability(SETUP_PHASE) for any seated player
+        whose character matches ``role_name``.
+
+        Used by token-drag handlers so a UI mutation (e.g. moving the
+        FT RED HERRING token) immediately re-absorbs the new pool /
+        chair state into the affected character's internals.
+
+        ``reset_first=True`` clears ``character.members`` and (for the
+        Fortune Teller) ``_red_herring`` before the absorption pass
+        so a new pool pick replaces the previous one rather than
+        sticking with the first set of members. SETUP_PHASE is a
+        no-op outside ``Phase.SETUP`` so this is safe to call
+        unconditionally.
+        """
+        if self._phase is not Phase.SETUP:
+            return
+        for p in self._players:
+            char = p.character
+            if char is None or char.name != role_name:
+                continue
+            if reset_first:
+                char.members.clear()
+                if hasattr(char, "_red_herring"):
+                    char._red_herring = None
+            try:
+                char.on_setup_ability(self, SetupMode.SETUP_PHASE)
+            except Exception as exc:  # pragma: no cover (defensive)
+                self.log(
+                    f"Error in {char.name} on_setup_ability "
+                    f"(SETUP_PHASE re-trigger): {exc!r}"
+                )
 
     # ==================================================================
     #                       NIGHT PHASE
@@ -931,21 +992,19 @@ class Engine:
             self._dispatch(Event(EventType.DAY_START))
 
     def _run_setup_actions(self) -> None:
-        """Drive every in-play character's :meth:`Character.setup_ability`.
+        """Drive every in-play character's on-setup ability in IN_GAME mode.
 
-        The base implementation is a no-op, so this is essentially free
-        for characters that don't need setup-time prompts. Order is
-        seat order — setup picks in Trouble Brewing don't depend on
-        each other, so we don't need a dedicated setup-order field.
+        At this point the engine has left ``Phase.SETUP`` and is in
+        ``Phase.FIRST_NIGHT``. ``SETUP_PHASE`` absorption already ran
+        on each ``assign_character`` call during setup; this pass uses
+        ``SetupMode.IN_GAME`` so any character whose setup pick is
+        still un-resolved (e.g. the storyteller didn't drag the Drunk
+        token, didn't pick an FT red herring) will prompt the
+        storyteller now.
 
-        After each character's own setup_ability fires, the engine
-        also runs the *perceived* character's setup_ability, if any.
-        This is the path that lets a Drunk-as-Fortune-Teller pick a
-        red herring, a Drunk-as-Washerwoman pre-pick the Townsfolk
-        they'll be shown, etc. The perceived character is identified
-        via :meth:`Character.acting_perceived_character`, which is
-        ``None`` for everyone except the Drunk (and any future role
-        that impersonates another role).
+        After each character's own on_setup_ability fires, the engine
+        also runs the *perceived* character's on_setup_ability, if any
+        (the Drunk-as-FT picks a red herring, etc.).
         """
         self._dispatch(Event(EventType.SETUP_START))
         for p in self._players:
@@ -953,20 +1012,17 @@ class Engine:
             if char is None:
                 continue
             try:
-                char.setup_ability(self)
+                char.on_setup_ability(self, SetupMode.IN_GAME)
             except Exception as exc:  # pragma: no cover (defensive)
-                self.log(f"Error in {char.name} setup_ability: {exc!r}")
-            # Drunk-style impersonators: their *real* setup work is the
-            # impersonated role's setup_ability. Run that on the Drunk's
-            # seated player so e.g. the FT-as-Drunk picks a red herring.
+                self.log(f"Error in {char.name} on_setup_ability: {exc!r}")
             perceived = char.acting_perceived_character()
             if perceived is not None:
                 try:
-                    perceived.setup_ability(self)
+                    perceived.on_setup_ability(self, SetupMode.IN_GAME)
                 except Exception as exc:  # pragma: no cover (defensive)
                     self.log(
                         f"Error in {char.name} (perceived "
-                        f"{perceived.name}) setup_ability: {exc!r}"
+                        f"{perceived.name}) on_setup_ability: {exc!r}"
                     )
         self._dispatch(Event(EventType.SETUP_END))
 
