@@ -35,19 +35,28 @@ Event. The engine never leaps ahead on its own.
 
 ```
 engine/
-  enums.py          Phase, Alignment, CharType, DeathCause, EventType, ...
+  enums.py          Phase, Alignment, CharType, DeathCause, SetupMode, ...
   player.py         Player: identity + states + ownership of a Character
-  character.py      Character: base class with ability() and reaction()
+  character.py      Character: base class with ability() and on_setup_ability()
+  chairs.py         ChairStore: town-square layout (positions, names,
+                    chair → Player binding)
+  pool.py           CharacterPool: the bag + Drunk fake / FT red herring /
+                    WW seen-Townsfolk / WW wrong slots, with auto-fill
   event.py          Event: the unit of game progression
   prompt.py         Prompt: a request for Storyteller input or a player display
   script.py         Script: roster, night sheets, edition metadata
-  engine.py         Engine: phase machine and event loop
-  log.py            EventLog: ordered record of state-changing events
+  preset.py         Preset: per-edition night sheets and metadata
+  engine.py         Engine: phase machine, chairs, pool, event loop
   characters/       One module per character; each subclasses Character
 ```
 
-The engine never imports from `ui/`. Communication runs through Prompts and a
-queue of pending Events.
+The engine is the single source of truth: chairs, pool, setup picks,
+selected preset, and players all live on the ``Engine`` instance.
+``Engine.snapshot()`` is enough to redraw the entire UI without any
+external state. The engine never imports from ``ui/``.
+
+The top-level entry point is ``botc.py``; it constructs the engine
+first and then hands it to the UI server (``ui.ui.serve(engine)``).
 
 
 ## Core Concepts
@@ -259,17 +268,26 @@ The Engine is a phase machine over an event queue.
 
 #### `setup`
 
-1. The local UI lets the Storyteller arrange seats and enter player names.
-   This is pre-engine; the engine is told the seating order when the
-   Storyteller is done.
-2. The Storyteller is prompted to pick the characters in play. The engine
-   resolves any setup-time abilities here: Baron swaps two Townsfolk for two
-   Outsiders; Drunk replaces a Townsfolk slot in the bag; Fortune Teller's
-   Red Herring is chosen via Arbitrate; etc. These are all Setup events.
-3. The Storyteller distributes character tokens at the table (offline) and
-   types each player's character into the UI. Once "Start" is clicked, the
-   engine constructs the initial list of Players in seating order and is
-   ready to run.
+1. The Storyteller arranges seats and enters player names. Chairs live
+   on the engine (``engine.chairs``) — adding, renaming, dragging, and
+   typing characters into chairs all go through engine APIs.
+2. The Storyteller picks the characters in play (``engine.pool``).
+   Auto-fill rules keep the FT red herring, WW seen-Townsfolk, and WW
+   wrong slots non-stale. The Baron's setup deltas
+   (``setup_outsider_delta`` / ``setup_townsfolk_delta``) are read off
+   the class and used by the bag-builder.
+3. As soon as a character is assigned to a chair, the engine triggers
+   that character's ``on_setup_ability(engine, SetupMode.SETUP_PHASE)``.
+   This *absorbs* the current pool state into the character's
+   internals (the Drunk's pretend role, the FT's red herring, the WW's
+   seen / wrong roles) without prompting the Storyteller. Token-drag
+   on the grimoire re-triggers the same SETUP_PHASE pass on the
+   affected chair so a UI mutation is reflected immediately.
+4. When "Start" is clicked, ``Engine.start_game`` validates and flips
+   the phase to FIRST_NIGHT. ``_run_setup_actions`` then runs each
+   in-play character's ``on_setup_ability(engine, SetupMode.IN_GAME)``
+   — the IN_GAME branch *prompts* the Storyteller for any picks that
+   weren't pinned down during SETUP.
 
 #### `start_night`
 

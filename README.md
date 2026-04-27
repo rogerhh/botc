@@ -16,19 +16,25 @@ on social play.
 
 ```
 botc/
-  engine/          The game engine. Owns players, characters, the night/day
-                   loop, and the prompt broker the UI talks to.
+  botc.py          Top-level entry point. Builds the engine, then hands
+                   it to the UI server.
+  engine/          The game engine. Single source of truth for chairs,
+                   pool, players, characters, and the night/day loop.
     characters/    One module per Trouble Brewing role.
-    engine.py      Phase machine and event loop.
-    character.py   Character base class.
+    engine.py      Phase machine, event loop, on-setup orchestration.
+    character.py   Character base class with on_setup_ability().
     player.py      Player (seat + states + character).
+    chairs.py      Town-square layout (chair positions, names, binding).
+    pool.py        Character pool + four setup picks (Drunk fake, FT
+                   red herring, WW seen-Townsfolk, WW wrong).
     event.py       Event dataclass + EventType enum.
     prompt.py      Prompt subtypes (YesNo, SelectPlayer, …).
+    enums.py       Phase, Alignment, CharType, DeathCause, SetupMode.
     script.py      Trouble Brewing roster + recommended counts.
     preset.py      Loads a per-edition preset (night sheets, etc.).
     runner.py      Out-of-process engine mirror (subprocess foundation).
     README.md      Engine design notes.
-  ui/              The local web UI.
+  ui/              The local web UI — a thin renderer over engine state.
     ui.py          stdlib HTTP server, JSON API, and request handlers.
     static/        index.html (Storyteller GUI), phone.html (mobile view),
                    enter.html (access-code gate), QR-code library.
@@ -57,15 +63,20 @@ to play.
 Start the local server:
 
 ```
-python3 -m ui.ui --host 0.0.0.0 --port 8000
+python3 botc.py --host 0.0.0.0 --port 8000 --players 8
 ```
 
 Optional flags:
 
+- `--players N` — number of seats to seed the engine with on startup
+  (default 8). The Storyteller can still add/remove seats via the UI.
 - `--access-code` — require an access code on every non-localhost request.
   Pass it explicitly (`--access-code letmein`) or let the server generate
   one (`--access-code` with no argument prints the random code on stdout).
   Localhost is always allowed.
+
+`python3 -m ui.ui` still works as a legacy shortcut (it builds a
+default engine and forwards to the same server).
 
 Then visit:
 
@@ -75,11 +86,16 @@ Then visit:
 
 ## How the pieces talk
 
-The engine and UI live in the same Python process. They share state through
-a single `ENGINE` instance plus two side stores in `ui.py`: `STORE` (chair
-layout) and `POOL` (character pool + setup picks). The browser drives
-everything by hitting JSON HTTP endpoints; each handler mutates the relevant
-store, then returns a snapshot.
+The engine and UI live in the same Python process. The engine is the
+single source of truth: chairs, pool, setup picks, players, characters,
+and the selected preset all live on the `Engine` instance. `ui.py` is
+a thin renderer / HTTP shim over that state — the legacy `STORE` and
+`POOL` symbols still exist but are now lookup-at-call-time proxies that
+forward to `ENGINE.chairs` and `ENGINE.pool` respectively.
+
+`Engine.snapshot()` includes the entire visible state (chairs, storyteller
+position, pool, setup picks, selected preset, players, log tail), so any
+consumer of a snapshot can reconstruct the full UI without external state.
 
 The engine never imports from `ui/`. Communication runs through `Prompt`
 objects on a queue and a `respond(prompt_id, value)` channel.
@@ -87,25 +103,30 @@ objects on a queue and a `respond(prompt_id, value)` channel.
 
 ## Setup flow
 
-1. **Town square.** The Storyteller opens the GUI, adds chairs, types player
-   names, and drags chairs into seating order. Chairs live in `STORE`; the
-   engine knows nothing about them yet.
-2. **Pool selection.** The GUI shows the Trouble Brewing roster. The
-   Storyteller picks the roles in play — by hand, or with a "Randomize"
-   button that asks the script preset for a legal distribution. Setup
-   reminder tokens (Drunk's fake Townsfolk, Fortune Teller's red herring,
-   Washerwoman's seen Townsfolk) auto-fill but are draggable.
-3. **Token assignment.** The Storyteller distributes physical tokens at the
-   table, then types each player's drawn role into their seat panel.
-4. **Start Game.** A POST to `/api/engine/start_game`:
-   - walks `STORE` clockwise, calls `ENGINE.add_seat()` and
-     `ENGINE.assign_character()` for each chair;
-   - calls `ENGINE.apply_setup_data(...)` to push the Drunk / FT / WW picks
-     onto the right `Character` instances so their first-night abilities
-     skip the usual prompts;
-   - installs the preset's night sheet on the engine;
-   - validates (≥5 players, every player has a role, exactly one Demon);
-   - flips the phase to `FIRST_NIGHT` and kicks off the night thread.
+1. **Town square.** The engine starts with `--players N` empty chairs
+   (`engine.chairs`). The Storyteller adds, renames, and drags chairs
+   from the GUI; every change goes straight to the engine.
+2. **Pool selection.** The Storyteller picks the roles in play — by
+   hand, or with a "Randomize" button that asks the script preset
+   for a legal distribution. The pool's auto-fill rules keep the
+   FT red herring, WW seen-Townsfolk, and WW wrong slots non-stale.
+3. **Character assignment.** As soon as the Storyteller types a role
+   into a chair, `Engine.assign_character` runs the new character's
+   `on_setup_ability(SetupMode.SETUP_PHASE)`, which silently
+   absorbs the current pool state — the Drunk picks up the
+   pool's `drunk_fake`, the FT picks up `ft_red_herring`, the WW
+   picks up `washerwoman_townsfolk` and `washerwoman_wrong`. No
+   Storyteller prompts during this phase; the UI is in control.
+   Token-drag on the grimoire re-triggers the same SETUP_PHASE pass
+   so changes are reflected live.
+4. **Start Game.** `Engine.start_game` validates (≥5 players, every
+   player has a role, exactly one Demon), installs the preset's
+   night sheet, flips the phase to `FIRST_NIGHT`, and kicks off the
+   night thread. `_run_setup_actions` then runs each character's
+   `on_setup_ability(SetupMode.IN_GAME)`, which **prompts the
+   Storyteller** for any picks that weren't pinned down during
+   SETUP. Mid-game character changes (e.g. Scarlet Woman → Imp via
+   `change_character`) also use the IN_GAME branch.
 
 
 ## Game flow

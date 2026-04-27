@@ -24,7 +24,6 @@ from __future__ import annotations
 
 import argparse
 import http.cookies
-import itertools
 import json
 import os
 import random
