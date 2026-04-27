@@ -21,6 +21,9 @@ Public API
 * Storyteller mutators (used during day too): ``kill``, ``revive``,
   ``poison``, ``cure_poison``, ``make_drunk``, ``sober_up``,
   ``change_character``, ``set_alignment``.
+* Day-time per-player actions (driven by the Local UI side panel):
+  ``nominate``, ``record_vote``, ``execute_player``,
+  ``use_daytime_ability``.
 * UI broker: ``pending_prompt``, ``respond``.
 * Snapshot: ``snapshot``, ``player_view``.
 
@@ -119,6 +122,17 @@ class Engine:
         # Storyteller-readable event log.
         self._log: List[str] = []
 
+        # Structured "interesting events" log used by the end-of-game
+        # report (kills, executions, nominations, info shown to players,
+        # storyteller / player selections, game end). Kept alongside the
+        # human-readable ``_log`` so the UI can render a curated, typed
+        # report instead of the noisy line-oriented log.
+        #
+        # Each entry is a dict with at least ``ts``, ``phase``,
+        # ``night_number``, ``day_number``, ``kind``, ``summary``; the
+        # ``details`` sub-dict is kind-specific (see ``_record``).
+        self._game_events: List[Dict[str, Any]] = []
+
         # The preset (script) drives the night order and storyteller-
         # facing descriptions. ``None`` means fall back to the legacy
         # Character.first_night_order / other_night_order ordering.
@@ -176,6 +190,16 @@ class Engine:
         return list(self._log)
 
     @property
+    def game_events(self) -> List[Dict[str, Any]]:
+        """Structured "interesting events" recorded for the end-of-game report.
+
+        Read-only copy; the engine owns the underlying list and appends
+        to it from ``_record`` (called by ``send_prompt``, ``kill``,
+        ``execute_player``, ``nominate``, ``_end_game``).
+        """
+        return [dict(e) for e in self._game_events]
+
+    @property
     def winner(self) -> Optional[Alignment]:
         return self._winner
 
@@ -214,6 +238,164 @@ class Engine:
             sys.stderr.flush()
         except Exception:  # pragma: no cover (defensive)
             pass
+
+    # ------------------------------------------------------------------
+    # Structured "interesting events" log (drives the end-of-game report).
+    # ------------------------------------------------------------------
+
+    def _record(self, kind: str, summary: str, **details: Any) -> None:
+        """Append a structured entry to the game-events log.
+
+        ``kind`` is one of: ``info_shown``, ``st_selection``,
+        ``player_selection``, ``kill``, ``execution``, ``nomination``,
+        ``game_end``. The entry is timestamped and stamped with the
+        current phase / night / day numbers so the report can group
+        events by phase. Defensive: any exception is swallowed so
+        recording never breaks gameplay.
+        """
+        try:
+            entry: Dict[str, Any] = {
+                "ts": time.strftime("%H:%M:%S"),
+                "phase": self._phase.value,
+                "night_number": self._night_number,
+                "day_number": self._day_number,
+                "kind": kind,
+                "summary": summary,
+                "details": dict(details),
+            }
+            self._game_events.append(entry)
+        except Exception:  # pragma: no cover (defensive)
+            pass
+
+    def _record_prompt_response(self, prompt: Prompt, response: Any) -> None:
+        """Record an interesting prompt+response pair to ``_game_events``.
+
+        Called from ``send_prompt`` once the storyteller has answered.
+        Filters out announce-style information prompts that are not
+        shown to a player (e.g. Dusk / Dawn banners) and prompts whose
+        meta marks them as uninteresting.
+
+        ``info_shown`` covers any InformationPrompt that targets a
+        specific player and was visible to them on their phone (the
+        bread-and-butter "info" abilities like Empath / Washerwoman /
+        Fortune Teller / Undertaker / Investigator).
+
+        ``st_selection`` covers SelectPlayer/SelectCharacter/YesNo
+        prompts that the storyteller drove (typically the drunk/
+        poisoned override pre-fill the engine asks the ST to confirm).
+
+        ``player_selection`` covers select prompts whose stage is the
+        player's own decision (Fortune Teller picking 2 players, Monk
+        picking a target, Butler picking a master, ...).
+        """
+        meta = prompt.meta if isinstance(prompt.meta, dict) else {}
+        character = meta.get("character") or ""
+        target_pid = prompt.target_player_id
+        target_name = meta.get("target_player_name") or (
+            self._safe_player_name(target_pid) if target_pid is not None else ""
+        )
+        stage = meta.get("stage")
+        is_st_stage = stage in ("st_pre", "st_post")
+
+        # InformationPrompt: only record the ones a player was meant to see.
+        if isinstance(prompt, InformationPrompt):
+            if not getattr(prompt, "shown_to_player", False):
+                return
+            if target_pid is None:
+                return
+            highlight_ids = list(getattr(prompt, "highlight_player_ids", []) or [])
+            highlight_chars = list(getattr(prompt, "highlight_characters", []) or [])
+            highlight_names = [
+                self._safe_player_name(pid) for pid in highlight_ids
+            ]
+            label = character or "Info"
+            who = target_name or f"player {target_pid}"
+            extras: List[str] = []
+            if highlight_chars:
+                extras.append("characters: " + ", ".join(highlight_chars))
+            if highlight_names:
+                extras.append("players: " + ", ".join(highlight_names))
+            tail = (" — " + "; ".join(extras)) if extras else ""
+            summary = f"Showed {label} ({who}){tail}"
+            self._record(
+                "info_shown",
+                summary,
+                character=character or None,
+                target_player_id=target_pid,
+                target_player_name=target_name or None,
+                text=prompt.text,
+                highlight_player_ids=highlight_ids,
+                highlight_player_names=highlight_names,
+                highlight_characters=highlight_chars,
+                drunk_poison_state=meta.get("drunk_poison_state"),
+                step_kind=meta.get("step_kind"),
+                step_name=meta.get("step_name"),
+            )
+            return
+
+        # Select / yes-no prompts: record both player- and ST-driven
+        # selections — both are "interesting" at the report layer.
+        kind = "st_selection" if is_st_stage else "player_selection"
+        actor = "Storyteller" if is_st_stage else (
+            target_name or (character or "Player")
+        )
+        char_label = character or "?"
+
+        if isinstance(response, list):
+            value_str = ", ".join(str(x) for x in response) or "(none)"
+        elif response is True:
+            value_str = "Yes"
+        elif response is False:
+            value_str = "No"
+        elif response is None:
+            value_str = "(none)"
+        else:
+            value_str = str(response)
+
+        # Translate player-id responses into names for readability.
+        selected_player_ids: List[int] = []
+        selected_player_names: List[str] = []
+        if isinstance(prompt, SelectPlayerPrompt):
+            ids = response if isinstance(response, list) else (
+                [] if response is None else [response]
+            )
+            for pid in ids:
+                try:
+                    selected_player_ids.append(int(pid))
+                    selected_player_names.append(self._safe_player_name(int(pid)))
+                except (TypeError, ValueError):
+                    continue
+            value_str = ", ".join(selected_player_names) or value_str
+
+        summary = (
+            f"{actor} → {char_label}"
+            + (f" ({target_name})" if target_name and not is_st_stage else "")
+            + f": {value_str}"
+        )
+        self._record(
+            kind,
+            summary,
+            character=character or None,
+            target_player_id=target_pid,
+            target_player_name=target_name or None,
+            stage=stage,
+            step=meta.get("step"),
+            step_kind=meta.get("step_kind"),
+            step_name=meta.get("step_name"),
+            response=response,
+            selected_player_ids=selected_player_ids,
+            selected_player_names=selected_player_names,
+            prompt_text=prompt.text,
+        )
+
+    def _safe_player_name(self, player_id: Optional[int]) -> str:
+        """Best-effort player name lookup that never raises."""
+        if player_id is None:
+            return ""
+        try:
+            return self.get_player(int(player_id)).name
+        except (KeyError, TypeError, ValueError):
+            return f"player {player_id}"
 
     # ------------------------------------------------------------------
     # Player lookup helpers.
@@ -356,6 +538,21 @@ class Engine:
             When both ``washerwoman_townsfolk`` and ``washerwoman_wrong``
             are present, the WW's first-night ability runs entirely
             without storyteller prompts (information only).
+          * ``librarian_outsider`` — the Outsider role the Librarian is
+            shown. We pre-set ``self._chosen_outsider`` on the Librarian
+            so its nightly ability skips the "pick an Outsider" prompt.
+          * ``librarian_wrong`` — the WRONG role for the Librarian.
+            When both ``librarian_outsider`` and ``librarian_wrong``
+            are set, the Librarian's first-night ability skips every
+            storyteller prompt.
+          * ``investigator_minion`` — the Minion role the Investigator
+            is shown. We pre-set ``self._chosen_minion`` on the
+            Investigator so its nightly ability skips the
+            "pick a Minion" prompt.
+          * ``investigator_wrong`` — the WRONG role for the
+            Investigator. When both ``investigator_minion`` and
+            ``investigator_wrong`` are set, the Investigator's
+            first-night ability skips every storyteller prompt.
 
         Idempotent: passing the same ``data`` twice is fine. Missing
         keys leave the existing pick (if any) untouched.
@@ -364,6 +561,10 @@ class Engine:
         ft_red_herring = data.get("ft_red_herring")
         ww_townsfolk = data.get("washerwoman_townsfolk")
         ww_wrong = data.get("washerwoman_wrong")
+        librarian_outsider = data.get("librarian_outsider")
+        librarian_wrong = data.get("librarian_wrong")
+        investigator_minion = data.get("investigator_minion")
+        investigator_wrong = data.get("investigator_wrong")
 
         for player in self._players:
             char = player.character
@@ -403,6 +604,32 @@ class Engine:
                     self.log(
                         f"{player.name} (Washerwoman) WRONG token "
                         f"placed on the {ww_wrong} (pre-set)."
+                    )
+            elif char.name == "Librarian":
+                if librarian_outsider:
+                    char._chosen_outsider = librarian_outsider
+                    self.log(
+                        f"{player.name} (Librarian) will be shown the "
+                        f"{librarian_outsider} (pre-set)."
+                    )
+                if librarian_wrong:
+                    char._chosen_wrong = librarian_wrong
+                    self.log(
+                        f"{player.name} (Librarian) WRONG token "
+                        f"placed on the {librarian_wrong} (pre-set)."
+                    )
+            elif char.name == "Investigator":
+                if investigator_minion:
+                    char._chosen_minion = investigator_minion
+                    self.log(
+                        f"{player.name} (Investigator) will be shown the "
+                        f"{investigator_minion} (pre-set)."
+                    )
+                if investigator_wrong:
+                    char._chosen_wrong = investigator_wrong
+                    self.log(
+                        f"{player.name} (Investigator) WRONG token "
+                        f"placed on the {investigator_wrong} (pre-set)."
                     )
 
     def set_perceived_character(self, player_id: int, character_name: str) -> None:
@@ -464,6 +691,14 @@ class Engine:
         return spec is not None and spec.char_type in (
             CharType.TOWNSFOLK, CharType.OUTSIDER,
         )
+
+    def _outsider_in_play(self, name: str) -> bool:
+        spec = script_data.SCRIPT_BY_NAME.get(name)
+        return spec is not None and spec.char_type is CharType.OUTSIDER
+
+    def _minion_in_play(self, name: str) -> bool:
+        spec = script_data.SCRIPT_BY_NAME.get(name)
+        return spec is not None and spec.char_type is CharType.MINION
 
     def move_drunk_token(self, dest_chair_id: int) -> Optional[str]:
         """Drop the IS-THE-DRUNK reminder onto ``dest_chair_id``.
@@ -584,6 +819,108 @@ class Engine:
             return str(exc)
         # Re-absorb so the WW's _chosen_wrong reflects the move.
         self._retrigger_setup_for_role("Washerwoman")
+        return None
+
+    def move_librarian_outsider_token(self, dest_chair_id: int) -> Optional[str]:
+        """Drop the LIBRARIAN OUTSIDER reminder onto ``dest_chair_id``.
+
+        The destination chair's character must be an Outsider currently
+        in the pool.
+        """
+        dest = self.chairs.get(dest_chair_id)
+        if dest is None:
+            return f"no chair with id {dest_chair_id}"
+        if "Librarian" not in self.pool.list():
+            return "Librarian is not in the pool"
+        dest_char = (dest.get("character") or "").strip()
+        if not dest_char:
+            return "destination chair has no character assigned"
+        if not self._outsider_in_play(dest_char):
+            return "destination chair must hold an Outsider role"
+        if dest_char not in self.pool.list():
+            return f"{dest_char!r} is not in the pool"
+        try:
+            self.pool.set_librarian_outsider(dest_char)
+        except ValueError as exc:
+            return str(exc)
+        # Re-absorb so the Librarian's _chosen_outsider reflects the
+        # move.
+        self._retrigger_setup_for_role("Librarian")
+        return None
+
+    def move_investigator_minion_token(self, dest_chair_id: int) -> Optional[str]:
+        """Drop the INVESTIGATOR MINION reminder onto ``dest_chair_id``.
+
+        The destination chair's character must be a Minion currently
+        in the pool.
+        """
+        dest = self.chairs.get(dest_chair_id)
+        if dest is None:
+            return f"no chair with id {dest_chair_id}"
+        if "Investigator" not in self.pool.list():
+            return "Investigator is not in the pool"
+        dest_char = (dest.get("character") or "").strip()
+        if not dest_char:
+            return "destination chair has no character assigned"
+        if not self._minion_in_play(dest_char):
+            return "destination chair must hold a Minion role"
+        if dest_char not in self.pool.list():
+            return f"{dest_char!r} is not in the pool"
+        try:
+            self.pool.set_investigator_minion(dest_char)
+        except ValueError as exc:
+            return str(exc)
+        # Re-absorb so the Investigator's _chosen_minion reflects the
+        # move.
+        self._retrigger_setup_for_role("Investigator")
+        return None
+
+    def move_librarian_wrong_token(self, dest_chair_id: int) -> Optional[str]:
+        """Drop the LIBRARIAN WRONG reminder onto ``dest_chair_id``.
+
+        Per the rulebook the WRONG token goes "by any *other*
+        character token" — meaning any seated character except the
+        Librarian herself and the seen-Outsider.
+        """
+        dest = self.chairs.get(dest_chair_id)
+        if dest is None:
+            return f"no chair with id {dest_chair_id}"
+        if "Librarian" not in self.pool.list():
+            return "Librarian is not in the pool"
+        dest_char = (dest.get("character") or "").strip()
+        if not dest_char:
+            return "destination chair has no character assigned"
+        if dest_char not in self.pool.list():
+            return f"{dest_char!r} is not in the pool"
+        try:
+            self.pool.set_librarian_wrong(dest_char)
+        except ValueError as exc:
+            return str(exc)
+        self._retrigger_setup_for_role("Librarian")
+        return None
+
+    def move_investigator_wrong_token(self, dest_chair_id: int) -> Optional[str]:
+        """Drop the INVESTIGATOR WRONG reminder onto ``dest_chair_id``.
+
+        Per the rulebook the WRONG token goes "by any *other*
+        character token" — meaning any seated character except the
+        Investigator herself and the seen-Minion.
+        """
+        dest = self.chairs.get(dest_chair_id)
+        if dest is None:
+            return f"no chair with id {dest_chair_id}"
+        if "Investigator" not in self.pool.list():
+            return "Investigator is not in the pool"
+        dest_char = (dest.get("character") or "").strip()
+        if not dest_char:
+            return "destination chair has no character assigned"
+        if dest_char not in self.pool.list():
+            return f"{dest_char!r} is not in the pool"
+        try:
+            self.pool.set_investigator_wrong(dest_char)
+        except ValueError as exc:
+            return str(exc)
+        self._retrigger_setup_for_role("Investigator")
         return None
 
     def _retrigger_setup_for_role(
@@ -911,6 +1248,24 @@ class Engine:
     def _run_demon_info(self, step: "preset_module.NightStep") -> None:
         """Show the Demon their Minions and 3 not-in-play good roles to
         bluff as. Only fires in games of 7+ players.
+
+        Prompt flow (matches the standard 6-section panel layout used
+        by every other character ability):
+
+          1. Title / description: synthesized from the preset step.
+          2. **ST input stage 1** — a ``SelectCharacterPrompt`` with
+             ``count=3`` and ``stage="st_pre"``. The engine pre-picks
+             3 random good (Townsfolk/Outsider) characters that are
+             not in play and surfaces them as the default. The
+             Storyteller may swap any of the picks before clicking
+             Next; the picks land before the Demon physically wakes.
+          3. **Wake up Demon (player)** — synthesized by the UI from
+             ``meta.character`` / ``meta.target_player_name``.
+             Internally we also dispatch ``EventType.WAKEUP`` so other
+             abilities and any audit tooling see a real wakeup event.
+          4. **Show this to player** — an ``InformationPrompt`` with
+             ``stage="info"`` carrying the (possibly Storyteller-edited)
+             bluffs plus the Demon's Minion list.
         """
         non_traveler_count = len([
             p for p in self._players
@@ -923,8 +1278,11 @@ class Engine:
         if not demons:
             return
 
-        # Pick three good (Townsfolk/Outsider) characters that are NOT in
-        # play, to give the demon as bluff candidates.
+        # Pre-pick three good (Townsfolk/Outsider) characters that are
+        # NOT in play, as the default bluff set the Storyteller will
+        # confirm in ST input stage 1. The pool is the full script
+        # minus everyone seated; if the script is unusually thin we
+        # fall back to whatever is left.
         in_play_names = {
             p.character.name for p in self._players if p.character is not None
         }
@@ -934,14 +1292,70 @@ class Engine:
         )
         bluff_pool = [n for n in all_good_names if n not in in_play_names]
         import random as _rand
-        bluffs = _rand.sample(bluff_pool, min(3, len(bluff_pool)))
+        eligible_bluffs = sorted(set(bluff_pool))
+        n_bluffs = min(3, len(eligible_bluffs))
+        default_bluffs: List[str] = (
+            _rand.sample(eligible_bluffs, n_bluffs) if n_bluffs else []
+        )
 
         minion_names = ", ".join(p.name for p in minions) or "(none)"
         for demon in demons:
+            # ----- ST input stage 1: confirm / change the 3 bluffs ----
+            # Even though the engine already randomized the picks, we
+            # surface them to the ST so they can swap any character
+            # they don't like (e.g. one that conflicts with the table's
+            # mood, or that a clever player would never bluff).
+            bluff_prompt = SelectCharacterPrompt(
+                text="THESE CHARACTERS ARE NOT IN PLAY",
+                eligible_characters=eligible_bluffs,
+                count=n_bluffs if n_bluffs > 0 else 0,
+                target_player_id=demon.id,
+                meta={
+                    "character": "Demon",
+                    "target_player_name": demon.name,
+                    "step": "select_bluffs",
+                    "stage": "st_pre",
+                    "step_kind": "demon_info",
+                    "step_name": step.name,
+                    "description": step.description,
+                    "default": list(default_bluffs),
+                },
+            )
+            chosen_bluffs: List[str]
+            if n_bluffs == 0:
+                # Nothing for the ST to pick — skip the prompt entirely.
+                chosen_bluffs = []
+            else:
+                resp = self.send_prompt(bluff_prompt)
+                if isinstance(resp, list):
+                    chosen_bluffs = [str(x) for x in resp if x]
+                elif isinstance(resp, str) and resp:
+                    chosen_bluffs = [resp]
+                else:
+                    chosen_bluffs = list(default_bluffs)
+                # Defensive: if the ST somehow returned fewer bluffs
+                # than expected, top up from the random default so the
+                # Demon still sees three roles when possible.
+                if len(chosen_bluffs) < n_bluffs:
+                    for d in default_bluffs:
+                        if d not in chosen_bluffs:
+                            chosen_bluffs.append(d)
+                            if len(chosen_bluffs) >= n_bluffs:
+                                break
+
+            # ----- WAKEUP — picks are locked in; wake the Demon ----
+            # Engine-internal event so other abilities / audit tools
+            # see a real wakeup. The UI synthesizes the visible
+            # "Wake up Demon (player)" line from the prompt meta.
+            self._dispatch(
+                Event(EventType.WAKEUP, source=None, targets=[demon])
+            )
+
+            # ----- Show this to player (auto info; ST clicks Next) ----
             text = (
                 f"Wake {demon.name} (Demon). Your Minions: {minion_names}. "
                 f"Three not-in-play good roles to bluff as: "
-                f"{', '.join(bluffs) if bluffs else '(none)'}."
+                f"{', '.join(chosen_bluffs) if chosen_bluffs else '(none)'}."
             )
             # The TARGET of demon-info is the Demon's Minions plus the
             # 3 bluff roles. Highlight those chairs/character tokens so
@@ -951,7 +1365,7 @@ class Engine:
                 target_player_id=demon.id,
                 shown_to_player=True,
                 highlight_player_ids=[p.id for p in minions],
-                highlight_characters=list(bluffs),
+                highlight_characters=list(chosen_bluffs),
                 meta={
                     "step_kind": "demon_info",
                     "step_name": step.name,
@@ -965,7 +1379,7 @@ class Engine:
                     "target_player_name": demon.name,
                     "stage": "info",
                     "minion_player_names": [p.name for p in minions],
-                    "bluff_characters": list(bluffs),
+                    "bluff_characters": list(chosen_bluffs),
                 },
             ))
 
@@ -1129,6 +1543,15 @@ class Engine:
         self._dispatch(
             Event(EventType.DEATH, targets=[player], data={"cause": cause})
         )
+        char_name = player.character.name if player.character else None
+        self._record(
+            "kill",
+            f"{player.name} dies ({cause.value})",
+            player_id=player.id,
+            player_name=player.name,
+            character=char_name,
+            cause=cause.value,
+        )
         self._check_win_conditions()
         return player
 
@@ -1176,8 +1599,143 @@ class Engine:
             Event(EventType.EXECUTION, targets=[player],
                   data={"cause": DeathCause.EXECUTION})
         )
+        char_name = player.character.name if player.character else None
+        self._record(
+            "execution",
+            f"{player.name} is executed",
+            player_id=player.id,
+            player_name=player.name,
+            character=char_name,
+        )
         self._check_win_conditions()
         return player
+
+    # ------------------------------------------------------------------
+    # Daytime player actions (nominate / vote / use ability).
+    #
+    # These are user-facing helpers exposed by the side-panel UI that
+    # opens when the Storyteller clicks a player circle during the day.
+    # Each one updates per-player state, dispatches the appropriate
+    # event so character reactions fire (e.g. Virgin on NOMINATION),
+    # and runs end-game checks where relevant.
+    # ------------------------------------------------------------------
+
+    def nominate(self, nominator_id: int, nominee_id: int) -> Tuple[Player, Player]:
+        """Record a nomination from ``nominator_id`` against ``nominee_id``.
+
+        Sets ``has_nominated_today`` on the nominator and
+        ``has_been_nominated_today`` on the nominee, then dispatches a
+        ``NOMINATION`` event so role reactions fire (e.g. the Virgin
+        executing the nominator). Dead players cannot nominate; dead
+        players *can* be nominated (the rulebook allows nominations
+        against the dead, even though they cannot be re-killed).
+        """
+        if self._phase is not Phase.DAY:
+            raise RuntimeError("Nominations only happen during day.")
+        nominator = self.get_player(nominator_id)
+        nominee = self.get_player(nominee_id)
+        if not nominator.alive:
+            raise RuntimeError(
+                f"{nominator.name!r} is dead; the dead cannot nominate."
+            )
+        if nominator.has_nominated_today:
+            raise RuntimeError(
+                f"{nominator.name!r} has already nominated today."
+            )
+        if nominee.has_been_nominated_today:
+            raise RuntimeError(
+                f"{nominee.name!r} has already been nominated today."
+            )
+        nominator.has_nominated_today = True
+        nominee.has_been_nominated_today = True
+        self.log(f"{nominator.name!r} nominates {nominee.name!r}.")
+        self._dispatch(
+            Event(
+                EventType.NOMINATION,
+                targets=[nominee],
+                data={
+                    "nominator_id": nominator.id,
+                    "nominee_id": nominee.id,
+                },
+            )
+        )
+        self._record(
+            "nomination",
+            f"{nominator.name} nominates {nominee.name}",
+            nominator_id=nominator.id,
+            nominator_name=nominator.name,
+            nominee_id=nominee.id,
+            nominee_name=nominee.name,
+        )
+        # A reaction (e.g. Virgin) may have ended the game.
+        self._check_win_conditions()
+        return nominator, nominee
+
+    def record_vote(self, player_id: int) -> Player:
+        """Record a vote by ``player_id``.
+
+        For a living player this is purely informational (logged so the
+        end-of-game narration can replay the day). For a dead player it
+        consumes their single dead-vote token. Calling on a dead player
+        with no dead vote left raises — the side panel disables the
+        button in that case so this should not normally happen.
+        """
+        if self._phase is not Phase.DAY:
+            raise RuntimeError("Votes only happen during day.")
+        player = self.get_player(player_id)
+        if player.alive:
+            self.log(f"{player.name!r} votes.")
+            return player
+        if not player.has_dead_vote:
+            raise RuntimeError(
+                f"{player.name!r} is dead and has no dead vote left."
+            )
+        player.use_dead_vote()
+        self.log(f"{player.name!r} (dead) spends their dead vote.")
+        return player
+
+    def use_daytime_ability(self, player_id: int) -> None:
+        """Trigger the player's character daytime ability.
+
+        Character implementations of ``daytime_ability`` typically call
+        ``send_prompt`` to ask the Storyteller for a target. Since
+        ``send_prompt`` blocks waiting for an HTTP response on
+        ``/api/engine/respond``, we must run the ability on a worker
+        thread — calling it directly on the HTTP thread would deadlock.
+        We refuse to start a new ability while another worker thread
+        (e.g. the night loop) is still alive.
+        """
+        if self._phase is not Phase.DAY:
+            raise RuntimeError("Daytime abilities only fire during day.")
+        player = self.get_player(player_id)
+        if player.character is None:
+            raise RuntimeError(f"{player.name!r} has no character.")
+        if not player.alive:
+            raise RuntimeError(f"{player.name!r} is dead.")
+        if self._night_thread and self._night_thread.is_alive():
+            raise RuntimeError(
+                "An ability worker is already running; wait for it to finish."
+            )
+        char = player.character
+        thread = threading.Thread(
+            target=self._run_daytime_ability,
+            args=(char,),
+            name=f"botc-daytime-{char.name}",
+            daemon=True,
+        )
+        # Reuse the night-thread slot so subsequent calls (and the
+        # next start_night) wait for this ability to complete.
+        self._night_thread = thread
+        thread.start()
+
+    def _run_daytime_ability(self, char: Character) -> None:
+        try:
+            char.daytime_ability(self)
+        except Exception as exc:  # pragma: no cover (defensive)
+            self.log(f"Error in {char.name} daytime_ability: {exc!r}")
+        finally:
+            with self._lock:
+                self._pending_prompt = None
 
     # ==================================================================
     #                       EVENT DISPATCH
@@ -1254,6 +1812,7 @@ class Engine:
                 f"Auto-resolved {type(prompt).__name__} "
                 f"(single eligible option): {auto!r}."
             )
+            self._record_prompt_response(prompt, auto)
             return auto
         with self._lock:
             self._pending_prompt = prompt
@@ -1265,6 +1824,7 @@ class Engine:
             response = self._prompt_response
             self._prompt_response = None
             self._pending_prompt = None
+        self._record_prompt_response(prompt, response)
         return response
 
     def _merge_step_meta_into(self, prompt: Prompt) -> None:
@@ -1351,8 +1911,14 @@ class Engine:
             return _NO_AUTO_RESOLVE
 
         if isinstance(prompt, SelectCharacterPrompt):
-            if len(prompt.eligible_characters) == 1:
-                return prompt.eligible_characters[0]
+            count = getattr(prompt, "count", 1) or 1
+            eligible = list(prompt.eligible_characters)
+            if count == 1 and len(eligible) == 1:
+                return eligible[0]
+            if count > 1 and len(eligible) == count:
+                # Forced multi-selection: every eligible character must
+                # be picked — there is no other valid response.
+                return list(eligible)
             return _NO_AUTO_RESOLVE
 
         return _NO_AUTO_RESOLVE
@@ -1431,6 +1997,12 @@ class Engine:
         self._winner = winner
         self._win_reason = reason
         self.log(f"Game over: {winner.value} wins — {reason}")
+        self._record(
+            "game_end",
+            f"{winner.value.capitalize()} wins — {reason}",
+            winner=winner.value,
+            reason=reason,
+        )
 
     # ==================================================================
     #                       SNAPSHOTS

@@ -90,8 +90,48 @@ State tokens update as Events flow through the engine. The Storyteller
 should never need to manually move tokens; if an Event changes a state,
 the engine logs that Event and the UI re-renders the affected seat.
 
-A **prompt panel** sits below or beside the town square. It shows the
-current Prompt the engine is waiting on:
+A **prompt panel** sits below or beside the town square. It is the
+six-section layout shared by every character ability and every
+engine-driven step that talks to a player (Minion Info, Demon Info):
+
+1. **Title (CHARACTER)** — frozen at the start of the panel session.
+2. **Description (rulebook ability text)** — frozen at the start of
+   the panel session.
+3. **ST input stage 1** — pre-wake decisions the Storyteller can lock
+   in before the player physically wakes (Washerwoman / Librarian /
+   Investigator WRONG player, Undertaker shown character when
+   drunk/poisoned, Demon's three not-in-play bluff roles, …). Driven
+   by prompts whose `meta["stage"]` is `"st_pre"`. Defaults are
+   pre-filled so a single Next click resolves them.
+4. **Wake up X (Player)** — synthesized by the UI from the prompt's
+   `meta` between the last `st_pre` prompt and the first non-`st_pre`
+   prompt. Hidden for Dawn / Dusk / other non-character preset
+   steps.
+5. **Player input stage** — appears when the player makes a decision
+   (Fortune Teller picks 2, Imp picks a kill target, Monk picks a
+   protection target, Butler picks a master, Ravenkeeper picks
+   whose role to learn). Driven by prompts whose `meta["stage"]` is
+   `"player"`. Becomes a highlighted answer pill once given.
+6. **ST input stage 2** — appears when the Storyteller's pick depends
+   on what the player picked (Fortune Teller drunk/poisoned Yes/No,
+   Ravenkeeper drunk/poisoned shown character, Imp self-kill →
+   choose new Imp). Driven by prompts whose `meta["stage"]` is
+   `"st_post"`. Same answer-pill treatment as stage 1.
+7. **Show this to player** — auto-displays the info tokens
+   (highlight tokens like *THESE ARE YOUR MINIONS*, *THESE
+   CHARACTERS ARE NOT IN PLAY*, the Washerwoman's character token
+   alongside the two highlighted chairs). Driven by an
+   `InformationPrompt` with `shown_to_player = True` and
+   `meta["stage"] = "info"`. The Storyteller hands the phone to the
+   player and clicks Next to dismiss.
+
+UI language note (per the project rules in `CLAUDE.md`): never use
+the words "confirm" or "override" on any prompt the Storyteller
+sees. Drunk/poisoned prompts pre-fill the wrong answer and are
+dispatched by clicking Next (or Yes/No for binary prompts, with the
+wrong answer highlighted as the default).
+
+Prompt sub-types and the controls they render:
 
 - For SelectPlayer / SelectCharacter prompts, eligible options are
   highlighted on the town square or in a character grid; selecting one
@@ -110,15 +150,77 @@ the next Event when the current one needs no further input. The
 Storyteller can always read the current Event in plain language above the
 button.
 
-Tapping a seat opens a **seat panel** with:
+### Player side panel
 
-- The player's character and current states.
-- Available actions for the current phase: nominate, vote on (during a
-  vote), execute, or trigger a daytime ability (Slayer shoots, Mayor
-  declares, etc.).
+Once the game has started (any phase that is not `setup`), tapping a
+chair on the town square opens a **player side panel** that slides in
+from the left edge of the screen. During Setup the chair-tap still
+opens the Setup-phase chair editor; the side panel is strictly an
+in-game surface.
 
-These Storyteller-initiated actions are posted to the engine as
-Storyteller-sourced Events.
+The side panel is intentionally a **pure read of the engine
+snapshot** — it owns no state of its own. Every value it shows comes
+from a field on `Engine.snapshot()["players"][i]`. The relevant
+fields, all surfaced explicitly so the panel can be a thin renderer:
+
+- Identity: `name`, `seat`, `character`, `perceived_character`,
+  `char_type`, `alignment`.
+- Life: `alive`, `death_cause`, `has_dead_vote`.
+- Conditions: `drunk`, `poisoned`, `protected_from_demon`,
+  `once_per_game` / `once_per_game_used`, `mad_about`, `notes`.
+- Today: `has_nominated_today`, `has_been_nominated_today`.
+- Affordances: `can_nominate`, `can_be_nominated`, `can_vote`,
+  `has_daytime_ability`.
+
+The panel re-renders on every `/api/state` poll, so changes from
+elsewhere — a Virgin executing the nominator, the grimoire marking
+someone drunk, an end-of-game flip — show up live without the
+Storyteller having to close and reopen the panel.
+
+Below the state read-out is a row of four action buttons. Each one
+posts to a small per-action endpoint on the engine, then re-polls the
+snapshot and refreshes the panel. The buttons are gated client-side
+by the same affordance flags shown above so disabled buttons are
+self-explanatory.
+
+- **Use ability.** Calls `POST /api/engine/use_ability` →
+  `Engine.use_daytime_ability(player_id)`. The engine spawns a worker
+  thread that calls the player character's `daytime_ability(engine)`,
+  which then drives the same prompt flow used at night (the
+  Storyteller answers the spawned `SelectPlayer` / Information /
+  follow-up prompts in the prompt panel). Disabled when the player
+  is dead, the character has no `daytime_ability` override
+  (`has_daytime_ability == false`), or a once-per-game ability has
+  already been spent.
+
+- **Nominate.** Calls `POST /api/engine/nominate` with
+  `nominator_id` + `nominee_id`. Clicking Nominate opens an inline
+  player picker inside the panel (sorted by seat); selecting a
+  nominee dispatches an `EventType.NOMINATION` so character
+  reactions fire — most importantly the Virgin's "first nomination
+  by a Townsfolk → execute the nominator" trigger. Dead players
+  appear in the picker but are visually marked; they cannot be
+  nominated only if they were already nominated today (per
+  `can_be_nominated`). The Nominate button itself is disabled for
+  the open player when they are dead, when they have already
+  nominated today, or when the phase is not Day.
+
+- **Voted.** Calls `POST /api/engine/vote`. For a living player this
+  is logged but otherwise informational. For a dead player it
+  consumes their single dead-vote token (`has_dead_vote → false`).
+  Disabled for dead players who have already spent their dead vote.
+
+- **Execute.** Calls `POST /api/engine/execute` →
+  `Engine.execute_player`. Confirms via a browser dialog, then kills
+  the player with cause `EXECUTION` and dispatches an
+  `EventType.EXECUTION` so reactions and end-of-game checks run.
+  Disabled outside Day phase, and on already-dead players.
+
+UI language: the panel uses no "confirm" or "override" wording, in
+line with the project rule for drunk/poisoned info prompts. Buttons
+are simple verbs (Use ability / Nominate / Voted / Execute); their
+disabled state is the single source of truth about whether the
+action is currently legal.
 
 A side panel shows the **Event log** — a running, scrollable list of
 state-changing Events with timestamps. This is what the Storyteller can

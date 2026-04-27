@@ -61,7 +61,7 @@ class Monk(Character):
             if p.alive and p.id != self.player.id
         ]
         sel = SelectPlayerPrompt(
-            text="Monk picks a player to protect from the Demon tonight.",
+            text="Monk protects a player",
             count=1,
             eligible_player_ids=eligible,
             allow_self=False,

@@ -68,7 +68,7 @@ class Imp(Character):
         # the Imp PDF). The Imp can also pick themselves.
         eligible = [p.id for p in engine.players]
         sel = SelectPlayerPrompt(
-            text="Imp picks a player to kill (or themselves).",
+            text="Imp kills a player",
             count=1,
             eligible_player_ids=eligible,
             allow_self=True,
@@ -157,7 +157,7 @@ class Imp(Character):
             )
             return
         sel = SelectPlayerPrompt(
-            text="Imp self-killed — pick a Minion to become the new Imp.",
+            text="New Imp",
             count=1,
             eligible_player_ids=[p.id for p in alive_minions],
             allow_self=False,

@@ -132,14 +132,23 @@ class SelectPlayerPrompt(Prompt):
 
 @dataclass
 class SelectCharacterPrompt(Prompt):
-    """Pick a character from a list. Response: character name (str)."""
+    """Pick one or more characters from a list.
+
+    For ``count == 1`` the response is a character name (``str``).
+    For ``count > 1`` the storyteller is asked to pick exactly
+    ``count`` distinct characters and the response is a list of
+    character names. The Demon's first-night "three not-in-play
+    characters to bluff as" prompt is the canonical multi-pick case.
+    """
 
     type: PromptType = PromptType.SELECT_CHARACTER
     eligible_characters: List[str] = field(default_factory=list)
+    count: int = 1
 
     def to_dict(self) -> dict:
         d = super().to_dict()
         d["eligible_characters"] = list(self.eligible_characters)
+        d["count"] = self.count
         return d
 
 

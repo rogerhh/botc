@@ -73,7 +73,7 @@ class Butler(Character):
         # vote only if the dead Master uses their dead vote).
         eligible = [p.id for p in engine.players if p.id != self.player.id]
         sel = SelectPlayerPrompt(
-            text="Butler picks their Master for tomorrow.",
+            text="Butler's Master",
             count=1,
             eligible_player_ids=eligible,
             allow_self=False,

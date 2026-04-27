@@ -99,6 +99,32 @@ class Undertaker(Character):
 
         is_drunk_or_poisoned = self.player.drunk or self.player.poisoned
 
+        # Spy misregistration: if the executed player is the Spy, ask
+        # the Storyteller what character the Spy registers as for the
+        # Undertaker. The default is the Spy's internally-tracked
+        # preferred good character (or "Spy" itself, which would show
+        # the Undertaker the Spy token). This takes precedence over the
+        # default "show the actual character" path; if the Undertaker
+        # is also drunk/poisoned, the drunk/poisoned override below
+        # still gets a chance to change the answer.
+        spy_register_as: Optional[str] = None
+        if (
+            self._last_executed is not None
+            and self._last_executed.character is not None
+            and self._last_executed.character.name == "Spy"
+        ):
+            from engine.characters.spy import (
+                prompt_spy_register_as as _prompt_spy_register_as,
+            )
+            spy_register_as = _prompt_spy_register_as(
+                engine,
+                self._last_executed,
+                detector_name=self.name,
+                detector_player_id=self.player.id,
+                text="Spy registers as (Undertaker)",
+                extra_meta={"step_for": "undertaker_executed"},
+            )
+
         # Sober + healthy: trust the executed player's actual character,
         # no ST prompt. Drunk/poisoned: range of options — pre-pick a
         # random *wrong* character and surface to ST with a Next button.
@@ -112,7 +138,7 @@ class Undertaker(Character):
                 if wrong_options else self._last_executed_character
             )
             char_prompt = SelectCharacterPrompt(
-                text="Pick the character to show the Undertaker (drunk/poisoned).",
+                text="Character to show",
                 eligible_characters=all_chars,
                 target_player_id=self.player.id,
                 meta={
@@ -132,6 +158,10 @@ class Undertaker(Character):
             shown = engine.send_prompt(char_prompt)
             if not isinstance(shown, str) or not shown:
                 shown = default_wrong
+        elif spy_register_as is not None:
+            # Sober+healthy Undertaker on the Spy: show the Spy's
+            # ST-chosen registration character.
+            shown = spy_register_as
         else:
             shown = self._last_executed_character
 

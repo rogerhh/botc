@@ -74,7 +74,7 @@ class Poisoner(Character):
         # alive player. The Poisoner can poison themselves.
         eligible = [p.id for p in engine.players if p.alive]
         sel = SelectPlayerPrompt(
-            text="Poisoner picks a player to poison (tonight and tomorrow day).",
+            text="Poisoner poisons a player",
             count=1,
             eligible_player_ids=eligible,
             allow_self=True,

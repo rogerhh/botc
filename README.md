@@ -141,6 +141,19 @@ character's `reaction(event, engine)` is invoked, and any new Events they
 emit are inserted at the front of the queue so abilities cascade in the
 order the rulebook describes.
 
+Every ability — and every engine-driven step that talks to a player
+(Minion Info, Demon Info) — drives the same six-section Storyteller
+panel: Title, Description, ST input stage 1 (decisions made before the
+player wakes — e.g. the Washerwoman/Librarian/Investigator WRONG
+player, the Demon's three not-in-play bluff roles), Wake up X (Player),
+Player input stage, ST input stage 2 (post-pick fix-ups — e.g. the
+Fortune Teller drunk/poisoned override, the Imp's "pick a Minion to
+become the new Imp" on a self-kill), and finally Show this to player.
+Staging is conveyed through `meta["stage"]` on each prompt
+(`"st_pre"`, `"player"`, `"st_post"`, `"info"`); see
+`engine/README.md` and `ui/README.md` for the full layout and the
+prompts each role emits.
+
 After night ends, the engine flips to `DAY` and the UI drives the day:
 nominations, votes, executions, and daytime abilities (Slayer, Virgin,
 Mayor) all enter the engine as Storyteller-sourced Events. End-of-game

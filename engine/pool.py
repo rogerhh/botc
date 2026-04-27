@@ -7,10 +7,13 @@ Owned by the engine post-refactor. The pool tracks:
   * The Fortune Teller's red-herring role (in-bag).
   * The Washerwoman's seen-Townsfolk role (in-bag).
   * The Washerwoman's WRONG role (in-bag).
+  * The Librarian's seen-Outsider role (in-bag).
+  * The Investigator's seen-Minion role (in-bag).
 
-Auto-fill rules ensure that whenever the FT / WW are in the pool their
-dependent slots are non-None as long as a valid candidate exists. The
-slots are cleared when the relevant owner role leaves the pool.
+Auto-fill rules ensure that whenever the FT / WW / Librarian /
+Investigator are in the pool their dependent slots are non-None as long
+as a valid candidate exists. The slots are cleared when the relevant
+owner role leaves the pool.
 
 The class is thread-safe; the UI's HTTP handlers and the engine's
 character setup paths both read from and write to it.
@@ -42,6 +45,10 @@ class CharacterPool:
         self._ft_red_herring: Optional[str] = None
         self._washerwoman_townsfolk: Optional[str] = None
         self._washerwoman_wrong: Optional[str] = None
+        self._librarian_outsider: Optional[str] = None
+        self._librarian_wrong: Optional[str] = None
+        self._investigator_minion: Optional[str] = None
+        self._investigator_wrong: Optional[str] = None
         self._lock = threading.Lock()
 
     # ------------------------------------------------------------------
@@ -68,6 +75,22 @@ class CharacterPool:
         with self._lock:
             return self._washerwoman_wrong
 
+    def librarian_outsider(self) -> Optional[str]:
+        with self._lock:
+            return self._librarian_outsider
+
+    def librarian_wrong(self) -> Optional[str]:
+        with self._lock:
+            return self._librarian_wrong
+
+    def investigator_minion(self) -> Optional[str]:
+        with self._lock:
+            return self._investigator_minion
+
+    def investigator_wrong(self) -> Optional[str]:
+        with self._lock:
+            return self._investigator_wrong
+
     # ------------------------------------------------------------------
     # Internal helpers (assume self._lock is held).
     # ------------------------------------------------------------------
@@ -90,25 +113,67 @@ class CharacterPool:
                 is CharType.TOWNSFOLK)
         ]
 
+    def _outsiders_in_pool(self) -> List[str]:
+        return [
+            n for n in self._names
+            if (script_data.SCRIPT_BY_NAME.get(n)
+                and script_data.SCRIPT_BY_NAME[n].char_type
+                is CharType.OUTSIDER)
+        ]
+
+    def _minions_in_pool(self) -> List[str]:
+        return [
+            n for n in self._names
+            if (script_data.SCRIPT_BY_NAME.get(n)
+                and script_data.SCRIPT_BY_NAME[n].char_type
+                is CharType.MINION)
+        ]
+
     def _autofill_ft_red_herring(self) -> None:
+        """Pick a red herring for the FT.
+
+        Self-avoidance: if the slot is currently sitting on
+        ``"Fortune Teller"`` (a degenerate auto-pick from a moment when
+        the FT was the only Good role in the pool) and a non-self Good
+        candidate has since become available, switch to a non-self
+        candidate immediately. The rules permit the FT to be its own
+        red herring, but it makes for a degenerate game — the
+        storyteller can still drag the token back to the FT manually.
+        """
         if "Fortune Teller" not in self._names:
             self._ft_red_herring = None
             return
-        if self._ft_red_herring in self._names:
-            return
         good = self._good_in_pool()
         non_self = [n for n in good if n != "Fortune Teller"]
+        if self._ft_red_herring == "Fortune Teller" and non_self:
+            self._ft_red_herring = random.choice(non_self)
+            return
+        if self._ft_red_herring in self._names:
+            return
         candidates = non_self or good
         self._ft_red_herring = random.choice(candidates) if candidates else None
 
     def _autofill_washerwoman_townsfolk(self) -> None:
+        """Pick the seen-Townsfolk for the WW.
+
+        Self-avoidance: if the slot is currently sitting on
+        ``"Washerwoman"`` (a degenerate auto-pick from a moment when
+        the WW was the only Townsfolk in the pool) and another
+        Townsfolk has since been added, switch to it immediately. The
+        rules don't forbid the WW from being her own seen-Townsfolk,
+        but it makes for a degenerate game — the storyteller can drag
+        the token back to the WW manually if they really want it.
+        """
         if "Washerwoman" not in self._names:
             self._washerwoman_townsfolk = None
             return
-        if self._washerwoman_townsfolk in self._names:
-            return
         townsfolk = self._townsfolk_in_pool()
         non_self = [n for n in townsfolk if n != "Washerwoman"]
+        if self._washerwoman_townsfolk == "Washerwoman" and non_self:
+            self._washerwoman_townsfolk = random.choice(non_self)
+            return
+        if self._washerwoman_townsfolk in self._names:
+            return
         candidates = non_self or townsfolk
         self._washerwoman_townsfolk = (
             random.choice(candidates) if candidates else None
@@ -132,6 +197,106 @@ class CharacterPool:
             random.choice(candidates) if candidates else None
         )
 
+    def _autofill_librarian_outsider(self) -> None:
+        """If the Librarian is in the pool but no seen-Outsider is set,
+        pick one uniformly at random from the Outsiders in the pool.
+        Caller must already hold self._lock.
+
+        If there are no Outsiders in the pool the slot stays ``None``.
+        That's deliberate — the Librarian's first-night ability shows
+        the "0 Outsiders" reading when no Outsider role is selected,
+        which is exactly the rules-correct outcome when no Outsiders
+        are in play.
+        """
+        if "Librarian" not in self._names:
+            self._librarian_outsider = None
+            return
+        if self._librarian_outsider in self._names:
+            spec = script_data.SCRIPT_BY_NAME.get(self._librarian_outsider)
+            if spec is not None and spec.char_type is CharType.OUTSIDER:
+                return
+        outsiders = self._outsiders_in_pool()
+        self._librarian_outsider = (
+            random.choice(outsiders) if outsiders else None
+        )
+
+    def _autofill_investigator_minion(self) -> None:
+        """If the Investigator is in the pool but no seen-Minion is
+        set, pick one uniformly at random from the Minions in the
+        pool. Caller must already hold self._lock.
+        """
+        if "Investigator" not in self._names:
+            self._investigator_minion = None
+            return
+        if self._investigator_minion in self._names:
+            spec = script_data.SCRIPT_BY_NAME.get(self._investigator_minion)
+            if spec is not None and spec.char_type is CharType.MINION:
+                return
+        minions = self._minions_in_pool()
+        self._investigator_minion = (
+            random.choice(minions) if minions else None
+        )
+
+    def _autofill_librarian_wrong(self) -> None:
+        """If the Librarian is in the pool but no WRONG-role is set,
+        pick one uniformly at random from the in-pool roles that are
+        *neither* the Librarian herself *nor* the currently-set
+        seen-Outsider role. Caller must already hold self._lock.
+
+        If the Librarian's seen-Outsider slot is empty (no Outsiders
+        in play — the "0 Outsiders" reading), the WRONG slot stays
+        empty too: there's no pair of players to point at, so no
+        token to place.
+        """
+        if "Librarian" not in self._names:
+            self._librarian_wrong = None
+            return
+        # No seen-Outsider → no WRONG either (the "0 Outsiders"
+        # reading skips both reminder tokens).
+        if not self._librarian_outsider:
+            self._librarian_wrong = None
+            return
+        if (
+            self._librarian_wrong in self._names
+            and self._librarian_wrong != "Librarian"
+            and self._librarian_wrong != self._librarian_outsider
+        ):
+            return
+        candidates = [
+            n for n in self._names
+            if n != "Librarian" and n != self._librarian_outsider
+        ]
+        self._librarian_wrong = (
+            random.choice(candidates) if candidates else None
+        )
+
+    def _autofill_investigator_wrong(self) -> None:
+        """If the Investigator is in the pool but no WRONG-role is
+        set, pick one uniformly at random from the in-pool roles that
+        are *neither* the Investigator herself *nor* the
+        currently-set seen-Minion role. Caller must already hold
+        self._lock.
+        """
+        if "Investigator" not in self._names:
+            self._investigator_wrong = None
+            return
+        if not self._investigator_minion:
+            self._investigator_wrong = None
+            return
+        if (
+            self._investigator_wrong in self._names
+            and self._investigator_wrong != "Investigator"
+            and self._investigator_wrong != self._investigator_minion
+        ):
+            return
+        candidates = [
+            n for n in self._names
+            if n != "Investigator" and n != self._investigator_minion
+        ]
+        self._investigator_wrong = (
+            random.choice(candidates) if candidates else None
+        )
+
     # ------------------------------------------------------------------
     # Mutators.
     # ------------------------------------------------------------------
@@ -146,6 +311,10 @@ class CharacterPool:
             self._autofill_ft_red_herring()
             self._autofill_washerwoman_townsfolk()
             self._autofill_washerwoman_wrong()
+            self._autofill_librarian_outsider()
+            self._autofill_librarian_wrong()
+            self._autofill_investigator_minion()
+            self._autofill_investigator_wrong()
             return True
 
     def remove(self, name: str) -> bool:
@@ -160,6 +329,12 @@ class CharacterPool:
             if name == "Washerwoman":
                 self._washerwoman_townsfolk = None
                 self._washerwoman_wrong = None
+            if name == "Librarian":
+                self._librarian_outsider = None
+                self._librarian_wrong = None
+            if name == "Investigator":
+                self._investigator_minion = None
+                self._investigator_wrong = None
             if name == self._ft_red_herring:
                 self._ft_red_herring = None
                 self._autofill_ft_red_herring()
@@ -170,6 +345,20 @@ class CharacterPool:
             if name == self._washerwoman_wrong:
                 self._washerwoman_wrong = None
                 self._autofill_washerwoman_wrong()
+            if name == self._librarian_outsider:
+                self._librarian_outsider = None
+                self._autofill_librarian_outsider()
+                self._autofill_librarian_wrong()
+            if name == self._librarian_wrong:
+                self._librarian_wrong = None
+                self._autofill_librarian_wrong()
+            if name == self._investigator_minion:
+                self._investigator_minion = None
+                self._autofill_investigator_minion()
+                self._autofill_investigator_wrong()
+            if name == self._investigator_wrong:
+                self._investigator_wrong = None
+                self._autofill_investigator_wrong()
             return True
 
     def clear(self) -> None:
@@ -179,6 +368,10 @@ class CharacterPool:
             self._ft_red_herring = None
             self._washerwoman_townsfolk = None
             self._washerwoman_wrong = None
+            self._librarian_outsider = None
+            self._librarian_wrong = None
+            self._investigator_minion = None
+            self._investigator_wrong = None
 
     def set_many(self, names: List[str]) -> List[str]:
         seen: set = set()
@@ -207,6 +400,28 @@ class CharacterPool:
                 or self._washerwoman_wrong == "Washerwoman"
             ):
                 self._washerwoman_wrong = None
+            if (
+                "Librarian" not in deduped
+                or self._librarian_outsider not in deduped
+            ):
+                self._librarian_outsider = None
+            if (
+                "Librarian" not in deduped
+                or self._librarian_wrong not in deduped
+                or self._librarian_wrong == "Librarian"
+            ):
+                self._librarian_wrong = None
+            if (
+                "Investigator" not in deduped
+                or self._investigator_minion not in deduped
+            ):
+                self._investigator_minion = None
+            if (
+                "Investigator" not in deduped
+                or self._investigator_wrong not in deduped
+                or self._investigator_wrong == "Investigator"
+            ):
+                self._investigator_wrong = None
             self._autofill_ft_red_herring()
             self._autofill_washerwoman_townsfolk()
             if (
@@ -215,6 +430,20 @@ class CharacterPool:
             ):
                 self._washerwoman_wrong = None
             self._autofill_washerwoman_wrong()
+            self._autofill_librarian_outsider()
+            if (
+                self._librarian_wrong is not None
+                and self._librarian_wrong == self._librarian_outsider
+            ):
+                self._librarian_wrong = None
+            self._autofill_librarian_wrong()
+            self._autofill_investigator_minion()
+            if (
+                self._investigator_wrong is not None
+                and self._investigator_wrong == self._investigator_minion
+            ):
+                self._investigator_wrong = None
+            self._autofill_investigator_wrong()
             return list(self._names)
 
     def set_drunk_fake(self, name: Optional[str]) -> Optional[str]:
@@ -295,3 +524,128 @@ class CharacterPool:
                 raise ValueError(f"unknown character {name!r}")
             self._washerwoman_wrong = name
             return self._washerwoman_wrong
+
+    def set_librarian_outsider(self, name: Optional[str]) -> Optional[str]:
+        """Set the Librarian's seen Outsider role, or pass None to
+        clear it.
+
+        Raises ValueError if the pool doesn't contain the Librarian,
+        if ``name`` isn't already in the pool, or if ``name`` isn't
+        an Outsider.
+        """
+        with self._lock:
+            if name is None:
+                self._librarian_outsider = None
+                # No seen-Outsider → no WRONG either.
+                self._librarian_wrong = None
+                return None
+            if "Librarian" not in self._names:
+                raise ValueError("Librarian is not in the pool")
+            if name not in self._names:
+                raise ValueError(
+                    "Librarian's seen Outsider must already be in the pool")
+            spec = script_data.SCRIPT_BY_NAME.get(name)
+            if spec is None:
+                raise ValueError(f"unknown character {name!r}")
+            if spec.char_type is not CharType.OUTSIDER:
+                raise ValueError(
+                    "Librarian's seen role must be an Outsider")
+            self._librarian_outsider = name
+            # Re-roll WRONG if it now collides with the new seen-TF.
+            if self._librarian_wrong == name:
+                self._librarian_wrong = None
+            self._autofill_librarian_wrong()
+            return self._librarian_outsider
+
+    def set_librarian_wrong(self, name: Optional[str]) -> Optional[str]:
+        """Set the Librarian's WRONG role, or pass None to clear it.
+
+        Raises ValueError if the pool doesn't contain the Librarian,
+        if ``name`` isn't already in the pool, if ``name`` is the
+        Librarian herself, or if ``name`` is the same as the seen
+        Outsider slot (the two tokens point at *different* players).
+        """
+        with self._lock:
+            if name is None:
+                self._librarian_wrong = None
+                return None
+            if "Librarian" not in self._names:
+                raise ValueError("Librarian is not in the pool")
+            if name not in self._names:
+                raise ValueError(
+                    "Librarian's WRONG role must already be in the pool")
+            if name == "Librarian":
+                raise ValueError(
+                    "Librarian's WRONG token can't sit on the Librarian "
+                    "herself")
+            if name == self._librarian_outsider:
+                raise ValueError(
+                    "Librarian's WRONG role must differ from the seen "
+                    "Outsider")
+            spec = script_data.SCRIPT_BY_NAME.get(name)
+            if spec is None:
+                raise ValueError(f"unknown character {name!r}")
+            self._librarian_wrong = name
+            return self._librarian_wrong
+
+    def set_investigator_minion(self, name: Optional[str]) -> Optional[str]:
+        """Set the Investigator's seen Minion role, or pass None to
+        clear it.
+
+        Raises ValueError if the pool doesn't contain the Investigator,
+        if ``name`` isn't already in the pool, or if ``name`` isn't a
+        Minion.
+        """
+        with self._lock:
+            if name is None:
+                self._investigator_minion = None
+                self._investigator_wrong = None
+                return None
+            if "Investigator" not in self._names:
+                raise ValueError("Investigator is not in the pool")
+            if name not in self._names:
+                raise ValueError(
+                    "Investigator's seen Minion must already be in the pool")
+            spec = script_data.SCRIPT_BY_NAME.get(name)
+            if spec is None:
+                raise ValueError(f"unknown character {name!r}")
+            if spec.char_type is not CharType.MINION:
+                raise ValueError(
+                    "Investigator's seen role must be a Minion")
+            self._investigator_minion = name
+            if self._investigator_wrong == name:
+                self._investigator_wrong = None
+            self._autofill_investigator_wrong()
+            return self._investigator_minion
+
+    def set_investigator_wrong(self, name: Optional[str]) -> Optional[str]:
+        """Set the Investigator's WRONG role, or pass None to clear
+        it.
+
+        Raises ValueError if the pool doesn't contain the
+        Investigator, if ``name`` isn't already in the pool, if
+        ``name`` is the Investigator herself, or if ``name`` is the
+        same as the seen-Minion slot.
+        """
+        with self._lock:
+            if name is None:
+                self._investigator_wrong = None
+                return None
+            if "Investigator" not in self._names:
+                raise ValueError("Investigator is not in the pool")
+            if name not in self._names:
+                raise ValueError(
+                    "Investigator's WRONG role must already be in the pool")
+            if name == "Investigator":
+                raise ValueError(
+                    "Investigator's WRONG token can't sit on the "
+                    "Investigator herself")
+            if name == self._investigator_minion:
+                raise ValueError(
+                    "Investigator's WRONG role must differ from the seen "
+                    "Minion")
+            spec = script_data.SCRIPT_BY_NAME.get(name)
+            if spec is None:
+                raise ValueError(f"unknown character {name!r}")
+            self._investigator_wrong = name
+            return self._investigator_wrong

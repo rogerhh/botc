@@ -22,6 +22,7 @@ act on this night". The engine uses these to walk action_order.
 
 from __future__ import annotations
 
+import random as _rand
 from typing import TYPE_CHECKING, List, Optional
 
 from engine.enums import CharType, SetupMode
@@ -66,6 +67,19 @@ class Character:
     # available reminder tokens next to its seat (Butler -> MASTER,
     # Washerwoman -> TOWNSFOLK / WRONG, Fortune Teller -> RED HERRING,
     # ...). Override on subclasses; default is no reminder tokens.
+    #
+    # Optional keys per token entry:
+    #
+    #   * ``"first_night_only": True`` — UI-only display flag. Marks
+    #     a token that exists purely to help the Storyteller run a
+    #     first-night-only "you start knowing" ability (Washerwoman
+    #     TOWNSFOLK / WRONG, Librarian OUTSIDER, Investigator MINION,
+    #     ...). Per the rulebook, the ST removes these tokens "when
+    #     convenient" once the night-1 ability has fired — they have
+    #     no effect on player state, only on the grimoire's clutter.
+    #     The UI may use this flag to hide / dim / offer a one-click
+    #     remove for these tokens after the first night ends. Game
+    #     state is unaffected.
     reminder_tokens: list = []
 
     def __init__(self, player: Optional["Player"] = None) -> None:
@@ -192,6 +206,7 @@ class Character:
         eligible_characters: List[str],
         text: str,
         meta: Optional[dict] = None,
+        default: Optional[str] = None,
     ) -> Optional["Character"]:
         """Send a :class:`SelectCharacterPrompt` and instantiate the pick.
 
@@ -210,6 +225,14 @@ class Character:
 
         Returns the instantiated :class:`Character`, or ``None`` if the
         storyteller's response was unusable.
+
+        Self-avoidance default: if ``default`` is not provided and the
+        caller supplies an ``eligible_characters`` list that *includes*
+        ``self.name``, this helper auto-fills the prompt's
+        ``meta["default"]`` with a randomly-chosen *non-self* eligible
+        candidate. The ST can still pick self if they want; we just
+        avoid pre-selecting it. Callers that prefer a specific
+        default may pass ``default`` explicitly.
 
         **Drunk-style impersonation.** If this character is running as
         the *perceived* role on a Drunk-style impersonator's chair
@@ -267,6 +290,20 @@ class Character:
         prompt_meta = {"character": self.name, "step": "setup_select_character"}
         if meta:
             prompt_meta.update(meta)
+        # Default selection. Honor a caller-provided ``default`` when
+        # given; otherwise auto-pick a non-self eligible candidate
+        # whenever ``self.name`` is in the eligible list (FT, WW). The
+        # ST can still drag the token onto self if they want.
+        if default is not None and default in eligible_characters:
+            prompt_meta.setdefault("default", default)
+        elif (
+            "default" not in prompt_meta
+            and eligible_characters
+            and self.name in eligible_characters
+        ):
+            non_self = [c for c in eligible_characters if c != self.name]
+            if non_self:
+                prompt_meta["default"] = _rand.choice(non_self)
         prompt = SelectCharacterPrompt(
             text=text,
             eligible_characters=eligible_characters,

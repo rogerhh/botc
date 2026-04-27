@@ -191,10 +191,7 @@ class Drunk(Character):
         chosen = self.pick_character_at_setup(
             engine,
             eligible_characters=eligible,
-            text=(
-                f"Pick the Townsfolk that {self.player.name} thinks they are. "
-                "(They are actually the Drunk.)"
-            ),
+            text="Townsfolk the Drunk thinks they are",
             meta={"step": "setup_select_fake", "default": default},
         )
         if chosen is None:

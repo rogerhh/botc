@@ -100,10 +100,7 @@ class Mayor(Character):
         try:
             cause = event.data.get("cause") if event.data else None
             ask = YesNoPrompt(
-                text=(
-                    f"The Mayor ({self.player.name}) was killed at "
-                    f"night. Redirect the death to another player?"
-                ),
+                text="Redirect Mayor's death?",
                 target_player_id=self.player.id,
                 meta={"character": self.name, "step": "redirect_yes_no"},
             )
@@ -120,7 +117,7 @@ class Mayor(Character):
             if not eligible:
                 return
             sel = SelectPlayerPrompt(
-                text="Pick the player who dies instead of the Mayor.",
+                text="Player who dies instead",
                 count=1,
                 eligible_player_ids=eligible,
                 allow_self=False,

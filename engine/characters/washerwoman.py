@@ -26,6 +26,7 @@ from engine.prompt import (
     InformationPrompt,
     SelectCharacterPrompt,
     SelectPlayerPrompt,
+    YesNoPrompt,
 )
 
 if TYPE_CHECKING:
@@ -39,8 +40,20 @@ class Washerwoman(Character):
     first_night_order = 30
     other_night_order = 0
     reminder_tokens: list = [
-        {"name": 'TOWNSFOLK', "icon": 'washerwoman_townsfolk.png'},
-        {"name": 'WRONG', "icon": 'washerwoman_wrong.png'},
+        # Both tokens exist only to help the ST run the first-night
+        # "you start knowing" ability and may be removed from the
+        # grimoire display once night 1 ends — they affect no game
+        # state. See ``Character.reminder_tokens`` for the flag.
+        {
+            "name": 'TOWNSFOLK',
+            "icon": 'washerwoman_townsfolk.png',
+            "first_night_only": True,
+        },
+        {
+            "name": 'WRONG',
+            "icon": 'washerwoman_wrong.png',
+            "first_night_only": True,
+        },
     ]
 
     def __init__(self, player: Optional["Player"] = None) -> None:
@@ -104,6 +117,14 @@ class Washerwoman(Character):
         is_drunk_or_poisoned = self.player.drunk or self.player.poisoned
         dp_label = self.player.drunk_poison_label()
 
+        # Spy support: when a Spy is in play, expand the WW's eligible
+        # Townsfolk list to include every Townsfolk on the script
+        # (rather than only the in-play set). This lets the Storyteller
+        # pick a Townsfolk role that nobody actually holds — the Spy
+        # then registers as that role. See spy.py for the rationale.
+        from engine.characters.spy import find_spy_player as _find_spy_player
+        spy_player = _find_spy_player(engine)
+
         # SELECT (character): if the storyteller pre-picked the
         # Townsfolk in the UI we skip the SelectCharacterPrompt; the
         # WW's seen role is decided. Otherwise we ask the storyteller
@@ -122,20 +143,32 @@ class Washerwoman(Character):
         else:
             eligible_chars = (
                 sorted(set(all_townsfolk))
-                if is_drunk_or_poisoned
+                if (is_drunk_or_poisoned or spy_player is not None)
                 else sorted(set(in_play_townsfolk))
                 or sorted(set(all_townsfolk))
             )
-            # Pre-pick a random plausible-wrong Townsfolk for the
-            # drunk/poisoned default. Prefer Townsfolk not in play —
-            # that guarantees neither of the 2 players will actually be
-            # the named role. Fall back to any Townsfolk if all are in
-            # play.
+            # Pre-pick a default Townsfolk for the storyteller. Two
+            # cases:
+            #
+            #   * Drunk / poisoned: pick a *plausible-wrong* Townsfolk
+            #     — prefer Townsfolk not in play — so neither pointed
+            #     player is actually the named role. Fall back to any
+            #     Townsfolk if all are in play.
+            #
+            #   * Sober: pick a random non-self in-play Townsfolk
+            #     (general self-avoidance: never default to the WW
+            #     herself when another Townsfolk is in play). The ST
+            #     can still drag the token onto the WW manually.
             default_char = self._chosen_townsfolk
             if is_drunk_or_poisoned:
                 in_play_set = set(in_play_townsfolk)
                 not_in_play = [c for c in eligible_chars if c not in in_play_set]
                 pool = not_in_play or list(eligible_chars)
+                if pool:
+                    default_char = _rand.choice(pool)
+            elif default_char is None and eligible_chars:
+                non_self = [c for c in eligible_chars if c != self.name]
+                pool = non_self or list(eligible_chars)
                 if pool:
                     default_char = _rand.choice(pool)
             char_meta = {
@@ -147,12 +180,16 @@ class Washerwoman(Character):
             if is_drunk_or_poisoned:
                 char_meta["due_to_drunk_poison"] = True
                 char_meta["drunk_poison_state"] = dp_label
+                # Highlight the *correct* options (in-play Townsfolk) so
+                # the ST can see at a glance which characters would be
+                # truthful — even though the prefilled default is wrong.
+                correct_chars = [
+                    c for c in eligible_chars if c in set(in_play_townsfolk)
+                ]
+                if correct_chars:
+                    char_meta["correct"] = correct_chars
             char_prompt = SelectCharacterPrompt(
-                text=(
-                    "Pick the Townsfolk to show the Washerwoman (drunk/poisoned)."
-                    if is_drunk_or_poisoned
-                    else "Pick a Townsfolk in play to show the Washerwoman."
-                ),
+                text="Townsfolk to show",
                 eligible_characters=eligible_chars,
                 target_player_id=self.player.id,
                 meta=char_meta,
@@ -169,6 +206,53 @@ class Washerwoman(Character):
                 if p.id != self.player.id:
                     right_player = p
                     break
+
+        # Spy-as-seen-player: if no actual holder exists for the chosen
+        # Townsfolk and the Spy is in play, the Spy IS the seen player
+        # (registering as the chosen Townsfolk for this ability). When
+        # both an actual holder AND the Spy exist, ask the Storyteller
+        # which one is the seen player — default to the actual holder
+        # for backward compatibility (the rare "Spy registers as a
+        # Townsfolk that's also in play" case requires an explicit Yes).
+        # The chosen Townsfolk *is* the character the Spy registers as
+        # — that satisfies the "ST inputs a character for the Spy for
+        # each ability separately" requirement.
+        if (
+            spy_player is not None
+            and not is_drunk_or_poisoned
+            and spy_player.id != self.player.id
+        ):
+            if right_player is None:
+                right_player = spy_player
+                engine.log(
+                    f"Washerwoman {self.player.name}: Spy "
+                    f"({spy_player.name}) is the seen player, "
+                    f"registering as {chosen_char_name}."
+                )
+            else:
+                use_spy_prompt = YesNoPrompt(
+                    text="Use Spy as seen Washerwoman target?",
+                    target_player_id=self.player.id,
+                    meta={
+                        "character": self.name,
+                        "step": "use_spy_as_seen",
+                        "stage": "st_pre",
+                        "default": False,
+                        "shown_character": chosen_char_name,
+                        "actual_holder_id": right_player.id,
+                        "actual_holder_name": right_player.name,
+                        "spy_player_id": spy_player.id,
+                        "spy_player_name": spy_player.name,
+                    },
+                )
+                use_spy = engine.send_prompt(use_spy_prompt)
+                if isinstance(use_spy, bool) and use_spy:
+                    right_player = spy_player
+                    engine.log(
+                        f"Washerwoman {self.player.name}: Spy "
+                        f"({spy_player.name}) overrides actual holder; "
+                        f"Spy registers as {chosen_char_name}."
+                    )
 
         # SELECT (players to point at): if we know the right player,
         # only ask the storyteller for the *wrong* player; otherwise
@@ -206,11 +290,7 @@ class Washerwoman(Character):
                 wrong_player: Optional["Player"] = preset_wrong_player
             else:
                 wrong_prompt = SelectPlayerPrompt(
-                    text=(
-                        f"Pick the WRONG player to point at — the other player "
-                        f"alongside {right_player.name} who is *not* the "
-                        f"{chosen_char_name}."
-                    ),
+                    text="Wrong player",
                     count=1,
                     eligible_player_ids=wrong_eligible,
                     allow_self=False,
@@ -275,11 +355,19 @@ class Washerwoman(Character):
             if is_drunk_or_poisoned:
                 player_meta["due_to_drunk_poison"] = True
                 player_meta["drunk_poison_state"] = dp_label
+                # Highlight the player(s) whose true role matches the
+                # chosen Townsfolk — these are the picks that would make
+                # the info actually true.
+                correct_pids = [
+                    pid for pid in other_player_ids
+                    if (engine.get_player(pid).character is not None
+                        and engine.get_player(pid).character.name
+                            == chosen_char_name)
+                ]
+                if correct_pids:
+                    player_meta["correct"] = correct_pids
             player_prompt = SelectPlayerPrompt(
-                text=(
-                    f"Pick the two players to point at — one is the "
-                    f"{chosen_char_name}, one is wrong."
-                ),
+                text=f"Two players (one is the {chosen_char_name})",
                 count=2,
                 eligible_player_ids=other_player_ids,
                 allow_self=False,

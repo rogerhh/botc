@@ -187,15 +187,43 @@ class Player:
 
         ``hide_character`` is used when serializing to a player's phone
         (the player should only see their *perceived* character).
+
+        The full snapshot is what powers the Storyteller's per-player
+        side panel: every state the engine tracks on a player surfaces
+        here so the panel can be a pure read of engine state with no
+        UI-side bookkeeping (see ``ui/README.md`` "Player side panel").
         """
         char_name = self.character.name if self.character else None
         if hide_character:
             char_name = self.perceived_character_name or char_name
+
+        # Detect a real (overridden) daytime_ability so the side panel
+        # can decide whether to surface the "Use ability" button. The
+        # base ``Character.daytime_ability`` is a no-op; a subclass
+        # bound method that points at the base function means the
+        # character has no day action (Empath, Soldier, ...).
+        has_day_ability = False
+        once_per_game = False
+        if self.character is not None:
+            from engine.character import Character as _Char
+            try:
+                bound = self.character.daytime_ability
+                base = _Char.daytime_ability
+                # ``__func__`` strips the ``self`` binding so this
+                # comparison is "is this the unmodified base method?".
+                has_day_ability = (
+                    getattr(bound, "__func__", bound) is not base
+                )
+            except Exception:  # pragma: no cover (defensive)
+                has_day_ability = False
+            once_per_game = bool(getattr(self.character, "once_per_game", False))
+
         return {
             "id": self.id,
             "name": self.name,
             "seat": self.seat,
             "character": char_name,
+            "perceived_character": self.perceived_character_name,
             "alignment": self.alignment.value if self.alignment else None,
             "char_type": self.char_type.value if self.char_type else None,
             "alive": self.alive,
@@ -203,4 +231,18 @@ class Player:
             "has_dead_vote": self.has_dead_vote,
             "drunk": self.drunk,
             "poisoned": self.poisoned,
+            "once_per_game_used": self.once_per_game_used,
+            "protected_from_demon": self.protected_from_demon,
+            "has_nominated_today": self.has_nominated_today,
+            "has_been_nominated_today": self.has_been_nominated_today,
+            "mad_about": list(self.mad_about),
+            "notes": list(self.notes),
+            # Computed convenience flags so the UI doesn't have to
+            # duplicate the rule (dead -> can_vote iff has_dead_vote).
+            "can_nominate": self.can_nominate,
+            "can_be_nominated": self.can_be_nominated,
+            "can_vote": self.can_vote,
+            # Day-action affordances for the side panel.
+            "has_daytime_ability": has_day_ability,
+            "once_per_game": once_per_game,
         }

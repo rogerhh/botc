@@ -314,6 +314,22 @@ def _move_washerwoman_wrong_token(dest_chair_id: int) -> Optional[str]:
     return ENGINE.move_washerwoman_wrong_token(dest_chair_id)
 
 
+def _move_librarian_outsider_token(dest_chair_id: int) -> Optional[str]:
+    return ENGINE.move_librarian_outsider_token(dest_chair_id)
+
+
+def _move_librarian_wrong_token(dest_chair_id: int) -> Optional[str]:
+    return ENGINE.move_librarian_wrong_token(dest_chair_id)
+
+
+def _move_investigator_minion_token(dest_chair_id: int) -> Optional[str]:
+    return ENGINE.move_investigator_minion_token(dest_chair_id)
+
+
+def _move_investigator_wrong_token(dest_chair_id: int) -> Optional[str]:
+    return ENGINE.move_investigator_wrong_token(dest_chair_id)
+
+
 # ---------------------------------------------------------------------------
 # Globals (set up in main()).
 # ---------------------------------------------------------------------------
@@ -360,6 +376,9 @@ def _setup_data_from_pool() -> Dict[str, Any]:
         shown.
       * ``washerwoman_wrong`` — role of the WRONG player the WW is
         pointed at alongside the seen Townsfolk.
+      * ``librarian_outsider`` — Outsider role the Librarian is shown.
+      * ``investigator_minion`` — Minion role the Investigator is
+        shown.
 
     Missing picks are simply omitted; the engine treats absent keys
     as "no override".
@@ -377,6 +396,18 @@ def _setup_data_from_pool() -> Dict[str, Any]:
     ww_wrong = POOL.washerwoman_wrong()
     if ww_wrong:
         data["washerwoman_wrong"] = ww_wrong
+    librarian_outsider = POOL.librarian_outsider()
+    if librarian_outsider:
+        data["librarian_outsider"] = librarian_outsider
+    librarian_wrong = POOL.librarian_wrong()
+    if librarian_wrong:
+        data["librarian_wrong"] = librarian_wrong
+    investigator_minion = POOL.investigator_minion()
+    if investigator_minion:
+        data["investigator_minion"] = investigator_minion
+    investigator_wrong = POOL.investigator_wrong()
+    if investigator_wrong:
+        data["investigator_wrong"] = investigator_wrong
     return data
 
 ACCESS_CODE: Optional[str] = None
@@ -834,6 +865,30 @@ class Handler(BaseHTTPRequestHandler):
             })
             return
 
+        if path == "/api/engine/game_report":
+            # End-of-game report: structured "interesting events" plus
+            # win info plus a player roster (so the frontend can render
+            # names / characters / alignments alongside event ids).
+            snap = ENGINE.snapshot()
+            self._send_json(HTTPStatus.OK, {
+                "winner": snap.get("winner"),
+                "win_reason": snap.get("win_reason"),
+                "phase": snap.get("phase"),
+                "events": ENGINE.game_events,
+                "players": [
+                    {
+                        "id": p.get("id"),
+                        "name": p.get("name"),
+                        "seat": p.get("seat"),
+                        "character": p.get("character"),
+                        "alignment": p.get("alignment"),
+                        "alive": p.get("alive"),
+                    }
+                    for p in snap.get("players", [])
+                ],
+            })
+            return
+
         m = PLAYER_VIEW_RE.match(path)
         if m:
             try:
@@ -1043,6 +1098,74 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(HTTPStatus.OK, _character_pool_snapshot())
             return
 
+        if path == "/api/character_pool/move_librarian_token":
+            ok, data = self._read_json()
+            if not ok or "chair_id" not in data:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"error": "need chair_id"})
+                return
+            try:
+                err = _move_librarian_outsider_token(int(data["chair_id"]))
+            except (TypeError, ValueError):
+                self._send_json(HTTPStatus.BAD_REQUEST,
+                                {"error": "chair_id must be an int"})
+                return
+            if err is not None:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"error": err})
+                return
+            self._send_json(HTTPStatus.OK, _character_pool_snapshot())
+            return
+
+        if path == "/api/character_pool/move_investigator_token":
+            ok, data = self._read_json()
+            if not ok or "chair_id" not in data:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"error": "need chair_id"})
+                return
+            try:
+                err = _move_investigator_minion_token(int(data["chair_id"]))
+            except (TypeError, ValueError):
+                self._send_json(HTTPStatus.BAD_REQUEST,
+                                {"error": "chair_id must be an int"})
+                return
+            if err is not None:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"error": err})
+                return
+            self._send_json(HTTPStatus.OK, _character_pool_snapshot())
+            return
+
+        if path == "/api/character_pool/move_librarian_wrong_token":
+            ok, data = self._read_json()
+            if not ok or "chair_id" not in data:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"error": "need chair_id"})
+                return
+            try:
+                err = _move_librarian_wrong_token(int(data["chair_id"]))
+            except (TypeError, ValueError):
+                self._send_json(HTTPStatus.BAD_REQUEST,
+                                {"error": "chair_id must be an int"})
+                return
+            if err is not None:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"error": err})
+                return
+            self._send_json(HTTPStatus.OK, _character_pool_snapshot())
+            return
+
+        if path == "/api/character_pool/move_investigator_wrong_token":
+            ok, data = self._read_json()
+            if not ok or "chair_id" not in data:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"error": "need chair_id"})
+                return
+            try:
+                err = _move_investigator_wrong_token(int(data["chair_id"]))
+            except (TypeError, ValueError):
+                self._send_json(HTTPStatus.BAD_REQUEST,
+                                {"error": "chair_id must be an int"})
+                return
+            if err is not None:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"error": err})
+                return
+            self._send_json(HTTPStatus.OK, _character_pool_snapshot())
+            return
+
         # ---- engine control endpoints ----
 
         if path == "/api/engine/start_game":
@@ -1228,6 +1351,52 @@ class Handler(BaseHTTPRequestHandler):
             reason = data.get("reason", "Storyteller declared.")
             ENGINE._end_game(alignment, reason)  # internal helper
             self._send_json(HTTPStatus.OK, ENGINE.snapshot())
+            return
+
+        # ---- Per-player day actions (side panel) ------------------------
+        # These four endpoints back the per-seat side panel that opens
+        # when the Storyteller clicks a player circle once the game has
+        # started. See ui/README.md "Player side panel".
+        if path == "/api/engine/nominate":
+            ok, data = self._read_json()
+            if (not ok
+                or "nominator_id" not in data
+                or "nominee_id" not in data):
+                self._send_json(HTTPStatus.BAD_REQUEST,
+                                {"error": "need nominator_id and nominee_id"})
+                return
+            try:
+                ENGINE.nominate(
+                    int(data["nominator_id"]),
+                    int(data["nominee_id"]),
+                )
+                self._send_json(HTTPStatus.OK, ENGINE.snapshot())
+            except Exception as exc:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+            return
+
+        if path == "/api/engine/vote":
+            ok, data = self._read_json()
+            if not ok or "player_id" not in data:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"error": "need player_id"})
+                return
+            try:
+                ENGINE.record_vote(int(data["player_id"]))
+                self._send_json(HTTPStatus.OK, ENGINE.snapshot())
+            except Exception as exc:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+            return
+
+        if path == "/api/engine/use_ability":
+            ok, data = self._read_json()
+            if not ok or "player_id" not in data:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"error": "need player_id"})
+                return
+            try:
+                ENGINE.use_daytime_ability(int(data["player_id"]))
+                self._send_json(HTTPStatus.OK, ENGINE.snapshot())
+            except Exception as exc:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
             return
 
         self.send_error(HTTPStatus.NOT_FOUND)
@@ -1490,6 +1659,10 @@ def _character_pool_snapshot() -> dict:
     ft_red_herring = POOL.ft_red_herring()
     ww_townsfolk = POOL.washerwoman_townsfolk()
     ww_wrong = POOL.washerwoman_wrong()
+    librarian_outsider = POOL.librarian_outsider()
+    librarian_wrong = POOL.librarian_wrong()
+    investigator_minion = POOL.investigator_minion()
+    investigator_wrong = POOL.investigator_wrong()
 
     # Live engine state for in-game reminder tokens. The chair UI
     # keys off ``character == <X>_role`` to render a token next to
@@ -1534,6 +1707,25 @@ def _character_pool_snapshot() -> dict:
             if (master is not None
                     and getattr(master, "character", None) is not None):
                 butler_master_role = master.character.name
+
+    # Imp's DEAD reminder tokens. Per the rulebook, the DEAD reminder is
+    # placed on every player the Imp's nightly ability actually killed.
+    # We derive the set from the engine's ``Player.death_cause`` rather
+    # than tracking it on the Imp character — that way Mayor-redirected
+    # kills (which still land with cause=DEMON_KILL on the new target)
+    # show up automatically, and a Soldier/Monk-protected pick that
+    # never landed correctly does NOT.
+    imp_dead_roles: list = []
+    for p in engine_players:
+        if not p.dead:
+            continue
+        if p.death_cause is not DeathCause.DEMON_KILL:
+            continue
+        char = getattr(p, "character", None)
+        if char is None:
+            continue
+        if char.name not in imp_dead_roles:
+            imp_dead_roles.append(char.name)
 
     return {
         "names": names,
@@ -1584,12 +1776,52 @@ def _character_pool_snapshot() -> dict:
         # is intentionally separate from this snapshot — the snapshot
         # currently emits ``None``/``False`` defaults so the UI
         # render code degrades cleanly until each setter is hooked up.
-        "investigator_minion_role": None,
-        "librarian_outsider_role": None,
+        # Librarian's seen Outsider role: an Outsider already in the
+        # pool. Auto-picked at random when the Librarian is added; the
+        # storyteller can re-roll by dragging the Librarian token on
+        # the grimoire. ``None`` means no Outsiders are in the pool —
+        # the Librarian's first-night ability shows "0 Outsiders".
+        "librarian_outsider_role": librarian_outsider,
+        "pending_librarian_outsider": (
+            ("Librarian" in names) and (librarian_outsider is None)
+            # Only "pending" if there's an Outsider in the pool to pick
+            # from; otherwise the empty slot is the rules-correct "0
+            # Outsiders" reading and not pending at all.
+            and any(
+                script_data.SCRIPT_BY_NAME.get(n) is not None
+                and script_data.SCRIPT_BY_NAME[n].char_type
+                is CharType.OUTSIDER
+                for n in names
+            )
+        ),
+        # Librarian's WRONG role: any in-pool role *other than* the
+        # Librarian herself and the seen-Outsider slot. ``None`` when
+        # there's no seen-Outsider (the "0 Outsiders" reading skips
+        # both reminder tokens).
+        "librarian_wrong_role": librarian_wrong,
+        "pending_librarian_wrong": (
+            ("Librarian" in names)
+            and librarian_outsider is not None
+            and librarian_wrong is None
+        ),
+        # Investigator's seen Minion role: a Minion already in the
+        # pool. Same auto-pick + grimoire-drag flow as the Librarian.
+        "investigator_minion_role": investigator_minion,
+        "pending_investigator_minion": (
+            ("Investigator" in names) and (investigator_minion is None)
+        ),
+        # Investigator's WRONG role: any in-pool role *other than* the
+        # Investigator herself and the seen-Minion slot.
+        "investigator_wrong_role": investigator_wrong,
+        "pending_investigator_wrong": (
+            ("Investigator" in names)
+            and investigator_minion is not None
+            and investigator_wrong is None
+        ),
         "butler_master_role": butler_master_role,
         "monk_safe_role": None,
         "poisoned_role": poisoned_role,
-        "imp_dead_role": None,
+        "imp_dead_roles": imp_dead_roles,
         "undertaker_died_today_role": None,
         "scarlet_woman_is_demon": False,
         "slayer_no_ability": False,

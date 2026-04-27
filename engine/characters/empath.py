@@ -99,9 +99,37 @@ class Empath(Character):
         is_drunk_or_poisoned = self.player.drunk or self.player.poisoned
 
         neighbours = self._alive_neighbours(engine)
-        default_count = sum(
-            1 for p in neighbours if p.alignment is Alignment.EVIL
+
+        # Spy misregistration: for any Spy among the Empath's
+        # neighbours, ask the Storyteller what the Spy registers as
+        # tonight. The default is the Spy's internally-tracked
+        # preferred good character so a Storyteller can hit Next for a
+        # consistent across-the-night Spy character. Registering as a
+        # Townsfolk/Outsider counts the Spy as good for the count;
+        # registering as the literal Spy counts as evil.
+        from engine.characters.spy import (
+            Spy as _Spy,
+            prompt_spy_register_as,
+            spy_registers_as_evil,
         )
+        default_count = 0
+        for p in neighbours:
+            is_spy = (
+                p.character is not None and p.character.name == _Spy.name
+            )
+            if is_spy:
+                register_as = prompt_spy_register_as(
+                    engine,
+                    p,
+                    detector_name=self.name,
+                    detector_player_id=self.player.id,
+                    text="Spy registers as (Empath)",
+                    extra_meta={"step_for": "empath_neighbour"},
+                )
+                if spy_registers_as_evil(register_as):
+                    default_count += 1
+            elif p.alignment is Alignment.EVIL:
+                default_count += 1
 
         # Sober + healthy: trust the computed count, no ST prompt.
         # Drunk/poisoned: 3 options (0/1/2) — default to a random
@@ -114,7 +142,7 @@ class Empath(Character):
                 if wrong_options else default_count
             )
             prompt = SelectCharacterPrompt(
-                text="Pick the count to show the Empath (drunk/poisoned).",
+                text="Count to show",
                 eligible_characters=["0", "1", "2"],
                 target_player_id=self.player.id,
                 meta={
@@ -141,9 +169,10 @@ class Empath(Character):
             Event(EventType.WAKEUP, source=self, targets=[self.player])
         )
 
-        info_text = (
-            f"You learn: {shown} of your alive neighbours are evil."
-        )
+        if shown == 1:
+            info_text = "1 of your alive neighbours is evil."
+        else:
+            info_text = f"{shown} of your alive neighbours are evil."
         engine.send_prompt(
             InformationPrompt(
                 text=info_text,

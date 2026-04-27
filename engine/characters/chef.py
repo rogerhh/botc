@@ -65,12 +65,50 @@ class Chef(Character):
         # counted at most once.
         ordered = sorted(engine.players, key=lambda p: p.seat)
         n = len(ordered)
+
+        # Spy misregistration: if a Spy is in play, ask the Storyteller
+        # what they register as for the Chef. The default is the Spy's
+        # internally-tracked preferred good character. Registering as a
+        # Townsfolk/Outsider treats the Spy as *good* for pair-counting
+        # tonight; registering as the literal Spy counts as evil. The
+        # Spy registers as one character per ability (the Chef sees one
+        # count), so a single prompt suffices even when the Spy borders
+        # multiple evil players.
+        from engine.characters.spy import (
+            Spy as _Spy,
+            find_spy_player,
+            prompt_spy_register_as,
+            spy_registers_as_evil,
+        )
+
+        spy_player = find_spy_player(engine)
+        spy_counts_as_evil = True
+        if spy_player is not None:
+            register_as = prompt_spy_register_as(
+                engine,
+                spy_player,
+                detector_name=self.name,
+                detector_player_id=self.player.id,
+                text="Spy registers as (Chef)",
+                extra_meta={"step_for": "chef_pair_count"},
+            )
+            spy_counts_as_evil = spy_registers_as_evil(register_as)
+
+        def _is_evil(p) -> bool:
+            if (
+                spy_player is not None
+                and p.character is not None
+                and p.character.name == _Spy.name
+            ):
+                return spy_counts_as_evil
+            return p.alignment is Alignment.EVIL
+
         default_count = 0
         if n >= 2:
             for i in range(n):
                 a = ordered[i]
                 b = ordered[(i + 1) % n]
-                if a.alignment is Alignment.EVIL and b.alignment is Alignment.EVIL:
+                if _is_evil(a) and _is_evil(b):
                     default_count += 1
         # Edge case: 2 players. The ring "wraps around" so both
         # adjacency edges describe the same pair; clamp to 1.
@@ -98,7 +136,7 @@ class Chef(Character):
                 if wrong_options else default_capped
             )
             prompt = SelectCharacterPrompt(
-                text="Pick the count to show the Chef (drunk/poisoned).",
+                text="Count to show",
                 eligible_characters=choices,
                 target_player_id=self.player.id,
                 meta={
@@ -126,7 +164,12 @@ class Chef(Character):
             Event(EventType.WAKEUP, source=self, targets=[self.player])
         )
 
-        info_text = f"You learn: {shown} pair(s) of evil players are adjacent."
+        if shown == 1:
+            info_text = "There is 1 pair of evil players sitting next to each other."
+        else:
+            info_text = (
+                f"There are {shown} pairs of evil players sitting next to each other."
+            )
         engine.send_prompt(
             InformationPrompt(
                 text=info_text,

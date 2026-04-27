@@ -67,7 +67,7 @@ class Slayer(Character):
         # SELECT: any alive player.
         eligible = [p.id for p in engine.players if p.alive]
         sel = SelectPlayerPrompt(
-            text=f"Slayer ({self.player.name}) publicly slays a player.",
+            text="Slayer slays a player",
             count=1,
             eligible_player_ids=eligible,
             allow_self=True,

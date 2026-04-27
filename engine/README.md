@@ -207,8 +207,10 @@ Prompt subtypes:
 - **SelectPlayer** — choose one or more players from a highlighted set of
   eligibles. Includes a Randomize button.
 - **SelectCharacter** — choose one or more characters from a highlighted
-  subset (e.g. choose the Townsfolk to show the Washerwoman). Includes
-  Randomize.
+  subset (e.g. choose the Townsfolk to show the Washerwoman). Carries a
+  `count` field; `count == 1` returns a character name (str) and
+  `count > 1` (e.g. the Demon's three not-in-play bluff roles) returns
+  a list of names. Includes Randomize.
 - **ShowInformation** — pure display. The only control is "Next". This is
   what the player phone renders.
 - **Arbitrate** — free-form Storyteller decision when the rules require a
@@ -230,6 +232,66 @@ The Prompt is the *only* way information escapes the engine. The Player
 selections it returns are the *only* way decisions enter the engine. This
 keeps the engine deterministic given a fixed Storyteller transcript.
 
+
+### Prompt Flow (the standard six-section panel)
+
+Every character ability — and every engine-driven step that talks to a
+player (Minion Info, Demon Info) — drives the same six-section
+Storyteller panel. The panel is assembled out of the prompts a single
+ability sends; staging is conveyed through `meta["stage"]` on each
+prompt.
+
+The six sections, in fixed order:
+
+1. **Title (CHARACTER)** — frozen at the start of the panel session.
+   Comes from `meta["step_name"]` (preset step name) or
+   `meta["character"]` (the role name).
+2. **Description (rulebook ability text)** — frozen at the start of
+   the panel session, from `meta["description"]`.
+3. **ST input stage 1** — any prompts with `meta["stage"] = "st_pre"`.
+   These are decisions the Storyteller can lock in *before* the
+   player physically wakes: the Washerwoman's WRONG player, the
+   Librarian's seen Outsider, the Investigator's WRONG player, the
+   Undertaker's shown character (when drunk/poisoned), and the
+   Demon's three not-in-play bluff roles. The engine pre-fills a
+   plausible-but-correct (sober) or plausible-but-wrong
+   (drunk/poisoned) default so a single Next click resolves them.
+4. **Wake up X (Player)** — synthesized by the UI between the last
+   `st_pre` prompt and the first non-`st_pre` prompt. Hidden for
+   Dawn/Dusk and other non-character preset steps. Internally the
+   ability also dispatches `EventType.WAKEUP` so other abilities and
+   audit tools see a real wakeup event.
+5. **Player input stage** — prompts with `meta["stage"] = "player"`.
+   These are the player's own decisions: the Fortune Teller picks 2
+   players, the Imp picks a kill target, the Monk picks who to
+   protect, the Butler picks their master, the Ravenkeeper picks
+   whose role to learn. Once answered they become a highlighted
+   answer pill on the panel.
+6. **ST input stage 2** — prompts with `meta["stage"] = "st_post"`.
+   These are decisions that depend on the player's pick: the Fortune
+   Teller's drunk/poisoned Yes/No override, the Ravenkeeper's
+   drunk/poisoned shown character, the Imp's "pick a Minion to
+   become the new Imp" on a self-kill. Same answer-pill treatment as
+   stage 1 once given.
+7. **Show this to player** — the final `InformationPrompt` with
+   `meta["stage"] = "info"` and `shown_to_player = True`. The UI
+   renders the info tokens (e.g. *THESE ARE YOUR MINIONS*, *THESE
+   CHARACTERS ARE NOT IN PLAY*, the Washerwoman's character token
+   alongside the two highlighted chairs); the Storyteller hands the
+   phone to the player and clicks Next to dismiss.
+
+Not every ability uses every section. The Empath has stages 1
+(drunk/poisoned only), 4, and 7 — no player decision, no post-pick
+fix-up. The Imp has 4, 5, and (on a self-kill) 6 — no info to show.
+The Demon Info step uses 1, 4, and 7. The shape is "show the
+Storyteller every section that's needed for this role, in the order
+above"; the engine controls that ordering by tagging prompts with
+`stage`.
+
+UI language note (per the project rules): never use the words
+"confirm" or "override" anywhere the Storyteller sees. Drunk/poisoned
+prompts pre-fill the wrong answer and are dispatched by clicking Next
+(or Yes/No for binary prompts, with the wrong answer highlighted).
 
 ### Drunk and Poisoned
 
@@ -311,6 +373,30 @@ The Engine is a phase machine over an event queue.
    nominations, etc.). Each one goes through the same event loop with
    reactions.
 3. End of day on the Storyteller's signal; check end-of-game conditions.
+
+The four day-time player actions are exposed as small, focused public
+methods on the Engine, all driven by the per-player side panel in the
+Local UI (see `ui/README.md` "Player side panel"):
+
+- `Engine.nominate(nominator_id, nominee_id)` — sets
+  `has_nominated_today` / `has_been_nominated_today` and dispatches
+  `EventType.NOMINATION` so character reactions fire (most notably
+  the Virgin's "executed by first Townsfolk nominator"). Dead players
+  cannot nominate; dead players *can* be nominated (per the rulebook).
+  Refuses outside Day phase.
+- `Engine.record_vote(player_id)` — for living players, logs the
+  vote; for dead players, consumes their single dead-vote token. The
+  side panel never offers the button when no vote is available.
+- `Engine.execute_player(player_id)` — kills the player with cause
+  `EXECUTION`, dispatches `EventType.EXECUTION`, and runs the
+  end-of-game check.
+- `Engine.use_daytime_ability(player_id)` — runs the player
+  character's `daytime_ability(engine)` on a worker thread (so the
+  prompts it emits don't deadlock the HTTP thread waiting on
+  `/api/engine/respond`). Slayer is the only Trouble-Brewing
+  character that overrides `daytime_ability`; the side panel hides
+  this button for any character whose `daytime_ability` is the base
+  no-op.
 
 #### Event loop (shared by night and day)
 
@@ -399,6 +485,28 @@ Examples mapped onto the Trouble Brewing roster:
 - **Imp** — every night except first: Wakeup, Select, Resolution (Death);
   reacts to its own Resolution-targeting-self by emitting ChangeCharacter on
   a chosen Minion.
+- **Demon Info** (engine-driven, not a character) — first night only,
+  7+ players. The flow rides the standard six-section panel:
+
+    1. Title `Demon` and the rulebook description, frozen at session
+       start from the preset step's `step_name` / `description`.
+    2. **ST input stage 1** — a `SelectCharacterPrompt(count=3,
+       stage="st_pre")` whose `eligible_characters` is every
+       Townsfolk/Outsider on the script *not* in play. The engine
+       pre-fills `meta["default"]` with three random picks from that
+       pool, so a single Next click resolves the prompt; the ST may
+       swap any pick first.
+    3. **Wake up Demon (player)** — synthesized by the UI between
+       the `st_pre` prompt and the info prompt. The engine also
+       dispatches `EventType.WAKEUP` so reactions and audit tools
+       see a real wakeup event.
+    4. **Show this to player** — a final `InformationPrompt` with
+       `stage="info"` and `shown_to_player=True`, carrying the
+       (possibly Storyteller-edited) bluff list plus the Demon's
+       Minion roster. The UI renders two token rows
+       (*THESE ARE YOUR MINIONS*, *THESE CHARACTERS ARE NOT IN
+       PLAY*) and brightens the corresponding chairs and character
+       tokens.
 
 Every one of these slots into the same `ability() + reaction()` skeleton.
 

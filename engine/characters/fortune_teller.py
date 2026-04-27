@@ -179,11 +179,7 @@ class FortuneTeller(Character):
         chosen = self.pick_character_at_setup(
             engine,
             eligible_characters=eligible_names,
-            text=(
-                f"{self.ability_text}\n\n"
-                f"Pick the red herring for {self.player.name} (Fortune "
-                "Teller): a good role in play."
-            ),
+            text="Red herring",
             meta={"step": "setup_select_red_herring"},
         )
         if chosen is None:
@@ -223,7 +219,7 @@ class FortuneTeller(Character):
         # SELECT: pick 2 players (FT is allowed to pick themselves).
         all_player_ids = [p.id for p in engine.players]
         sel = SelectPlayerPrompt(
-            text="Fortune Teller picks 2 players to check for Demon-ness.",
+            text="Fortune Teller picks 2 players",
             count=2,
             eligible_player_ids=all_player_ids,
             allow_self=True,
@@ -259,7 +255,7 @@ class FortuneTeller(Character):
         if is_drunk_or_poisoned:
             default_wrong = not bool(auto_yes)
             yn = YesNoPrompt(
-                text="Pick the answer to show the Fortune Teller (drunk/poisoned).",
+                text="Show YES or NO?",
                 target_player_id=self.player.id,
                 meta={
                     "character": self.name,

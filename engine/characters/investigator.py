@@ -24,7 +24,7 @@ import random as _rand
 from typing import TYPE_CHECKING, Optional
 
 from engine.character import Character
-from engine.enums import CharType
+from engine.enums import CharType, SetupMode
 from engine.event import Event, EventType
 from engine.prompt import (
     InformationPrompt,
@@ -43,8 +43,60 @@ class Investigator(Character):
     first_night_order = 32
     other_night_order = 0
     reminder_tokens: list = [
-        {"name": 'MINION', "icon": 'investigator_minion.png'},
+        # First-night-only: the MINION token exists to help the ST
+        # run the night-1 "you start knowing" ability and may be
+        # removed from the grimoire display once night 1 ends. It
+        # affects no game state. See ``Character.reminder_tokens`` for
+        # the flag.
+        {
+            "name": 'MINION',
+            "icon": 'investigator_minion.png',
+            "first_night_only": True,
+        },
     ]
+
+    def __init__(self, player: Optional["Player"] = None) -> None:
+        super().__init__(player)
+        # Pre-set during setup (Engine.apply_setup_data). When non-None
+        # (and the Investigator is sober + healthy), the ability uses
+        # this Minion role and skips the SelectCharacterPrompt — the
+        # storyteller only picks the WRONG player.
+        self._chosen_minion: Optional[str] = None
+        # Pre-set during setup. Names the *role* of the WRONG player
+        # the Investigator will be pointed at. When both
+        # ``_chosen_minion`` and ``_chosen_wrong`` are set (and the
+        # Investigator is sober + healthy), the first-night ability
+        # skips every storyteller prompt — both tokens were placed
+        # during setup.
+        self._chosen_wrong: Optional[str] = None
+
+    def on_setup_ability(
+        self,
+        engine: "Engine",
+        mode: SetupMode = SetupMode.IN_GAME,
+    ) -> None:
+        """Mode-aware on-setup ability.
+
+        ``SETUP_PHASE``: absorb the pool's seen-Minion and WRONG slots
+        into ``self._chosen_minion`` / ``self._chosen_wrong`` so the
+        first-night ability can skip prompts. Pure read-and-copy; no
+        Storyteller prompts.
+
+        ``IN_GAME``: legacy delegation. The Investigator's
+        prompt-emitting work happens inside its first-night ability(),
+        so this is a no-op for the legacy path too.
+        """
+        if self.player is None:
+            return
+        if mode is SetupMode.SETUP_PHASE:
+            minion = engine.pool.investigator_minion()
+            wrong = engine.pool.investigator_wrong()
+            if minion:
+                self._chosen_minion = minion
+            if wrong:
+                self._chosen_wrong = wrong
+            return
+        self.setup_ability(engine)
 
     def ability(self, engine: "Engine", night_number: int) -> None:
         if night_number != 1 or self.player is None or self.player.dead:
@@ -56,43 +108,68 @@ class Investigator(Character):
         is_drunk_or_poisoned = self.player.drunk or self.player.poisoned
         dp_label = self.player.drunk_poison_label()
 
-        # SELECT (character): pick the Minion character to show. When
-        # drunk/poisoned, the engine pre-picks a plausible-wrong default
-        # (a Minion on the script, preferring one not in play) and
-        # surfaces it to the ST with a Next button.
+        # SELECT (character): pick the Minion character to show. If the
+        # storyteller pre-picked the Minion in the UI (and the
+        # Investigator is sober + healthy) we skip the
+        # SelectCharacterPrompt entirely. When drunk/poisoned, the
+        # engine pre-picks a plausible-wrong default (a Minion on the
+        # script, preferring one not in play) and surfaces it to the
+        # ST with a Next button.
         in_play_minions = engine.in_play_character_names_by_type(CharType.MINION)
         all_minions = engine.all_character_names_by_type(CharType.MINION)
-        eligible_chars = (
-            sorted(set(all_minions))
-            if is_drunk_or_poisoned
-            else sorted(set(in_play_minions) or set(all_minions))
-        )
-        default_char = None
-        if is_drunk_or_poisoned and eligible_chars:
-            in_play_set = set(in_play_minions)
-            not_in_play = [c for c in eligible_chars if c not in in_play_set]
-            pool = not_in_play or list(eligible_chars)
-            default_char = _rand.choice(pool)
-        char_meta = {
-            "character": self.name,
-            "step": "select_character",
-            "stage": "st_pre",
-            **({"default": default_char} if default_char else {}),
-        }
-        if is_drunk_or_poisoned:
-            char_meta["due_to_drunk_poison"] = True
-            char_meta["drunk_poison_state"] = dp_label
-        char_prompt = SelectCharacterPrompt(
-            text=(
-                "Pick the Minion to show the Investigator (drunk/poisoned)."
+        chosen_char_name: str
+        if self._chosen_minion and not is_drunk_or_poisoned:
+            chosen_char_name = self._chosen_minion
+            engine.log(
+                f"Investigator {self.player.name}: pre-set seen role = "
+                f"{chosen_char_name}."
+            )
+        else:
+            eligible_chars = (
+                sorted(set(all_minions))
                 if is_drunk_or_poisoned
-                else "Pick the Minion in play to show the Investigator."
-            ),
-            eligible_characters=eligible_chars,
-            target_player_id=self.player.id,
-            meta=char_meta,
-        )
-        chosen_char_name = engine.send_prompt(char_prompt)
+                else sorted(set(in_play_minions) or set(all_minions))
+            )
+            default_char = None
+            if is_drunk_or_poisoned and eligible_chars:
+                in_play_set = set(in_play_minions)
+                not_in_play = [c for c in eligible_chars if c not in in_play_set]
+                pool = not_in_play or list(eligible_chars)
+                default_char = _rand.choice(pool)
+            elif eligible_chars:
+                # Sober + eligible candidates available: pre-fill a
+                # random non-self default so the storyteller has
+                # something pre-selected. (The Investigator is a
+                # Townsfolk and can never be a Minion, so the
+                # self-avoidance filter is structurally redundant —
+                # kept for consistency with the WW / FT pattern.)
+                non_self = [c for c in eligible_chars if c != self.name]
+                pool = non_self or list(eligible_chars)
+                default_char = _rand.choice(pool)
+            char_meta = {
+                "character": self.name,
+                "step": "select_character",
+                "stage": "st_pre",
+                **({"default": default_char} if default_char else {}),
+            }
+            if is_drunk_or_poisoned:
+                char_meta["due_to_drunk_poison"] = True
+                char_meta["drunk_poison_state"] = dp_label
+                # Highlight the *correct* options (in-play Minions) so
+                # the ST can see at a glance which characters would be
+                # truthful — even though the prefilled default is wrong.
+                correct_chars = [
+                    c for c in eligible_chars if c in set(in_play_minions)
+                ]
+                if correct_chars:
+                    char_meta["correct"] = correct_chars
+            char_prompt = SelectCharacterPrompt(
+                text="Minion to show",
+                eligible_characters=eligible_chars,
+                target_player_id=self.player.id,
+                meta=char_meta,
+            )
+            chosen_char_name = engine.send_prompt(char_prompt)
 
         # Identify the seated player who *holds* the chosen Minion
         # role (when one exists). For the legitimate flow this is the
@@ -114,38 +191,57 @@ class Investigator(Character):
                 p.id for p in engine.players
                 if p.id != self.player.id and p.id != right_player.id
             ]
-            wrong_prompt = SelectPlayerPrompt(
-                text=(
-                    f"Pick the WRONG player to point at — the other player "
-                    f"alongside {right_player.name} who is *not* the "
-                    f"{chosen_char_name}."
-                ),
-                count=1,
-                eligible_player_ids=wrong_eligible,
-                allow_self=False,
-                target_player_id=self.player.id,
-                meta={
-                    "character": self.name,
-                    "step": "select_wrong_player",
-                    "stage": "st_pre",
-                    "shown_character": chosen_char_name,
-                    "right_player_id": right_player.id,
-                    "right_player_name": right_player.name,
-                },
-            )
-            wrong_id = engine.send_prompt(wrong_prompt)
-            if isinstance(wrong_id, list):
-                wrong_id = wrong_id[0] if wrong_id else None
-            try:
-                wrong_player = (
-                    engine.get_player(int(wrong_id))
-                    if wrong_id is not None else None
+            # Pre-resolve the wrong player from ``_chosen_wrong`` if
+            # it was set during setup. Same shape as the WW / Lib.
+            preset_wrong_player: Optional["Player"] = None
+            if self._chosen_wrong:
+                for p in engine.players:
+                    if (
+                        p.character is not None
+                        and p.character.name == self._chosen_wrong
+                        and p.id != self.player.id
+                        and p.id != right_player.id
+                    ):
+                        preset_wrong_player = p
+                        break
+                if preset_wrong_player is not None:
+                    engine.log(
+                        f"Investigator {self.player.name}: pre-set "
+                        f"WRONG player = {preset_wrong_player.name} "
+                        f"({self._chosen_wrong})."
+                    )
+
+            if preset_wrong_player is not None:
+                wrong_player: Optional["Player"] = preset_wrong_player
+            else:
+                wrong_prompt = SelectPlayerPrompt(
+                    text="Wrong player",
+                    count=1,
+                    eligible_player_ids=wrong_eligible,
+                    allow_self=False,
+                    target_player_id=self.player.id,
+                    meta={
+                        "character": self.name,
+                        "step": "select_wrong_player",
+                        "stage": "st_pre",
+                        "shown_character": chosen_char_name,
+                        "right_player_id": right_player.id,
+                        "right_player_name": right_player.name,
+                    },
                 )
-            except (KeyError, ValueError, TypeError):
-                wrong_player = None
-            if wrong_player is None:
-                if wrong_eligible:
-                    wrong_player = engine.get_player(wrong_eligible[0])
+                wrong_id = engine.send_prompt(wrong_prompt)
+                if isinstance(wrong_id, list):
+                    wrong_id = wrong_id[0] if wrong_id else None
+                try:
+                    wrong_player = (
+                        engine.get_player(int(wrong_id))
+                        if wrong_id is not None else None
+                    )
+                except (KeyError, ValueError, TypeError):
+                    wrong_player = None
+                if wrong_player is None:
+                    if wrong_eligible:
+                        wrong_player = engine.get_player(wrong_eligible[0])
             chosen_players = (
                 [right_player, wrong_player]
                 if wrong_player is not None
@@ -182,11 +278,19 @@ class Investigator(Character):
             if is_drunk_or_poisoned:
                 player_meta["due_to_drunk_poison"] = True
                 player_meta["drunk_poison_state"] = dp_label
+                # Highlight the player(s) whose true role matches the
+                # chosen Minion — these are the picks that would make
+                # the info actually true.
+                correct_pids = [
+                    pid for pid in other_player_ids
+                    if (engine.get_player(pid).character is not None
+                        and engine.get_player(pid).character.name
+                            == chosen_char_name)
+                ]
+                if correct_pids:
+                    player_meta["correct"] = correct_pids
             player_prompt = SelectPlayerPrompt(
-                text=(
-                    f"Pick the two players to point at — one is the "
-                    f"{chosen_char_name}, one is wrong."
-                ),
+                text=f"Two players (one is the {chosen_char_name})",
                 count=2,
                 eligible_player_ids=other_player_ids,
                 allow_self=False,

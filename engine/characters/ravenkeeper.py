@@ -80,7 +80,7 @@ class Ravenkeeper(Character):
         # SELECT: Ravenkeeper picks any player.
         all_player_ids = [p.id for p in engine.players]
         sel = SelectPlayerPrompt(
-            text="Ravenkeeper picks one player to learn the character of.",
+            text="Player to learn",
             count=1,
             eligible_player_ids=all_player_ids,
             allow_self=True,
@@ -107,6 +107,25 @@ class Ravenkeeper(Character):
         # surface to ST with a Next button.
         is_drunk_or_poisoned = self.player.drunk or self.player.poisoned
         actual_char = target.character.name if target.character else None
+
+        # Spy misregistration: if the target is the Spy, ask the
+        # Storyteller what character the Spy registers as. Default is
+        # the Spy's internally-tracked preferred good character.
+        spy_register_as = None
+        if actual_char == "Spy":
+            from engine.characters.spy import (
+                prompt_spy_register_as as _prompt_spy_register_as,
+            )
+            spy_register_as = _prompt_spy_register_as(
+                engine,
+                target,
+                detector_name=self.name,
+                detector_player_id=self.player.id,
+                text="Spy registers as (Ravenkeeper)",
+                stage="st_post",
+                extra_meta={"step_for": "ravenkeeper_target"},
+            )
+
         if is_drunk_or_poisoned:
             all_chars = engine.all_character_names()
             wrong_options = [c for c in all_chars if c != actual_char]
@@ -114,7 +133,7 @@ class Ravenkeeper(Character):
                 _rand.choice(wrong_options) if wrong_options else actual_char
             )
             char_prompt = SelectCharacterPrompt(
-                text="Pick the character to show the Ravenkeeper (drunk/poisoned).",
+                text="Character to show",
                 eligible_characters=all_chars,
                 target_player_id=self.player.id,
                 meta={
@@ -131,6 +150,10 @@ class Ravenkeeper(Character):
             shown_char = engine.send_prompt(char_prompt)
             if not isinstance(shown_char, str) or not shown_char:
                 shown_char = default_wrong
+        elif spy_register_as is not None:
+            # Sober+healthy Ravenkeeper on the Spy: show the Spy's
+            # ST-chosen registration character.
+            shown_char = spy_register_as
         else:
             shown_char = actual_char
 
