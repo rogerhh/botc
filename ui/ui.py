@@ -72,7 +72,7 @@ class ChairStore:
     an engine Player (and the chair's ``player_id`` records the link).
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, default_seats: int = 8) -> None:
         self._chairs: Dict[int, Dict[str, Any]] = {}
         self._next_id = itertools.count(1)
         self._lock = threading.Lock()
@@ -82,7 +82,18 @@ class ChairStore:
         self._storyteller: Dict[str, float] = {
             "x": 0.5, "y": 0.88, "w": 0.175, "h": 0.08,
         }
-        self._seed_default_ring(count=8)
+        self._seed_default_ring(count=default_seats)
+
+    def reseed(self, count: int) -> None:
+        """Replace the chair set with ``count`` freshly-seeded chairs.
+
+        Called from :func:`serve` so ``--players N`` on ``botc.py`` is
+        respected without rebuilding the module-level ``STORE``.
+        """
+        with self._lock:
+            self._chairs = {}
+            self._next_id = itertools.count(1)
+            self._seed_default_ring(count=count)
 
     def _seed_default_ring(self, count: int) -> None:
         # Create the chairs as placeholders, then call the shared
@@ -2294,9 +2305,55 @@ def _guess_content_type(path: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def main() -> None:
-    global ACCESS_CODE, SERVER_PORT
+def serve(
+    engine: "Engine",
+    *,
+    host: str = "0.0.0.0",
+    port: int = 8000,
+    access_code: Optional[str] = None,
+) -> None:
+    """Start the HTTP server, binding ``engine`` as the source of truth.
 
+    ``botc.py`` (the top-level entry point) builds the engine first and
+    then calls this. The legacy ``python3 -m ui.ui`` path goes through
+    :func:`main`, which builds a default engine and forwards here.
+    """
+    global ACCESS_CODE, SERVER_PORT
+    ENGINE_replace(engine)
+    ACCESS_CODE = access_code
+    SERVER_PORT = port
+
+    # If the entry point told the engine how many seats to start with,
+    # reseed the chair store to match. This is the staged hook for
+    # Phase 2 of the refactor (chairs into the engine); for now the
+    # value lives on engine._default_seats and the chair layout still
+    # comes from STORE.
+    default_seats = getattr(engine, "_default_seats", None)
+    if isinstance(default_seats, int) and default_seats > 0:
+        STORE.reseed(default_seats)
+
+    server = ThreadingHTTPServer((host, port), Handler)
+    print(f"BotC server listening on http://{host}:{port}")
+    if ACCESS_CODE is None:
+        print("  (no access code required — anyone on the network can connect)")
+    else:
+        print(f"  Access code: {ACCESS_CODE}")
+        print( "  Players should visit  <your-url>/phone  and enter that code.")
+        print( "  Requests from localhost bypass the code.")
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("\nShutting down.")
+        server.server_close()
+
+
+def main() -> None:
+    """Legacy entry point: ``python3 -m ui.ui``.
+
+    Builds a default engine and calls :func:`serve`. New code should use
+    ``python3 botc.py`` (see ``botc/botc.py``), which constructs the
+    engine explicitly before handing it to the UI.
+    """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--host", default="0.0.0.0",
                         help="Interface to bind (default: all interfaces).")
@@ -2309,26 +2366,13 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    code: Optional[str] = None
     if args.access_code == "__AUTO__":
-        ACCESS_CODE = _make_random_code()
+        code = _make_random_code()
     elif args.access_code is not None:
-        ACCESS_CODE = args.access_code
+        code = args.access_code
 
-    SERVER_PORT = args.port
-
-    server = ThreadingHTTPServer((args.host, args.port), Handler)
-    print(f"BotC GUI server listening on http://{args.host}:{args.port}")
-    if ACCESS_CODE is None:
-        print("  (no access code required — anyone on the network can connect)")
-    else:
-        print(f"  Access code: {ACCESS_CODE}")
-        print( "  Players should visit  <your-url>/phone  and enter that code.")
-        print( "  Requests from localhost bypass the code.")
-    try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        print("\nShutting down.")
-        server.server_close()
+    serve(Engine(), host=args.host, port=args.port, access_code=code)
 
 
 if __name__ == "__main__":
