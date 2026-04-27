@@ -84,6 +84,11 @@ class _ChairStoreProxy:
 
 # ---------------------------------------------------------------------------
 # Character pool (the bag of characters chosen for this game).
+#
+# As of the engine-driver refactor, the pool lives on the engine
+# (see ``engine/pool.py``). The module-level ``POOL`` symbol below is
+# preserved as a thin proxy so the request-handler code reads
+# unchanged. Same pattern as ``STORE`` -> ``ENGINE.chairs`` above.
 # ---------------------------------------------------------------------------
 
 
@@ -102,397 +107,15 @@ _TEAM_TO_CATEGORY = {
 }
 
 
-class CharacterPool:
-    """The set of characters chosen by the storyteller for the game.
+from engine.pool import CharacterPool  # noqa: E402, F401  (re-exported)
 
-    Each entry is the character name. Order is preserved (storyteller
-    insertion order). The same character is never present twice.
 
-    The pool also tracks the *Drunk's fake townsfolk role* — a Townsfolk
-    name the Drunk player will be told they are. The fake role is NOT
-    stored in ``_names`` (it does not occupy a Townsfolk slot in the
-    bag); it is shown alongside the Drunk in the UI and used by the
-    storyteller during setup. The fake is automatically cleared if the
-    Drunk leaves the pool.
+class _PoolProxy:
+    """Thin pass-through to ``ENGINE.pool`` (lookup-at-call-time)."""
 
-    The pool also tracks the *Fortune Teller's red-herring role* — a
-    good role (Townsfolk or Outsider) that is *already in the pool*.
-    The seated player who ends up holding this role is the FT's red
-    herring. Unlike the Drunk's fake, this role does live in
-    ``_names``; the red-herring slot just records *which* of the
-    in-pool good roles the storyteller has marked. Auto-picked at
-    random when the FT enters the pool; the storyteller can re-roll
-    later by dragging the FT's red-herring token on the grimoire.
+    def __getattr__(self, name: str):
+        return getattr(ENGINE.pool, name)
 
-    The pool also tracks the *Washerwoman's seen Townsfolk role* — the
-    Townsfolk character whose token the WW is shown on the first
-    night. Like the FT's red herring, this role lives in ``_names``;
-    the WW slot records which of the in-pool Townsfolk the storyteller
-    has marked. Auto-picked at random when the WW enters the pool.
-
-    The pool also tracks the *Washerwoman's WRONG role* — the role of
-    the *other* player the WW is pointed at on the first night (the
-    one who is *not* the seen Townsfolk). The WRONG role can be any
-    role in the pool *other than* the WW herself and the seen
-    Townsfolk role. Like the seen-Townsfolk slot, it lives in
-    ``_names``; the WRONG slot records which of the in-pool roles the
-    storyteller has marked. Auto-picked at random when the WW enters
-    the pool, and re-rolled if its role leaves the pool.
-
-    All three slots are cleared when the role they depend on (Drunk,
-    Fortune Teller, Washerwoman) leaves the pool or when the marked
-    role itself is removed.
-    """
-
-    def __init__(self) -> None:
-        self._names: List[str] = []
-        self._drunk_fake: Optional[str] = None
-        self._ft_red_herring: Optional[str] = None
-        self._washerwoman_townsfolk: Optional[str] = None
-        self._washerwoman_wrong: Optional[str] = None
-        self._lock = threading.Lock()
-
-    def list(self) -> List[str]:
-        with self._lock:
-            return list(self._names)
-
-    def drunk_fake(self) -> Optional[str]:
-        with self._lock:
-            return self._drunk_fake
-
-    def ft_red_herring(self) -> Optional[str]:
-        with self._lock:
-            return self._ft_red_herring
-
-    def washerwoman_townsfolk(self) -> Optional[str]:
-        with self._lock:
-            return self._washerwoman_townsfolk
-
-    def washerwoman_wrong(self) -> Optional[str]:
-        with self._lock:
-            return self._washerwoman_wrong
-
-    # ------------------------------------------------------------------
-    # Internal helpers (assume self._lock is held).
-    # ------------------------------------------------------------------
-
-    def _good_in_pool(self) -> List[str]:
-        """Names in the pool that are Townsfolk or Outsider."""
-        good: List[str] = []
-        for n in self._names:
-            spec = script_data.SCRIPT_BY_NAME.get(n)
-            if spec is None:
-                continue
-            if spec.char_type in (CharType.TOWNSFOLK, CharType.OUTSIDER):
-                good.append(n)
-        return good
-
-    def _townsfolk_in_pool(self) -> List[str]:
-        return [
-            n for n in self._names
-            if (script_data.SCRIPT_BY_NAME.get(n)
-                and script_data.SCRIPT_BY_NAME[n].char_type
-                is CharType.TOWNSFOLK)
-        ]
-
-    def _autofill_ft_red_herring(self) -> None:
-        """If the FT is in the pool but no red herring is set, pick one
-        uniformly at random from the Good roles in the pool. Caller
-        must already hold self._lock.
-
-        The FT *itself* is a Good role, and the rules allow the FT to
-        be its own red herring — but it makes for a degenerate game
-        ("which good player registers as a Demon to me?" "...me, I
-        guess"). So we prefer roles other than the FT, falling back to
-        the FT only if there's literally nothing else to pick.
-        """
-        if "Fortune Teller" not in self._names:
-            self._ft_red_herring = None
-            return
-        if self._ft_red_herring in self._names:
-            return  # already valid
-        good = self._good_in_pool()
-        non_self = [n for n in good if n != "Fortune Teller"]
-        candidates = non_self or good
-        self._ft_red_herring = random.choice(candidates) if candidates else None
-
-    def _autofill_washerwoman_townsfolk(self) -> None:
-        """If the WW is in the pool but no seen-role is set, pick one
-        uniformly at random from the Townsfolk in the pool. Caller
-        must already hold self._lock.
-
-        Same self-avoidance rule as the FT: prefer any other Townsfolk
-        over picking the WW herself, but fall back to self if no other
-        Townsfolk exists in the pool yet (e.g. the storyteller added
-        the WW first and hasn't filled the bag).
-        """
-        if "Washerwoman" not in self._names:
-            self._washerwoman_townsfolk = None
-            return
-        if self._washerwoman_townsfolk in self._names:
-            return  # already valid
-        townsfolk = self._townsfolk_in_pool()
-        non_self = [n for n in townsfolk if n != "Washerwoman"]
-        candidates = non_self or townsfolk
-        self._washerwoman_townsfolk = (
-            random.choice(candidates) if candidates else None
-        )
-
-    def _autofill_washerwoman_wrong(self) -> None:
-        """If the WW is in the pool but no WRONG-role is set, pick one
-        uniformly at random from the in-pool roles that are *neither*
-        the Washerwoman herself *nor* the currently-set seen-Townsfolk
-        role. Caller must already hold self._lock.
-
-        Per the rulebook the WRONG token goes "by any *other* character
-        token", i.e. anyone who is not the seen Townsfolk. Outsiders,
-        Minions, and Demons are all valid WRONG candidates. We exclude
-        the WW herself because the storyteller doesn't point at the
-        WW's own seat — the WW is the one being woken.
-        """
-        if "Washerwoman" not in self._names:
-            self._washerwoman_wrong = None
-            return
-        # If the currently-set wrong role is still valid (in pool, not
-        # WW, not the seen-TF), keep it.
-        if (
-            self._washerwoman_wrong in self._names
-            and self._washerwoman_wrong != "Washerwoman"
-            and self._washerwoman_wrong != self._washerwoman_townsfolk
-        ):
-            return
-        candidates = [
-            n for n in self._names
-            if n != "Washerwoman" and n != self._washerwoman_townsfolk
-        ]
-        self._washerwoman_wrong = (
-            random.choice(candidates) if candidates else None
-        )
-
-    # ------------------------------------------------------------------
-
-    def add(self, name: str) -> bool:
-        with self._lock:
-            if name in self._names:
-                return False
-            self._names.append(name)
-            # If by some race the new name was being tracked as the
-            # Drunk's fake, drop the fake (it can't be both).
-            if self._drunk_fake == name:
-                self._drunk_fake = None
-            # Auto-fill dependent slots so the UX doesn't require an
-            # explicit "pick the red herring" / "pick the WW townsfolk"
-            # step. Adding the FT picks a random Good role; adding the
-            # WW picks a random Townsfolk; adding any Good role while
-            # the FT/WW is already present is a chance to retroactively
-            # fill in a previously-empty slot (e.g. FT was added when
-            # the pool was empty).
-            self._autofill_ft_red_herring()
-            self._autofill_washerwoman_townsfolk()
-            self._autofill_washerwoman_wrong()
-            return True
-
-    def remove(self, name: str) -> bool:
-        with self._lock:
-            if name not in self._names:
-                return False
-            self._names.remove(name)
-            # Removing the Drunk also drops their pretend role.
-            if name == "Drunk":
-                self._drunk_fake = None
-            # Removing the Fortune Teller drops the red herring.
-            if name == "Fortune Teller":
-                self._ft_red_herring = None
-            # Removing the Washerwoman drops their seen Townsfolk
-            # *and* their WRONG role.
-            if name == "Washerwoman":
-                self._washerwoman_townsfolk = None
-                self._washerwoman_wrong = None
-            # Removing the marked role itself: re-pick a replacement
-            # so the slot doesn't go stale (rules say there must always
-            # be a red herring, a WW seen-Townsfolk, and a WW wrong
-            # while the relevant roles are in play).
-            if name == self._ft_red_herring:
-                self._ft_red_herring = None
-                self._autofill_ft_red_herring()
-            if name == self._washerwoman_townsfolk:
-                self._washerwoman_townsfolk = None
-                self._autofill_washerwoman_townsfolk()
-                # The WRONG role excludes the seen-TF, so a freshly
-                # auto-picked TF can render the previous WRONG choice
-                # invalid (if WRONG happened to be the new TF). Re-roll.
-                self._autofill_washerwoman_wrong()
-            if name == self._washerwoman_wrong:
-                self._washerwoman_wrong = None
-                self._autofill_washerwoman_wrong()
-            return True
-
-    def clear(self) -> None:
-        with self._lock:
-            self._names.clear()
-            self._drunk_fake = None
-            self._ft_red_herring = None
-            self._washerwoman_townsfolk = None
-            self._washerwoman_wrong = None
-
-    def set_many(self, names: List[str]) -> List[str]:
-        # Replace the pool with the given list, deduplicated and order-preserved.
-        seen: set = set()
-        deduped: List[str] = []
-        for n in names:
-            if isinstance(n, str) and n and n not in seen:
-                seen.add(n)
-                deduped.append(n)
-        with self._lock:
-            self._names = deduped
-            # Drop the fake if the Drunk isn't in the new pool, or if
-            # the fake's name happened to be promoted into the bag.
-            if "Drunk" not in deduped or (self._drunk_fake in deduped):
-                self._drunk_fake = None
-            # Red herring / WW townsfolk: drop if their owner role left
-            # the pool or if the marked role itself is gone, then
-            # auto-refill so the slots are never left stale.
-            if (
-                "Fortune Teller" not in deduped
-                or self._ft_red_herring not in deduped
-            ):
-                self._ft_red_herring = None
-            if (
-                "Washerwoman" not in deduped
-                or self._washerwoman_townsfolk not in deduped
-            ):
-                self._washerwoman_townsfolk = None
-            if (
-                "Washerwoman" not in deduped
-                or self._washerwoman_wrong not in deduped
-                or self._washerwoman_wrong == "Washerwoman"
-            ):
-                self._washerwoman_wrong = None
-            self._autofill_ft_red_herring()
-            self._autofill_washerwoman_townsfolk()
-            # Re-validate WRONG after seen-TF was (re)autofilled —
-            # the WRONG slot must not equal the (possibly new) TF.
-            if (
-                self._washerwoman_wrong is not None
-                and self._washerwoman_wrong == self._washerwoman_townsfolk
-            ):
-                self._washerwoman_wrong = None
-            self._autofill_washerwoman_wrong()
-            return list(self._names)
-
-    def set_drunk_fake(self, name: Optional[str]) -> Optional[str]:
-        """Set the Drunk's fake Townsfolk, or pass None to clear it.
-
-        Raises ValueError if the pool doesn't contain the Drunk, or if
-        ``name`` is already a real role in the pool.
-        """
-        with self._lock:
-            if name is None:
-                self._drunk_fake = None
-                return None
-            if "Drunk" not in self._names:
-                raise ValueError("Drunk is not in the pool")
-            if name in self._names:
-                raise ValueError(
-                    "Drunk's pretend role can't be a real role in play")
-            self._drunk_fake = name
-            return self._drunk_fake
-
-    def set_ft_red_herring(self, name: Optional[str]) -> Optional[str]:
-        """Set the FT's red-herring role, or pass None to clear it.
-
-        Raises ValueError if the pool doesn't contain the Fortune
-        Teller, if ``name`` isn't already in the pool, or if ``name``
-        isn't a Good role (Townsfolk / Outsider). The FT may pick its
-        own role as the red herring (per the rules).
-        """
-        with self._lock:
-            if name is None:
-                self._ft_red_herring = None
-                return None
-            if "Fortune Teller" not in self._names:
-                raise ValueError("Fortune Teller is not in the pool")
-            if name not in self._names:
-                raise ValueError(
-                    "FT's red-herring role must already be in the pool")
-            spec = script_data.SCRIPT_BY_NAME.get(name)
-            if spec is None:
-                raise ValueError(f"unknown character {name!r}")
-            if spec.char_type not in (CharType.TOWNSFOLK, CharType.OUTSIDER):
-                raise ValueError(
-                    "FT's red-herring role must be a Townsfolk or Outsider")
-            self._ft_red_herring = name
-            return self._ft_red_herring
-
-    def set_washerwoman_townsfolk(self, name: Optional[str]) -> Optional[str]:
-        """Set the Washerwoman's seen Townsfolk role, or pass None to
-        clear it.
-
-        Raises ValueError if the pool doesn't contain the Washerwoman,
-        if ``name`` isn't already in the pool, or if ``name`` isn't a
-        Townsfolk. The WW *can* be the seen Townsfolk herself — the
-        rules don't forbid it.
-
-        If the new seen-TF equals the currently-set WRONG role (which
-        the rules forbid — the WRONG slot is the *other* player), the
-        WRONG slot is auto-rerolled to a still-valid candidate.
-        """
-        with self._lock:
-            if name is None:
-                self._washerwoman_townsfolk = None
-                # The WRONG slot's eligibility expanded; re-validate.
-                if self._washerwoman_wrong == name:
-                    self._washerwoman_wrong = None
-                self._autofill_washerwoman_wrong()
-                return None
-            if "Washerwoman" not in self._names:
-                raise ValueError("Washerwoman is not in the pool")
-            if name not in self._names:
-                raise ValueError(
-                    "WW's seen Townsfolk must already be in the pool")
-            spec = script_data.SCRIPT_BY_NAME.get(name)
-            if spec is None:
-                raise ValueError(f"unknown character {name!r}")
-            if spec.char_type is not CharType.TOWNSFOLK:
-                raise ValueError(
-                    "WW's seen role must be a Townsfolk")
-            self._washerwoman_townsfolk = name
-            # If the new seen-TF collides with the WRONG slot, re-roll
-            # WRONG so the two never point at the same role.
-            if self._washerwoman_wrong == name:
-                self._washerwoman_wrong = None
-            self._autofill_washerwoman_wrong()
-            return self._washerwoman_townsfolk
-
-    def set_washerwoman_wrong(self, name: Optional[str]) -> Optional[str]:
-        """Set the Washerwoman's WRONG role, or pass None to clear it.
-
-        Raises ValueError if the pool doesn't contain the Washerwoman,
-        if ``name`` isn't already in the pool, if ``name`` is the
-        Washerwoman herself, or if ``name`` is the same as the WW's
-        seen Townsfolk slot (the two tokens point at *different*
-        players by definition).
-        """
-        with self._lock:
-            if name is None:
-                self._washerwoman_wrong = None
-                return None
-            if "Washerwoman" not in self._names:
-                raise ValueError("Washerwoman is not in the pool")
-            if name not in self._names:
-                raise ValueError(
-                    "WW's WRONG role must already be in the pool")
-            if name == "Washerwoman":
-                raise ValueError(
-                    "WW's WRONG token can't sit on the Washerwoman herself")
-            if name == self._washerwoman_townsfolk:
-                raise ValueError(
-                    "WW's WRONG role must differ from the seen Townsfolk")
-            spec = script_data.SCRIPT_BY_NAME.get(name)
-            if spec is None:
-                raise ValueError(f"unknown character {name!r}")
-            self._washerwoman_wrong = name
-            return self._washerwoman_wrong
 
 
 def _list_presets() -> List[str]:
@@ -672,177 +295,24 @@ def _pick_default_red_herring(names: List[str]) -> Optional[str]:
 # ---------------------------------------------------------------------------
 
 
-def _townsfolk_in_play(name: str) -> bool:
-    spec = script_data.SCRIPT_BY_NAME.get(name)
-    return spec is not None and spec.char_type is CharType.TOWNSFOLK
-
-
-def _good_in_play(name: str) -> bool:
-    spec = script_data.SCRIPT_BY_NAME.get(name)
-    return spec is not None and spec.char_type in (
-        CharType.TOWNSFOLK, CharType.OUTSIDER,
-    )
-
+# Token-drag helpers now live on the engine (see
+# ``Engine.move_drunk_token`` etc.). These thin shims preserve the
+# existing call sites in the HTTP handlers.
 
 def _move_drunk_token(dest_chair_id: int) -> Optional[str]:
-    """Drop the IS-THE-DRUNK reminder onto ``dest_chair_id``.
-
-    The destination chair's character must be a Townsfolk *currently
-    in the pool* (the rules say the IS THE DRUNK token goes by a
-    Townsfolk character token in the grimoire). If a different chair
-    is currently the Drunk, this performs a clean swap so the bag /
-    chair-character invariants stay consistent:
-
-      * The destination chair becomes the Drunk; the Townsfolk role
-        it used to hold (``T``) becomes the Drunk's new pretend role.
-      * The previously-Drunk chair (if any) inherits the *previous*
-        pretend role (``F``) as its actual character. ``F`` was not in
-        the pool list before; now it is, replacing ``T``.
-
-    The pool's drunk_fake field updates from ``F`` to ``T``, and the
-    pool list swaps ``T`` out for ``F``. Net effect: the chair that
-    "is the Drunk" moves, and a different Townsfolk slot is now the
-    one swapped out of the bag.
-    """
-    dest = STORE.get(dest_chair_id)
-    if dest is None:
-        return f"no chair with id {dest_chair_id}"
-    pool_names = POOL.list()
-    if "Drunk" not in pool_names:
-        return "Drunk is not in the pool"
-    dest_char = (dest.get("character") or "").strip()
-    if not dest_char:
-        return "destination chair has no character assigned"
-    # Source chair = whichever chair currently holds the Drunk role.
-    source: Optional[Dict[str, Any]] = None
-    for c in STORE.list():
-        if (c.get("character") or "").strip() == "Drunk":
-            source = c
-            break
-    if source is not None and source["id"] == dest_chair_id:
-        return None  # no-op: dropping the token where it already is
-    if not _townsfolk_in_play(dest_char):
-        return "destination chair must hold a Townsfolk role"
-    if dest_char not in pool_names:
-        return f"{dest_char!r} is not in the pool"
-
-    new_fake = dest_char  # Townsfolk the Drunk now thinks they are.
-    prev_fake = POOL.drunk_fake()  # may be None if first placement.
-
-    # Swap the chair characters first so the chair store reflects the
-    # new arrangement before we reshuffle the pool. The *previously
-    # drunk* chair takes on the previous fake (which was off-bag and
-    # now joins the bag); if there was no previous fake, the source
-    # chair is left without a character — the storyteller can fill it
-    # in later.
-    if source is not None:
-        STORE.update(source["id"], character=(prev_fake or ""))
-    STORE.update(dest_chair_id, character="Drunk")
-
-    # Pool list: drop ``new_fake`` (it's now off-bag, the Drunk's
-    # pretend role) and insert ``prev_fake`` in its place if there
-    # was one.
-    new_pool: List[str] = []
-    inserted_prev_fake = False
-    for n in pool_names:
-        if n == new_fake:
-            if prev_fake is not None and not inserted_prev_fake:
-                new_pool.append(prev_fake)
-                inserted_prev_fake = True
-            # else: just drop new_fake without replacing — the Drunk
-            # keeps its slot ("Drunk" stays in the list), so the bag
-            # just shrinks by one. This is the "first placement"
-            # branch where the pool didn't have a swapped-in TF yet.
-            continue
-        new_pool.append(n)
-    POOL.set_many(new_pool)
-    try:
-        POOL.set_drunk_fake(new_fake)
-    except ValueError:
-        # Shouldn't happen — set_many leaves "Drunk" in the pool and
-        # ``new_fake`` is no longer in pool_names. But if it does,
-        # leave the pool's drunk_fake unset; UI will show pending.
-        pass
-    return None
+    return ENGINE.move_drunk_token(dest_chair_id)
 
 
 def _move_ft_red_herring(dest_chair_id: int) -> Optional[str]:
-    """Drop the FT RED HERRING reminder onto ``dest_chair_id``.
-
-    The destination chair's character must be a Good role (Townsfolk
-    or Outsider) currently in the pool. The Drunk seat counts (its
-    chair character is "Drunk", an Outsider) — the FT may land its
-    red herring on the actual Drunk per the rules.
-    """
-    dest = STORE.get(dest_chair_id)
-    if dest is None:
-        return f"no chair with id {dest_chair_id}"
-    if "Fortune Teller" not in POOL.list():
-        return "Fortune Teller is not in the pool"
-    dest_char = (dest.get("character") or "").strip()
-    if not dest_char:
-        return "destination chair has no character assigned"
-    if not _good_in_play(dest_char):
-        return "destination chair must hold a Townsfolk or Outsider role"
-    if dest_char not in POOL.list():
-        return f"{dest_char!r} is not in the pool"
-    try:
-        POOL.set_ft_red_herring(dest_char)
-    except ValueError as exc:
-        return str(exc)
-    return None
+    return ENGINE.move_ft_red_herring_token(dest_chair_id)
 
 
 def _move_washerwoman_token(dest_chair_id: int) -> Optional[str]:
-    """Drop the WW TOWNSFOLK reminder onto ``dest_chair_id``.
-
-    The destination chair's character must be a Townsfolk currently
-    in the pool. The Drunk seat is *not* eligible — the Washerwoman
-    is told the actual Townsfolk character of the seen player, and
-    the rules say the WW knows the seen player is not the Drunk.
-    """
-    dest = STORE.get(dest_chair_id)
-    if dest is None:
-        return f"no chair with id {dest_chair_id}"
-    if "Washerwoman" not in POOL.list():
-        return "Washerwoman is not in the pool"
-    dest_char = (dest.get("character") or "").strip()
-    if not dest_char:
-        return "destination chair has no character assigned"
-    if not _townsfolk_in_play(dest_char):
-        return "destination chair must hold a Townsfolk role"
-    if dest_char not in POOL.list():
-        return f"{dest_char!r} is not in the pool"
-    try:
-        POOL.set_washerwoman_townsfolk(dest_char)
-    except ValueError as exc:
-        return str(exc)
-    return None
+    return ENGINE.move_washerwoman_townsfolk_token(dest_chair_id)
 
 
 def _move_washerwoman_wrong_token(dest_chair_id: int) -> Optional[str]:
-    """Drop the WW WRONG reminder onto ``dest_chair_id``.
-
-    Per the rulebook the WRONG token goes "by any *other* character
-    token" — meaning any seated character except the Washerwoman
-    herself and the WW's seen Townsfolk. Any role type
-    (Townsfolk / Outsider / Minion / Demon) qualifies.
-    """
-    dest = STORE.get(dest_chair_id)
-    if dest is None:
-        return f"no chair with id {dest_chair_id}"
-    if "Washerwoman" not in POOL.list():
-        return "Washerwoman is not in the pool"
-    dest_char = (dest.get("character") or "").strip()
-    if not dest_char:
-        return "destination chair has no character assigned"
-    if dest_char not in POOL.list():
-        return f"{dest_char!r} is not in the pool"
-    try:
-        POOL.set_washerwoman_wrong(dest_char)
-    except ValueError as exc:
-        return str(exc)
-    return None
+    return ENGINE.move_washerwoman_wrong_token(dest_chair_id)
 
 
 # ---------------------------------------------------------------------------
@@ -851,23 +321,20 @@ def _move_washerwoman_wrong_token(dest_chair_id: int) -> Optional[str]:
 
 ENGINE = Engine()
 STORE = _ChairStoreProxy()
-POOL = CharacterPool()
+POOL = _PoolProxy()
 
-# Selected preset name (e.g. "trouble_brewing"). Set when the
-# storyteller randomizes the bag from a preset, or sent explicitly with
-# /api/engine/start_game. Drives the engine's night order.
-SELECTED_PRESET: Optional[str] = None
+# Selected preset name (e.g. "trouble_brewing"). Lives on the engine
+# post-refactor; these module-level shims keep the handler code reading
+# unchanged. Drives the engine's night order at start_game time.
 
 
 def SELECTED_PRESET_set(name: Optional[str]) -> None:
-    """Set the selected preset name from any scope.
+    """Forward the storyteller's preset choice onto the engine."""
+    ENGINE.selected_preset_name = name
 
-    Wrapper so handler code can update the global without needing a
-    ``global`` declaration (which Python disallows mixing with a later
-    second ``global`` in the same function).
-    """
-    global SELECTED_PRESET
-    SELECTED_PRESET = name
+
+def _selected_preset() -> Optional[str]:
+    return ENGINE.selected_preset_name
 
 
 def ENGINE_replace(new_engine: "Engine") -> None:
@@ -1037,7 +504,7 @@ def spawn_engine_runner_subprocess() -> Optional[subprocess.Popen]:
             init_msg = json.dumps({
                 "cmd": "init",
                 "seats": seats,
-                "preset": SELECTED_PRESET or "",
+                "preset": _selected_preset() or "",
                 "setup_data": _setup_data_from_pool(),
             }) + "\n"
             start_msg = json.dumps({"cmd": "start_game"}) + "\n"
@@ -1597,8 +1064,9 @@ class Handler(BaseHTTPRequestHandler):
                 ENGINE.apply_setup_data(setup_data)
                 # Install the preset script on the engine so the night
                 # loop walks it instead of the legacy Character.night_order.
-                if SELECTED_PRESET:
-                    p = preset_module.load_preset(_PRESETS_DIR, SELECTED_PRESET)
+                preset_name = _selected_preset()
+                if preset_name:
+                    p = preset_module.load_preset(_PRESETS_DIR, preset_name)
                     if p is not None:
                         ENGINE.set_preset(p)
                 ENGINE.set_auto_advance_to_day(True)
@@ -1643,6 +1111,12 @@ class Handler(BaseHTTPRequestHandler):
             killed = kill_engine_runner_subprocess()
             saved_chairs = ENGINE.chairs.list()
             saved_storyteller = ENGINE.chairs.get_storyteller()
+            saved_pool = ENGINE.pool.list()
+            saved_drunk_fake = ENGINE.pool.drunk_fake()
+            saved_ft_rh = ENGINE.pool.ft_red_herring()
+            saved_ww_tf = ENGINE.pool.washerwoman_townsfolk()
+            saved_ww_wrong = ENGINE.pool.washerwoman_wrong()
+            saved_preset = ENGINE.selected_preset_name
             new_engine = Engine(default_seats=0)
             for chair in saved_chairs:
                 new_chair = new_engine.chairs.add()
@@ -1655,6 +1129,22 @@ class Handler(BaseHTTPRequestHandler):
             new_engine.chairs.move_storyteller(
                 saved_storyteller["x"], saved_storyteller["y"],
             )
+            new_engine.pool.set_many(saved_pool)
+            try:
+                if saved_drunk_fake:
+                    new_engine.pool.set_drunk_fake(saved_drunk_fake)
+                if saved_ft_rh:
+                    new_engine.pool.set_ft_red_herring(saved_ft_rh)
+                if saved_ww_tf:
+                    new_engine.pool.set_washerwoman_townsfolk(saved_ww_tf)
+                if saved_ww_wrong:
+                    new_engine.pool.set_washerwoman_wrong(saved_ww_wrong)
+            except ValueError:
+                # If a saved pick happens to be invalid in the new
+                # context (e.g. the role was removed earlier in this
+                # session), let auto-fill repopulate it via set_many.
+                pass
+            new_engine.selected_preset_name = saved_preset
             ENGINE_replace(new_engine)
             self._send_json(HTTPStatus.OK, {
                 "engine": ENGINE.snapshot(),

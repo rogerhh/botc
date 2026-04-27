@@ -40,6 +40,7 @@ from engine import preset as preset_module
 from engine import script as script_data
 from engine.chairs import ChairStore
 from engine.character import Character
+from engine.pool import CharacterPool
 from engine.enums import Alignment, CharType, DeathCause, Phase
 from engine.event import Event, EventType
 from engine.player import Player
@@ -86,6 +87,17 @@ class Engine:
         # starts). Owned by the engine so any copy of the engine
         # snapshots-and-renders identically — see ``Engine.snapshot``.
         self.chairs = ChairStore(default_seats=default_seats)
+
+        # The character pool ("the bag") plus the four setup-time
+        # picks (Drunk fake, FT red herring, WW seen-Townsfolk, WW
+        # wrong). Auto-fills dependent slots when the relevant owner
+        # role enters the pool.
+        self.pool = CharacterPool()
+
+        # Selected preset name (e.g. "trouble_brewing"). Stored on the
+        # engine so resets / reloads don't lose the operator's choice.
+        # Drives the night order via ``set_preset`` once the game starts.
+        self.selected_preset_name: Optional[str] = None
 
         # Players killed overnight, pending announcement at dawn.
         self._pending_night_deaths: List[Player] = []
@@ -417,6 +429,136 @@ class Engine:
 
     def recommended_counts(self) -> Tuple[int, int, int, int]:
         return script_data.recommended_counts(len(self._players))
+
+    # ------------------------------------------------------------------
+    # Setup-token drag/drop operations.
+    #
+    # These mutate ``self.chairs`` and ``self.pool`` together. They
+    # exist on the engine because the rules they enforce span both
+    # stores and need to stay consistent. Each returns ``None`` on
+    # success or a human-readable error string on rejection.
+    # ------------------------------------------------------------------
+
+    def _townsfolk_in_play(self, name: str) -> bool:
+        spec = script_data.SCRIPT_BY_NAME.get(name)
+        return spec is not None and spec.char_type is CharType.TOWNSFOLK
+
+    def _good_in_play(self, name: str) -> bool:
+        spec = script_data.SCRIPT_BY_NAME.get(name)
+        return spec is not None and spec.char_type in (
+            CharType.TOWNSFOLK, CharType.OUTSIDER,
+        )
+
+    def move_drunk_token(self, dest_chair_id: int) -> Optional[str]:
+        """Drop the IS-THE-DRUNK reminder onto ``dest_chair_id``.
+
+        See ``ui.README`` / the engine README for the swap semantics.
+        Briefly: the destination chair becomes the Drunk; the role it
+        used to hold becomes the Drunk's new pretend role; the
+        previously-Drunk chair (if any) inherits the *previous*
+        pretend role as its actual character.
+        """
+        dest = self.chairs.get(dest_chair_id)
+        if dest is None:
+            return f"no chair with id {dest_chair_id}"
+        pool_names = self.pool.list()
+        if "Drunk" not in pool_names:
+            return "Drunk is not in the pool"
+        dest_char = (dest.get("character") or "").strip()
+        if not dest_char:
+            return "destination chair has no character assigned"
+        source: Optional[Dict[str, Any]] = None
+        for c in self.chairs.list():
+            if (c.get("character") or "").strip() == "Drunk":
+                source = c
+                break
+        if source is not None and source["id"] == dest_chair_id:
+            return None  # no-op
+        if not self._townsfolk_in_play(dest_char):
+            return "destination chair must hold a Townsfolk role"
+        if dest_char not in pool_names:
+            return f"{dest_char!r} is not in the pool"
+
+        new_fake = dest_char
+        prev_fake = self.pool.drunk_fake()
+
+        if source is not None:
+            self.chairs.update(source["id"], character=(prev_fake or ""))
+        self.chairs.update(dest_chair_id, character="Drunk")
+
+        new_pool: List[str] = []
+        inserted_prev_fake = False
+        for n in pool_names:
+            if n == new_fake:
+                if prev_fake is not None and not inserted_prev_fake:
+                    new_pool.append(prev_fake)
+                    inserted_prev_fake = True
+                continue
+            new_pool.append(n)
+        self.pool.set_many(new_pool)
+        try:
+            self.pool.set_drunk_fake(new_fake)
+        except ValueError:
+            pass
+        return None
+
+    def move_ft_red_herring_token(self, dest_chair_id: int) -> Optional[str]:
+        """Drop the FT RED HERRING reminder onto ``dest_chair_id``."""
+        dest = self.chairs.get(dest_chair_id)
+        if dest is None:
+            return f"no chair with id {dest_chair_id}"
+        if "Fortune Teller" not in self.pool.list():
+            return "Fortune Teller is not in the pool"
+        dest_char = (dest.get("character") or "").strip()
+        if not dest_char:
+            return "destination chair has no character assigned"
+        if not self._good_in_play(dest_char):
+            return "destination chair must hold a Townsfolk or Outsider role"
+        if dest_char not in self.pool.list():
+            return f"{dest_char!r} is not in the pool"
+        try:
+            self.pool.set_ft_red_herring(dest_char)
+        except ValueError as exc:
+            return str(exc)
+        return None
+
+    def move_washerwoman_townsfolk_token(self, dest_chair_id: int) -> Optional[str]:
+        """Drop the WW TOWNSFOLK reminder onto ``dest_chair_id``."""
+        dest = self.chairs.get(dest_chair_id)
+        if dest is None:
+            return f"no chair with id {dest_chair_id}"
+        if "Washerwoman" not in self.pool.list():
+            return "Washerwoman is not in the pool"
+        dest_char = (dest.get("character") or "").strip()
+        if not dest_char:
+            return "destination chair has no character assigned"
+        if not self._townsfolk_in_play(dest_char):
+            return "destination chair must hold a Townsfolk role"
+        if dest_char not in self.pool.list():
+            return f"{dest_char!r} is not in the pool"
+        try:
+            self.pool.set_washerwoman_townsfolk(dest_char)
+        except ValueError as exc:
+            return str(exc)
+        return None
+
+    def move_washerwoman_wrong_token(self, dest_chair_id: int) -> Optional[str]:
+        """Drop the WW WRONG reminder onto ``dest_chair_id``."""
+        dest = self.chairs.get(dest_chair_id)
+        if dest is None:
+            return f"no chair with id {dest_chair_id}"
+        if "Washerwoman" not in self.pool.list():
+            return "Washerwoman is not in the pool"
+        dest_char = (dest.get("character") or "").strip()
+        if not dest_char:
+            return "destination chair has no character assigned"
+        if dest_char not in self.pool.list():
+            return f"{dest_char!r} is not in the pool"
+        try:
+            self.pool.set_washerwoman_wrong(dest_char)
+        except ValueError as exc:
+            return str(exc)
+        return None
 
     # ==================================================================
     #                       NIGHT PHASE
@@ -1258,6 +1400,12 @@ class Engine:
             "log_tail": self._log[-50:],
             "chairs": self.chairs.list(),
             "storyteller": self.chairs.get_storyteller(),
+            "pool": self.pool.list(),
+            "drunk_fake": self.pool.drunk_fake(),
+            "ft_red_herring": self.pool.ft_red_herring(),
+            "washerwoman_townsfolk": self.pool.washerwoman_townsfolk(),
+            "washerwoman_wrong": self.pool.washerwoman_wrong(),
+            "selected_preset": self.selected_preset_name,
         }
 
     def player_view(self, player_id: int) -> dict:
