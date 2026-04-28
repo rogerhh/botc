@@ -3148,12 +3148,21 @@
       `<span class="ind">${isNone ? "\u2713" : ""}</span>` +
       `</div>`);
 
-    // Render a name with the Drunk's fake-role parenthetical when
-    // applicable, mirroring the annotation used in the pool sidebar.
+    // Render a name with its setup-pick parenthetical when applicable
+    // (Drunk's fake TF, FT's red herring, WW/Lib/Inv seen-roles).
+    // Sourced from the engine's ``setup_picks_by_role`` map; no
+    // per-character branches.
     const labelForName = (n) => {
-      if (n === "Drunk" && poolState.drunk_fake_role) {
+      const picks = (poolState.setup_picks_by_role || {})[n] || {};
+      const slotPriority = ["fake", "red_herring", "townsfolk",
+                            "outsider", "minion"];
+      let pickValue = null;
+      for (const slot of slotPriority) {
+        if (picks[slot]) { pickValue = picks[slot]; break; }
+      }
+      if (pickValue) {
         return `${escapeHtml(n)} <span style="opacity:.7;font-style:italic">` +
-               `(${escapeHtml(poolState.drunk_fake_role)})</span>`;
+               `(${escapeHtml(pickValue)})</span>`;
       }
       return escapeHtml(n);
     };
@@ -3951,8 +3960,15 @@
     else if (kind === "ok") startStatus.classList.add("ok");
   }
 
+  // Most-recent engine snapshot, stashed so other helpers
+  // (maybeUpdateStartButtonReadiness, etc.) can read engine-supplied
+  // state without re-fetching. Set every time updateStartButtonForEngine
+  // runs.
+  let _engineSnapshot = null;
+
   function updateStartButtonForEngine(engineSnapshot) {
     if (!engineSnapshot) return;
+    _engineSnapshot = engineSnapshot;
     const phase = engineSnapshot.phase || "setup";
     // Map engine phases to body classes the CSS uses to flip between
     // setup / night / day layouts.
@@ -4088,13 +4104,11 @@
     }
 
     // Step 3: every setup token whose owner role is in play must be
-    // assigned to a valid in-pool role. The engine's autofill keeps
-    // these slots populated whenever possible, but the storyteller
-    // can drag a token onto an ineligible chair via legacy paths or
-    // a stale UI; surface that here so they don't hit "Start" and
-    // get a server-side rejection.
-    const inPool = new Set(poolState.names || []);
-    const tokenIssue = _validateSetupTokens(inPool);
+    // assigned to a valid in-pool role. The engine emits a single
+    // ``setup_validation_blocker`` string in its snapshot — the UI
+    // shows it verbatim. No per-character validation rules in JS.
+    const tokenIssue = _engineSnapshot
+      && _engineSnapshot.setup_validation_blocker;
     if (tokenIssue) {
       _blockStart(tokenIssue);
       return;
@@ -4127,90 +4141,10 @@
     }
   }
 
-  // Walk through every setup token type and return the first
-  // human-readable issue, or "" if every token is in a valid spot.
-  // Pre-condition: the pool's character multiset already matches the
-  // chairs (callers check this before invoking us).
-  function _validateSetupTokens(inPool) {
-    const ps = poolState || {};
-    // Without a loaded preset we can't classify roles into Townsfolk
-    // / Outsider / Minion buckets, so the type-conditioned checks
-    // below would all false-positive ("Drunk fake must be Townsfolk"
-    // even when Slayer is in fact a Townsfolk). The server validates
-    // these strictly at start_game time anyway, so it's safe to skip
-    // the client-side check during the brief window before the
-    // preset finishes loading.
-    if (!currentPresetData) return "";
-    const tf = currentPresetData.Townsfolk || [];
-    const out = currentPresetData.Outsiders || [];
-    const min = currentPresetData.Minions || [];
-    const isTownsfolk = (n) => tf.indexOf(n) !== -1;
-    const isOutsider = (n) => out.indexOf(n) !== -1;
-    const isMinion = (n) => min.indexOf(n) !== -1;
-    const isGood = (n) => isTownsfolk(n) || isOutsider(n);
-
-    // Drunk: if Drunk is in play, drunk_fake_role must be a Townsfolk
-    // *not* in the bag (it's the off-bag pretend role).
-    if (inPool.has("Drunk")) {
-      const fake = ps.drunk_fake_role || "";
-      if (!fake) return "Drunk fake unset.";
-      if (!isTownsfolk(fake) || inPool.has(fake)) return "Drunk fake invalid.";
-    }
-    // Fortune Teller: red-herring role must be a Townsfolk or
-    // Outsider in the bag.
-    if (inPool.has("Fortune Teller")) {
-      const rh = ps.ft_red_herring_role || "";
-      if (!rh) return "Fortune Teller red herring unset.";
-      if (!inPool.has(rh) || !isGood(rh)) return "Fortune Teller red herring invalid.";
-    }
-    // Washerwoman: seen role must be a Townsfolk in the bag (and not
-    // the Washerwoman herself); WRONG must be in the bag, not the
-    // Washerwoman, and not the seen role.
-    if (inPool.has("Washerwoman")) {
-      const seen = ps.washerwoman_townsfolk_role || "";
-      const wrong = ps.washerwoman_wrong_role || "";
-      if (!seen) return "Washerwoman seen unset.";
-      if (!inPool.has(seen) || !isTownsfolk(seen) || seen === "Washerwoman") {
-        return "Washerwoman seen invalid.";
-      }
-      if (!wrong) return "Washerwoman wrong unset.";
-      if (!inPool.has(wrong) || wrong === "Washerwoman" || wrong === seen) {
-        return "Washerwoman wrong invalid.";
-      }
-    }
-    // Librarian: seen-Outsider must be an Outsider in the bag.
-    // The "0 Outsiders" reading is allowed — slot stays empty and so
-    // does the WRONG. If seen IS set, WRONG must also be set.
-    if (inPool.has("Librarian")) {
-      const seen = ps.librarian_outsider_role || "";
-      const wrong = ps.librarian_wrong_role || "";
-      const anyOutsiderInPool = [...inPool].some(isOutsider);
-      if (!seen) {
-        if (anyOutsiderInPool) return "Librarian seen unset.";
-        // 0-outsider reading — both slots empty by design.
-      } else {
-        if (!inPool.has(seen) || !isOutsider(seen)) return "Librarian seen invalid.";
-        if (!wrong) return "Librarian wrong unset.";
-        if (!inPool.has(wrong) || wrong === "Librarian" || wrong === seen) {
-          return "Librarian wrong invalid.";
-        }
-      }
-    }
-    // Investigator: seen-Minion must be a Minion in the bag. Trouble
-    // Brewing always has at least one Minion, so unlike the Librarian
-    // we always require this slot.
-    if (inPool.has("Investigator")) {
-      const seen = ps.investigator_minion_role || "";
-      const wrong = ps.investigator_wrong_role || "";
-      if (!seen) return "Investigator seen unset.";
-      if (!inPool.has(seen) || !isMinion(seen)) return "Investigator seen invalid.";
-      if (!wrong) return "Investigator wrong unset.";
-      if (!inPool.has(wrong) || wrong === "Investigator" || wrong === seen) {
-        return "Investigator wrong invalid.";
-      }
-    }
-    return "";
-  }
+  // (Setup-token readiness validation now lives in the engine. The
+  // UI consumes ``_engineSnapshot.setup_validation_blocker`` — a
+  // single human-readable string — and shows it verbatim. There is
+  // no per-character validation logic in the UI.)
 
   async function startGame() {
     startBtn.disabled = true;
@@ -4481,149 +4415,39 @@
   // array because some prompts (minion-info, demon-info) show two
   // tokens at once.
   function buildInfoTokens(p, meta, namesById, description) {
-    const tokens = [];
     const namesFor = (ids) => (ids || [])
       .map(id => namesById.get(id) || ("Player " + id));
-    const stepKind = meta.step_kind;
-    // Some characters store their step under "step" rather than
-    // "step_kind" (e.g. Spy uses meta.step = "grimoire").
-    const step = meta.step;
-    const character = meta.character;
 
-    // ----- Minion / Demon intros ----------------------------------
-    if (stepKind === "minion_info") {
-      // All Minions are presumed to wake up together (project rule),
-      // so this prompt is shared across every Minion and the only
-      // token rendered is THIS IS THE DEMON. The Minions can see each
-      // other in the room, so THESE ARE YOUR MINIONS is redundant.
-      const demonNames = (meta.demon_player_names || []).join(", ");
-      if (demonNames) {
-        tokens.push({label: "THIS IS THE DEMON", body: demonNames});
-      }
-      return tokens;
-    }
-    if (stepKind === "demon_info") {
-      const minionNames = (meta.minion_player_names || []).join(", ");
-      const bluffs = (meta.bluff_characters || []).join(", ");
-      if (minionNames) {
-        tokens.push({label: "THESE ARE YOUR MINIONS", body: minionNames});
-      }
-      if (bluffs) {
-        tokens.push({
-          label: "THESE CHARACTERS ARE NOT IN PLAY",
-          body: bluffs,
-        });
-      }
-      return tokens;
+    // Engine-supplied render directive — every info-character ability
+    // attaches ``meta.render = {tokens: [{label, body}, ...]}`` to its
+    // InformationPrompt. The UI is now a generic renderer over that
+    // block; adding a new info character requires zero UI changes.
+    const render = meta && meta.render;
+    if (render && Array.isArray(render.tokens) && render.tokens.length) {
+      return render.tokens.map(t => ({
+        label: t && t.label != null ? String(t.label) : "",
+        body:  t && t.body  != null ? String(t.body)  : "",
+      }));
     }
 
-    // ----- Spy: grimoire snapshot --------------------------------
-    if (stepKind === "grimoire" || step === "grimoire"
-        || character === "Spy") {
-      tokens.push({
-        label: "GRIMOIRE",
-        body: "Study the grimoire on the Storyteller's screen.",
-      });
-      return tokens;
-    }
-
+    // Fallback for any prompt that didn't supply meta.render — show
+    // highlighted characters as the label and highlighted players as
+    // the body. Defensive only; every real info prompt now ships
+    // its own render directive.
     const chars = p.highlight_characters || [];
     const playerNames = namesFor(p.highlight_player_ids).join(", ");
-
-    // ----- Librarian "no Outsiders" special case -----------------
-    // Librarian fires an info prompt with NO highlights when there
-    // are zero Outsiders in play — the canonical token is "0".
-    if (character === "Librarian" && chars.length === 0
-        && (!p.highlight_player_ids
-            || p.highlight_player_ids.length === 0)) {
-      tokens.push({
-        label: "0",
-        body: "There are no Outsiders in play.",
-      });
-      return tokens;
-    }
-
-    // ----- Fortune Teller: YES / NO token ------------------------
-    if (character === "Fortune Teller") {
-      // The text either starts with "Yes" or "No" — derive the
-      // token from that.
-      const yes = /^\s*Yes/i.test(p.text || "");
-      tokens.push({
-        label: yes ? "YES" : "NO",
-        body: playerNames,
-      });
-      return tokens;
-    }
-
-    // ----- Chef / Empath: concise sentence -----------------------
-    // The full sentence already contains the count (e.g. "There is
-    // 1 pair of evil players sitting next to each other."), so put
-    // it in the body and leave the label empty — a separate big
-    // digit token would just duplicate the number. The renderer
-    // skips empty labels so this displays as just the sentence.
-    if (character === "Chef" || character === "Empath") {
-      tokens.push({label: "", body: p.text || ""});
-      return tokens;
-    }
-
-    // ----- Washerwoman / Librarian / Investigator -----------------
-    // The character token alone can be hard to read on a small
-    // phone, so prepend an explicit "ONE OF THESE IS THE <CHAR>"
-    // line and list both players underneath. This way the
-    // storyteller (and, when shown_to_player=true, the player) see
-    // unambiguous text alongside the character token image.
-    if (chars.length > 0
-        && (character === "Washerwoman"
-            || character === "Librarian"
-            || character === "Investigator")) {
-      const charName = chars
-        .map(c => String(c).toUpperCase())
-        .join(" / ");
-      tokens.push({
-        label: "ONE OF THESE IS THE " + charName,
-        body: playerNames || "",
-      });
-      return tokens;
-    }
-
-    // ----- Demon role reveal (SW promotion / Imp self-kill) ------
-    // Both reveal flows use ``reveal: "demon_role"`` with
-    // ``demon_character: "<DemonClass>"`` in their meta. Show the
-    // player a single, unambiguous "YOU ARE THE <DEMON>" line
-    // (label "YOU ARE", body "THE <DEMON>") so it reads as one
-    // sentence on the phone — matches the all-caps token style the
-    // storyteller hands the player physically.
-    if (meta.reveal === "demon_role") {
-      const demonName = String(meta.demon_character || "Imp").toUpperCase();
-      tokens.push({
-        label: "YOU ARE",
-        body: "THE " + demonName,
-      });
-      return tokens;
-    }
-
-    // ----- Generic character-token info --------------------------
-    // Ravenkeeper / Undertaker — show the character token as the
-    // label and the matching player name(s) as the body.
     if (chars.length > 0) {
       const charLabel = chars
         .map(c => String(c).toUpperCase())
         .join(" / ");
-      tokens.push({label: charLabel, body: playerNames || ""});
-      return tokens;
+      return [{label: charLabel, body: playerNames || ""}];
     }
-
-    // ----- Fallback ---------------------------------------------
-    // Unknown info prompt: use the character name as the label and
-    // the prompt's text as the body, suppressing any duplicate of
-    // the description we've already rendered above the payload.
     let bodyText = p.text || "";
     if (bodyText === description) bodyText = "";
-    tokens.push({
-      label: (character || "INFO").toUpperCase(),
+    return [{
+      label: ((meta && meta.character) || "INFO").toUpperCase(),
       body: bodyText,
-    });
-    return tokens;
+    }];
   }
 
   // Render the accumulated stages list from the current panel session.
@@ -6053,18 +5877,24 @@
         `<span class="${cls}">${c}/${r}</span></div>`);
       for (const n of buckets[ct]) {
         let label = escapeHtml(n);
-        if (n === "Drunk" && poolState.drunk_fake_role) {
+        // Annotate every role whose setup_picks_by_role entry has a
+        // value; the slot priority matches the renderCharList helper.
+        // No per-character branches in the UI.
+        const picks = (poolState.setup_picks_by_role || {})[n] || {};
+        const slotPriority = ["fake", "red_herring", "townsfolk",
+                              "outsider", "minion"];
+        let pickValue = null;
+        for (const slot of slotPriority) {
+          if (picks[slot]) { pickValue = picks[slot]; break; }
+        }
+        if (pickValue) {
           label += ` <span style="opacity:.7;font-style:italic">` +
-                   `(${escapeHtml(poolState.drunk_fake_role)})</span>`;
+                   `(${escapeHtml(pickValue)})</span>`;
         } else if (n === "Drunk" && poolState.pending_drunk_fake) {
+          // Pending Drunk fake is a "no value yet" annotation —
+          // distinct from the resolved-value path above.
           label += ` <span style="opacity:.7;font-style:italic;` +
                    `color:#9ec5e8">(?)</span>`;
-        } else if (n === "Fortune Teller" && poolState.ft_red_herring_role) {
-          label += ` <span style="opacity:.7;font-style:italic">` +
-                   `(${escapeHtml(poolState.ft_red_herring_role)})</span>`;
-        } else if (n === "Washerwoman" && poolState.washerwoman_townsfolk_role) {
-          label += ` <span style="opacity:.7;font-style:italic">` +
-                   `(${escapeHtml(poolState.washerwoman_townsfolk_role)})</span>`;
         }
         html.push(`<div class="pool-row"><span>${label}</span></div>`);
       }

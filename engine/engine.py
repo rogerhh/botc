@@ -1952,6 +1952,12 @@ class Engine:
                 "demon_player_names": [p.name for p in demons],
                 "minion_player_names": [p.name for p in minions],
                 "minion_player_ids": [p.id for p in minions],
+                "render": {
+                    "tokens": [
+                        {"label": "THIS IS THE DEMON",
+                         "body": demon_names},
+                    ],
+                },
             },
         ))
 
@@ -2090,6 +2096,17 @@ class Engine:
                     "stage": "info",
                     "minion_player_names": [p.name for p in minions],
                     "bluff_characters": list(chosen_bluffs),
+                    "render": {
+                        "tokens": (
+                            ([{"label": "THESE ARE YOUR MINIONS",
+                               "body": minion_names}]
+                             if minion_names and minion_names != "(none)"
+                             else [])
+                            + ([{"label": "THESE CHARACTERS ARE NOT IN PLAY",
+                                 "body": ", ".join(chosen_bluffs)}]
+                               if chosen_bluffs else [])
+                        ),
+                    },
                 },
             ))
 
@@ -2151,6 +2168,12 @@ class Engine:
                     "stage": "info",
                     "reveal": "demon_role",
                     "demon_character": demon_name,
+                    "render": {
+                        "tokens": [{
+                            "label": "YOU ARE",
+                            "body": "THE " + demon_name.upper(),
+                        }],
+                    },
                 },
             ))
 
@@ -3535,11 +3558,42 @@ class Engine:
             # Replaces the bespoke top-level keys above for new code;
             # the named keys are kept for backward compat.
             "setup_picks_by_role": self._setup_picks_by_role(),
+            # First per-character readiness blocker, or null. Used by
+            # the UI's Start Game button — replaces the duplicated
+            # _validateSetupTokens rules in JS.
+            "setup_validation_blocker": self.setup_validation_blocker(),
             # Back-button affordance: the UI lights the button up only
             # while there is at least one checkpoint to return to.
             "history_size": self.history_size(),
             "completed_step_index": self._completed_step_index,
         }
+
+    def setup_validation_blocker(self) -> Optional[str]:
+        """First per-character setup-readiness blocker, or None.
+
+        Generic walk over every seated character's
+        :meth:`Character.setup_blocker`. The UI uses this to gate the
+        Start Game button without duplicating the engine's rules.
+        Returns ``None`` while we're not in SETUP phase (game already
+        running has nothing to validate).
+        """
+        if self._phase is not Phase.SETUP:
+            return None
+        for p in self._players:
+            char = getattr(p, "character", None)
+            if char is None:
+                continue
+            try:
+                blocker = char.setup_blocker(self)
+            except Exception as exc:  # pragma: no cover (defensive)
+                self.log(
+                    f"setup_blocker crashed in {type(char).__name__}: "
+                    f"{exc!r}"
+                )
+                continue
+            if blocker:
+                return blocker
+        return None
 
     def _setup_picks_by_role(self) -> Dict[str, Dict[str, str]]:
         """Snapshot view of every setup pick currently on the pool,

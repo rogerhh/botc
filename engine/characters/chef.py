@@ -150,6 +150,9 @@ class Chef(Character):
                     "character": self.name,
                     "step": "information",
                     "stage": "info",
+                    "render": {
+                        "tokens": [{"label": "", "body": info_text}],
+                    },
                 },
             )
         )

@@ -260,6 +260,50 @@ class Character:
         """
         return {}
 
+    def setup_blocker(
+        self, engine: "Engine"
+    ) -> "Optional[str]":
+        """Per-character readiness check for the Start Game button.
+
+        Returns a short human-readable reason why this character isn't
+        ready to start the game (e.g. "Drunk fake unset",
+        "Washerwoman wrong invalid"), or ``None`` when this seat is
+        ready. Called during Setup phase; the engine collects the
+        first non-None contribution across every seated character
+        and surfaces it in the snapshot as
+        ``setup_validation_blocker``.
+
+        Replaces the UI-side ``_validateSetupTokens`` logic that
+        duplicated engine rules. Adding a new role with new
+        prerequisites is a one-method override.
+
+        Default: walk this class' ``setup_picks`` and report any slot
+        whose value is missing or not in the current pool. Subclasses
+        with stricter rules (Drunk's strict-true Townsfolk; the
+        Librarian's "0 Outsiders" reading where the slot is allowed
+        to be empty) override.
+        """
+        if self.player is None:
+            return None
+        pool_names = set(engine.pool.list())
+        for spec in getattr(self.__class__, "setup_picks", ()) or ():
+            slot = spec.get("slot", "?")
+            getter_name = spec.get("getter")
+            if not getter_name:
+                continue
+            getter = getattr(engine.pool, getter_name, None)
+            if getter is None:
+                continue
+            value = getter()
+            if not value:
+                return f"{self.name} {slot} unset."
+            if value not in pool_names:
+                # Check fakery — the Drunk's fake TF is the one slot
+                # whose value is *outside* the pool by design.
+                if not spec.get("triggers_seat_swap"):
+                    return f"{self.name} {slot} invalid."
+        return None
+
     def absorb_setup_data(
         self, engine: "Engine", data: "dict"
     ) -> None:

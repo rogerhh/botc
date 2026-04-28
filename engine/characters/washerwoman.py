@@ -108,6 +108,26 @@ class Washerwoman(Character):
         # *role* of the WRONG player the WW will be pointed at.
         self._chosen_wrong: Optional[str] = None
 
+    def setup_blocker(self, engine: "Engine") -> "str | None":
+        if self.player is None:
+            return None
+        pool_names = set(engine.pool.list())
+        seen = engine.pool.washerwoman_townsfolk()
+        wrong = engine.pool.washerwoman_wrong()
+        if not seen:
+            return "Washerwoman townsfolk unset."
+        if seen not in pool_names or seen == self.name:
+            return "Washerwoman townsfolk invalid."
+        if not wrong:
+            return "Washerwoman wrong unset."
+        if (
+            wrong not in pool_names
+            or wrong == self.name
+            or wrong == seen
+        ):
+            return "Washerwoman wrong invalid."
+        return None
+
     def absorb_setup_data(self, engine: "Engine", data: dict) -> None:
         """Pre-set seen-Townsfolk + WRONG from UI setup data."""
         super().absorb_setup_data(engine, data)
@@ -489,6 +509,13 @@ class Washerwoman(Character):
                     "character": self.name,
                     "step": "information",
                     "stage": "info",
+                    "render": {
+                        "tokens": [{
+                            "label": "ONE OF THESE IS THE "
+                                + chosen_char_name.upper(),
+                            "body": ", ".join(p.name for p in chosen_players),
+                        }],
+                    },
                 },
             )
         )

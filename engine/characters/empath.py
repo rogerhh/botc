@@ -173,6 +173,13 @@ class Empath(Character):
                     "character": self.name,
                     "step": "information",
                     "stage": "info",
+                    # Render directive for the UI's generic info-token
+                    # renderer. Empath shows just the sentence (no
+                    # separate big-digit token); ``label=""`` tells the
+                    # renderer to skip the label slot.
+                    "render": {
+                        "tokens": [{"label": "", "body": info_text}],
+                    },
                 },
             )
         )

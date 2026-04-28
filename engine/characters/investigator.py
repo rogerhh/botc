@@ -99,6 +99,26 @@ class Investigator(Character):
         self._chosen_minion: Optional[str] = None
         self._chosen_wrong: Optional[str] = None
 
+    def setup_blocker(self, engine: "Engine") -> "str | None":
+        if self.player is None:
+            return None
+        pool_names = set(engine.pool.list())
+        seen = engine.pool.investigator_minion()
+        wrong = engine.pool.investigator_wrong()
+        if not seen:
+            return "Investigator minion unset."
+        if seen not in pool_names:
+            return "Investigator minion invalid."
+        if not wrong:
+            return "Investigator wrong unset."
+        if (
+            wrong not in pool_names
+            or wrong == self.name
+            or wrong == seen
+        ):
+            return "Investigator wrong invalid."
+        return None
+
     def absorb_setup_data(self, engine: "Engine", data: dict) -> None:
         """Pre-set seen-Minion + WRONG from UI setup data."""
         super().absorb_setup_data(engine, data)
@@ -291,6 +311,9 @@ class Investigator(Character):
                     "step": "information",
                     "stage": "info",
                     "shown_count": 0,
+                    "render": {
+                        "tokens": [{"label": "0", "body": info_text}],
+                    },
                 },
             )
         )
@@ -527,6 +550,13 @@ class Investigator(Character):
                     "character": self.name,
                     "step": "information",
                     "stage": "info",
+                    "render": {
+                        "tokens": [{
+                            "label": "ONE OF THESE IS THE "
+                                + chosen_char_name.upper(),
+                            "body": ", ".join(p.name for p in chosen_players),
+                        }],
+                    },
                 },
             )
         )

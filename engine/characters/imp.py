@@ -347,6 +347,9 @@ class Imp(Character):
                 "target_player_name": new_imp.name,
                 "reveal": "demon_role",
                 "demon_character": "Imp",
+                "render": {
+                    "tokens": [{"label": "YOU ARE", "body": "THE IMP"}],
+                },
             },
         ))
 

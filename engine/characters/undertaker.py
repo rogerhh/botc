@@ -190,6 +190,12 @@ class Undertaker(Character):
                     "character": self.name,
                     "step": "information",
                     "stage": "info",
+                    "render": {
+                        "tokens": [{
+                            "label": shown.upper(),
+                            "body": self._last_executed.name,
+                        }],
+                    },
                 },
             )
         )

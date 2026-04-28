@@ -103,6 +103,39 @@ class Librarian(Character):
         self._chosen_outsider: Optional[str] = None
         self._chosen_wrong: Optional[str] = None
 
+    def setup_blocker(self, engine: "Engine") -> "str | None":
+        """The "0 Outsiders" reading is allowed: when no Outsider is
+        in the pool, the seen slot is permitted to be empty (and so is
+        WRONG). Otherwise both slots must be set and valid.
+        """
+        from engine import script as script_data
+        from engine.enums import CharType
+        if self.player is None:
+            return None
+        pool_names = set(engine.pool.list())
+        seen = engine.pool.librarian_outsider()
+        wrong = engine.pool.librarian_wrong()
+        any_outsider_in_pool = any(
+            (spec := script_data.SCRIPT_BY_NAME.get(n)) is not None
+            and spec.char_type is CharType.OUTSIDER
+            for n in pool_names
+        )
+        if not seen:
+            if any_outsider_in_pool:
+                return "Librarian outsider unset."
+            return None  # 0-Outsiders reading; both slots empty by design
+        if seen not in pool_names:
+            return "Librarian outsider invalid."
+        if not wrong:
+            return "Librarian wrong unset."
+        if (
+            wrong not in pool_names
+            or wrong == self.name
+            or wrong == seen
+        ):
+            return "Librarian wrong invalid."
+        return None
+
     def absorb_setup_data(self, engine: "Engine", data: dict) -> None:
         """Pre-set seen-Outsider + WRONG from UI setup data."""
         super().absorb_setup_data(engine, data)
@@ -160,6 +193,12 @@ class Librarian(Character):
                     "step": "information",
                     "stage": "info",
                     "shown_count": 0,
+                    "render": {
+                        "tokens": [{
+                            "label": "0",
+                            "body": info_text,
+                        }],
+                    },
                 },
             )
         )
@@ -633,6 +672,13 @@ class Librarian(Character):
                     "character": self.name,
                     "step": "information",
                     "stage": "info",
+                    "render": {
+                        "tokens": [{
+                            "label": "ONE OF THESE IS THE "
+                                + chosen_char_name.upper(),
+                            "body": ", ".join(p.name for p in chosen_players),
+                        }],
+                    },
                 },
             )
         )

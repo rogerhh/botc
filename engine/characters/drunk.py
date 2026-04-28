@@ -56,6 +56,24 @@ class Drunk(Character):
     # Seat-assignment hook.
     # ------------------------------------------------------------------
 
+    def setup_blocker(self, engine: "Engine") -> "str | None":
+        """The Drunk's pretend TF must exist on the script *and* be a
+        true Townsfolk *and* not already be in the bag.
+        """
+        from engine import script as script_data
+        from engine.enums import CharType
+        if self.player is None:
+            return None
+        fake = engine.pool.drunk_fake()
+        if not fake:
+            return "Drunk fake unset."
+        spec = script_data.SCRIPT_BY_NAME.get(fake)
+        if spec is None or spec.char_type is not CharType.TOWNSFOLK:
+            return "Drunk fake invalid."
+        if fake in engine.pool.list():
+            return "Drunk fake invalid."
+        return None
+
     def absorb_setup_data(self, engine: "Engine", data: dict) -> None:
         """Pre-set the impersonated TF from the UI's setup data."""
         super().absorb_setup_data(engine, data)

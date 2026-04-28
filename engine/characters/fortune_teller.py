@@ -355,6 +355,15 @@ class FortuneTeller(Character):
                     "character": self.name,
                     "step": "information",
                     "stage": "info",
+                    # YES / NO label, with the picked players' names
+                    # alongside as the body. Render directive avoids
+                    # the UI's character-name switch.
+                    "render": {
+                        "tokens": [{
+                            "label": "YES" if ans else "NO",
+                            "body": names_text,
+                        }],
+                    },
                 },
             )
         )

@@ -163,6 +163,13 @@ class Spy(Character):
                     "step": "grimoire",
                     "stage": "info",
                     "grimoire": snapshot,
+                    "render": {
+                        "tokens": [{
+                            "label": "GRIMOIRE",
+                            "body": "Study the grimoire on the "
+                                "Storyteller's screen.",
+                        }],
+                    },
                 },
             )
         )

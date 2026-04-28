@@ -1760,76 +1760,36 @@
     reapplyChairSelection();
   }
 
-  // The buildInfoTokens function from desktop, ported.
+  // Generic info-token renderer driven by ``meta.render`` from the
+  // engine. Mirrors the desktop UI; both sides consume the same
+  // engine-supplied directive so the UI has zero per-character
+  // knowledge.
   function buildInfoTokens(p, meta, namesById, description) {
-    const tokens = [];
     const namesFor = (ids) => (ids || [])
       .map(id => namesById.get(id) || ("Player " + id));
-    const stepKind = meta.step_kind;
-    const step = meta.step;
-    const character = meta.character;
 
-    if (stepKind === "minion_info") {
-      const demonNames = (meta.demon_player_names || []).join(", ");
-      if (demonNames) tokens.push({label: "THIS IS THE DEMON", body: demonNames});
-      return tokens;
-    }
-    if (stepKind === "demon_info") {
-      const minionNames = (meta.minion_player_names || []).join(", ");
-      const bluffs = (meta.bluff_characters || []).join(", ");
-      if (minionNames) tokens.push({label: "THESE ARE YOUR MINIONS", body: minionNames});
-      if (bluffs) tokens.push({label: "THESE CHARACTERS ARE NOT IN PLAY", body: bluffs});
-      return tokens;
-    }
-    if (stepKind === "grimoire" || step === "grimoire" || character === "Spy") {
-      tokens.push({
-        label: "GRIMOIRE",
-        body: "Study the grimoire on the Storyteller's screen.",
-      });
-      return tokens;
+    const render = meta && meta.render;
+    if (render && Array.isArray(render.tokens) && render.tokens.length) {
+      return render.tokens.map(t => ({
+        label: t && t.label != null ? String(t.label) : "",
+        body:  t && t.body  != null ? String(t.body)  : "",
+      }));
     }
 
+    // Fallback (defensive — every real info prompt now ships
+    // meta.render).
     const chars = p.highlight_characters || [];
     const playerNames = namesFor(p.highlight_player_ids).join(", ");
-
-    if (character === "Librarian" && chars.length === 0
-        && (!p.highlight_player_ids || p.highlight_player_ids.length === 0)) {
-      tokens.push({label: "0", body: "There are no Outsiders in play."});
-      return tokens;
-    }
-    if (character === "Fortune Teller") {
-      const yes = /^\s*Yes/i.test(p.text || "");
-      tokens.push({label: yes ? "YES" : "NO", body: playerNames});
-      return tokens;
-    }
-    if (character === "Chef" || character === "Empath") {
-      tokens.push({label: "", body: p.text || ""});
-      return tokens;
-    }
-    if (chars.length > 0
-        && (character === "Washerwoman" || character === "Librarian"
-            || character === "Investigator")) {
-      const charName = chars.map(c => String(c).toUpperCase()).join(" / ");
-      tokens.push({
-        label: "ONE OF THESE IS THE " + charName,
-        body: playerNames || "",
-      });
-      return tokens;
-    }
-    if (meta.reveal === "demon_role") {
-      const demonName = String(meta.demon_character || "Imp").toUpperCase();
-      tokens.push({label: "YOU ARE", body: "THE " + demonName});
-      return tokens;
-    }
     if (chars.length > 0) {
       const charLabel = chars.map(c => String(c).toUpperCase()).join(" / ");
-      tokens.push({label: charLabel, body: playerNames || ""});
-      return tokens;
+      return [{label: charLabel, body: playerNames || ""}];
     }
     let bodyText = p.text || "";
     if (bodyText === description) bodyText = "";
-    tokens.push({label: (character || "INFO").toUpperCase(), body: bodyText});
-    return tokens;
+    return [{
+      label: ((meta && meta.character) || "INFO").toUpperCase(),
+      body: bodyText,
+    }];
   }
 
   // -----------------------------------------------------------------

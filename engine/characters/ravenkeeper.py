@@ -164,6 +164,12 @@ class Ravenkeeper(Character):
                     "character": self.name,
                     "step": "information",
                     "stage": "info",
+                    "render": {
+                        "tokens": [{
+                            "label": shown_char.upper(),
+                            "body": target.name,
+                        }],
+                    },
                 },
             )
         )
