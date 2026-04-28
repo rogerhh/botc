@@ -58,6 +58,20 @@ class Undertaker(Character):
         self._last_executed: Optional["Player"] = None
         self._last_executed_character: Optional[str] = None
 
+    def compute_reminder_tokens(self, engine: "Engine") -> "dict[str, list[int]]":
+        """Mark the today-executed seat with the DIED TODAY token.
+
+        Persists past the Undertaker's own ability state — the marker
+        tracks the executed seat regardless of whether the Undertaker
+        is still alive / sober.
+        """
+        if (
+            self._last_executed is None
+            or getattr(self._last_executed, "character", None) is None
+        ):
+            return {}
+        return {"undertaker_died_today": [self._last_executed.id]}
+
     def would_act_tonight(self, engine: "Engine", night_number: int) -> bool:
         if not super().would_act_tonight(engine, night_number):
             return False

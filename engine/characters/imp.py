@@ -81,6 +81,34 @@ class Imp(Character):
         {"name": 'DEAD', "icon": 'imp_dead.png'},
     ]
 
+    def compute_reminder_tokens(self, engine: "Engine") -> "dict[str, list[int]]":
+        """Demon-class reminder tokens.
+
+          * ``imp_dead``: every seat the Demon killed since dawn.
+            Uses the engine's transient ``_demon_killed_player_ids``,
+            populated when a DEMON_KILL lands and cleared at dawn.
+            Contributed once per Demon seat — even if multiple Demons
+            are seated (defensive), the merge is a set-union.
+          * ``scarlet_woman_is_demon``: any seat that was promoted
+            from Scarlet Woman to this Demon class. The Imp adopts
+            the marker so the UI grimoire knows the seat used to be
+            the SW. If this Imp's seat isn't in the promoted list
+            the contribution is empty for the marker.
+        """
+        out: "dict[str, list[int]]" = {}
+        ids = list(getattr(engine, "_demon_killed_player_ids", []) or [])
+        if ids:
+            out["imp_dead"] = list(ids)
+        sw_ids = list(getattr(engine, "_sw_promoted_player_ids", []) or [])
+        # Only contribute the SW marker for *this* seat — otherwise a
+        # script with multiple demon classes would have every seated
+        # demon claim every promoted seat. The merge below in the
+        # engine is a union so it's still safe, but the per-seat call
+        # is the right shape.
+        if self.player is not None and self.player.id in sw_ids:
+            out["scarlet_woman_is_demon"] = [self.player.id]
+        return out
+
     def ability(self, engine: "Engine", night_number: int) -> None:
         if night_number == 1 or self.player is None or self.player.dead:
             return

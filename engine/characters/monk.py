@@ -50,6 +50,19 @@ class Monk(Character):
         # snapshot before the Monk has chosen tonight.
         self._target = None
 
+    def compute_reminder_tokens(self, engine: "Engine") -> "dict[str, list[int]]":
+        """Place the SAFE token on the chosen target while protected."""
+        if (
+            self.player is None
+            or not self.player.has_ability
+            or self._target is None
+            or not getattr(self._target, "alive", False)
+            or not getattr(self._target, "protected_from_demon", False)
+            or getattr(self._target, "character", None) is None
+        ):
+            return {}
+        return {"monk_safe": [self._target.id]}
+
     def reaction(self, event: "Event", engine: "Engine") -> None:
         # Reset the surfaced target at the start of every night so the
         # SAFE token disappears alongside the engine's reset of

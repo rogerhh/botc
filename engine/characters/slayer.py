@@ -55,6 +55,16 @@ class Slayer(Character):
         super().__init__(player)
         self._used: bool = False
 
+    def compute_reminder_tokens(self, engine: "Engine") -> "dict[str, list[int]]":
+        """Persistent NO ABILITY marker once the Slayer has used their shot.
+
+        Survives the Slayer's own death — the marker tracks the seat,
+        not the source's current ability state.
+        """
+        if self.player is None or not self._used:
+            return {}
+        return {"slayer_no_ability": [self.player.id]}
+
     def daytime_ability(self, engine: "Engine") -> None:
         if self.player is None or self.player.dead:
             return

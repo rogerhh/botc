@@ -47,6 +47,18 @@ class Poisoner(Character):
         # at the next dusk (== before the Poisoner picks a new target).
         self._last_target: Optional["Player"] = None
 
+    def compute_reminder_tokens(self, engine: "Engine") -> "dict[str, list[int]]":
+        """Place the POISONED token on the currently-poisoned target."""
+        if (
+            self.player is None
+            or not self.player.has_ability
+            or self._last_target is None
+            or getattr(self._last_target, "character", None) is None
+            or not self._last_target.poisoned
+        ):
+            return {}
+        return {"poisoned": [self._last_target.id]}
+
     def ability(self, engine: "Engine", night_number: int) -> None:
         if self.player is None or self.player.dead:
             return

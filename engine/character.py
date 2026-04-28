@@ -168,6 +168,30 @@ class Character:
         """
         return None
 
+    def compute_reminder_tokens(
+        self, engine: "Engine"
+    ) -> "dict[str, list[int]]":
+        """Return the runtime reminder tokens this seat contributes.
+
+        Returns a dict mapping ``token_kind`` -> list of seat
+        ``player_id``s the token currently sits on. The engine merges
+        these contributions across every seated character (and every
+        impersonated perceived character) into the per-seat token map
+        consumed by ``chair_views``.
+
+        This is the primary scalability lever for reminder tokens:
+        each character class owns the rule for which token its
+        ability places, when it is visible, and which seats it sits
+        on. The engine has no character-name knowledge at all.
+
+        Default: no tokens. Override on any character that places a
+        reminder token tied to its current state (Poisoner's POISONED,
+        Butler's MASTER, Monk's SAFE, Slayer's NO ABILITY, Virgin's
+        NO ABILITY, Undertaker's DIED TODAY, Demon's DEAD reminder,
+        Scarlet Woman's IS THE DEMON, …).
+        """
+        return {}
+
     def on_assign_to_seat(self, engine: "Engine") -> None:
         """Run when this character is assigned to a seat.
 

@@ -47,6 +47,12 @@ class Virgin(Character):
         # Tracks whether the first-nomination trigger has been spent.
         self._triggered: bool = False
 
+    def compute_reminder_tokens(self, engine: "Engine") -> "dict[str, list[int]]":
+        """Persistent NO ABILITY marker once the trigger has fired."""
+        if self.player is None or not self._triggered:
+            return {}
+        return {"virgin_no_ability": [self.player.id]}
+
     def reaction(self, event: Event, engine: "Engine") -> None:
         if self.player is None:
             return super().reaction(event, engine)

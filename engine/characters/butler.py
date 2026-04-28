@@ -56,6 +56,17 @@ class Butler(Character):
     def master(self) -> Optional["Player"]:
         return self._master
 
+    def compute_reminder_tokens(self, engine: "Engine") -> "dict[str, list[int]]":
+        """Place the MASTER token on the chosen Master's seat."""
+        if (
+            self.player is None
+            or not self.player.has_ability
+            or self._master is None
+            or getattr(self._master, "character", None) is None
+        ):
+            return {}
+        return {"butler_master": [self._master.id]}
+
     def ability(self, engine: "Engine", night_number: int) -> None:
         if self.player is None or self.player.dead:
             return

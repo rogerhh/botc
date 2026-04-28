@@ -3348,69 +3348,48 @@ class Engine:
         ("investigator_wrong",    "investigator_wrong"),
     )
 
-    def _per_seat_tokens(self) -> Dict[str, Any]:
+    def _per_seat_tokens(self) -> Dict[str, List[int]]:
         """Per-seat (player_id) reminder-token presence.
 
-        Walks every seated player and returns each runtime token kind
-        as either a single ``player_id`` (singleton tokens) or a list
-        of ``player_id``s (multi-target tokens). Absent tokens come
-        back as ``None`` / ``[]``.
+        Generic collector: every seated character (and every
+        impersonated perceived character) contributes via
+        :meth:`Character.compute_reminder_tokens`. The engine has no
+        character-name knowledge here — adding a new role with a new
+        token kind requires no engine edit.
+
+        Returns a dict ``{token_kind: [player_id, ...]}``. The merge
+        across contributors is a deduped concatenation so multiple
+        seats can hold the same kind of token.
         """
-        butler_master: Optional[int] = None
-        monk_safe: Optional[int] = None
-        poisoned: Optional[int] = None
-        undertaker_died_today: Optional[int] = None
-        slayer_no_ability: List[int] = []
-        virgin_no_ability: List[int] = []
+        merged: Dict[str, List[int]] = {}
+
+        def _absorb(contributor: "Character") -> None:
+            try:
+                contrib = contributor.compute_reminder_tokens(self) or {}
+            except Exception as exc:  # pragma: no cover (defensive)
+                self.log(
+                    f"compute_reminder_tokens crashed in "
+                    f"{type(contributor).__name__}: {exc!r}"
+                )
+                return
+            for kind, ids in contrib.items():
+                if not ids:
+                    continue
+                bucket = merged.setdefault(kind, [])
+                for pid in ids:
+                    if pid not in bucket:
+                        bucket.append(pid)
 
         for p in self.players:
             char = getattr(p, "character", None)
             if char is None:
                 continue
-            # Source-character tokens gate on ``has_ability`` (alive,
-            # sober, healthy). Spent / persistent tokens below do not.
-            if p.has_ability:
-                if char.name == "Poisoner":
-                    target = getattr(char, "_last_target", None)
-                    if (target is not None
-                            and getattr(target, "character", None) is not None
-                            and target.poisoned):
-                        poisoned = target.id
-                elif char.name == "Butler":
-                    master = getattr(char, "_master", None)
-                    if (master is not None
-                            and getattr(master, "character", None) is not None):
-                        butler_master = master.id
-                elif char.name == "Monk":
-                    target = getattr(char, "_target", None)
-                    if (target is not None
-                            and target.alive
-                            and getattr(target, "protected_from_demon", False)
-                            and getattr(target, "character", None) is not None):
-                        monk_safe = target.id
-            # Spent / persistent — Slayer/Virgin no-ability tokens
-            # survive death; Undertaker DIED TODAY tracks the executed
-            # seat regardless of the Undertaker's own state.
-            if char.name == "Slayer" and getattr(char, "_used", False):
-                slayer_no_ability.append(p.id)
-            elif char.name == "Virgin" and getattr(char, "_triggered", False):
-                virgin_no_ability.append(p.id)
-            elif char.name == "Undertaker":
-                executed = getattr(char, "_last_executed", None)
-                if (executed is not None
-                        and getattr(executed, "character", None) is not None):
-                    undertaker_died_today = executed.id
+            _absorb(char)
+            perceived = char.acting_perceived_character()
+            if perceived is not None:
+                _absorb(perceived)
 
-        return {
-            "butler_master":          butler_master,
-            "monk_safe":              monk_safe,
-            "poisoned":               poisoned,
-            "imp_dead":               list(getattr(self, "_demon_killed_player_ids", []) or []),
-            "undertaker_died_today":  undertaker_died_today,
-            "scarlet_woman_is_demon": list(getattr(self, "_sw_promoted_player_ids", []) or []),
-            "slayer_no_ability":      slayer_no_ability,
-            "virgin_no_ability":      virgin_no_ability,
-        }
+        return merged
 
     def chair_views(self) -> List[Dict[str, Any]]:
         """Enriched chair dicts for the UI.
@@ -3452,22 +3431,17 @@ class Engine:
             pid = c.get("player_id")
             kinds: List[str] = []
 
-            # IS THE DRUNK token sits on the Drunk's own chair.
-            if char == "Drunk":
-                kinds.append("drunk")
-
             # Setup tokens key off chair.character matching the slot.
             for kind, role in setup_roles.items():
                 if role and char == role:
                     kinds.append(kind)
 
-            # Runtime per-seat tokens key off chair.player_id.
+            # Runtime per-seat tokens key off chair.player_id. The
+            # ``seat`` dict is now ``{kind: [player_id, ...]}`` for
+            # every kind across every contributor.
             if pid is not None:
                 for kind, holders in seat.items():
-                    if isinstance(holders, list):
-                        if pid in holders:
-                            kinds.append(kind)
-                    elif holders == pid:
+                    if pid in holders:
                         kinds.append(kind)
 
             display = char

@@ -42,6 +42,12 @@ class Drunk(Character):
     # Seat-assignment hook.
     # ------------------------------------------------------------------
 
+    def compute_reminder_tokens(self, engine: "Engine") -> "dict[str, list[int]]":
+        """Place the IS THE DRUNK token on the Drunk's own seat."""
+        if self.player is None:
+            return {}
+        return {"drunk": [self.player.id]}
+
     def on_assign_to_seat(self, engine: "Engine") -> None:
         """Mark the Drunk seat drunk; seed the perceived-TF placeholder.
 
