@@ -5930,26 +5930,30 @@
         const cls = ["char-item"];
         if (has) cls.push("in-pool");
         if (isFake) cls.push("drunk-fake");
-        // Annotate special rows: Drunk shows its fake role, FT shows
-        // its (auto-picked) red herring, WW / Librarian / Investigator
-        // each show their (auto-picked) seen-role. Same
-        // italic-parenthetical style.
+        // Annotate special rows with their setup picks (e.g.
+        // "Drunk (Empath)", "Washerwoman (Soldier)"). Driven by the
+        // engine's ``setup_picks_by_role`` map — no per-character
+        // branches in the UI. We pick the *first* declared slot
+        // value as the parenthetical so each role shows its primary
+        // pick (Drunk's fake TF, FT's red herring, WW/Lib/Inv's
+        // seen-role); roles with multiple slots (WW WRONG, etc.)
+        // could be extended to show more if useful.
         let annotated = escapeHtml(name);
-        if (name === "Drunk" && has && drunkFake) {
-          annotated += ` <span style="opacity:.75;font-style:italic">` +
-                       `(${escapeHtml(drunkFake)})</span>`;
-        } else if (name === "Fortune Teller" && has && ftRedHerring) {
-          annotated += ` <span style="opacity:.75;font-style:italic">` +
-                       `(${escapeHtml(ftRedHerring)})</span>`;
-        } else if (name === "Washerwoman" && has && wwTownsfolk) {
-          annotated += ` <span style="opacity:.75;font-style:italic">` +
-                       `(${escapeHtml(wwTownsfolk)})</span>`;
-        } else if (name === "Librarian" && has && libOutsider) {
-          annotated += ` <span style="opacity:.75;font-style:italic">` +
-                       `(${escapeHtml(libOutsider)})</span>`;
-        } else if (name === "Investigator" && has && invMinion) {
-          annotated += ` <span style="opacity:.75;font-style:italic">` +
-                       `(${escapeHtml(invMinion)})</span>`;
+        const picks = (poolState.setup_picks_by_role || {})[name] || {};
+        if (has) {
+          // Slot priority: prefer the "headline" slot a player would
+          // recognize. The order is the order Character.setup_picks
+          // declares them; the first non-empty value wins.
+          const slotPriority = ["fake", "red_herring", "townsfolk",
+                                "outsider", "minion"];
+          let pickValue = null;
+          for (const slot of slotPriority) {
+            if (picks[slot]) { pickValue = picks[slot]; break; }
+          }
+          if (pickValue) {
+            annotated += ` <span style="opacity:.75;font-style:italic">` +
+                         `(${escapeHtml(pickValue)})</span>`;
+          }
         }
         const indicator = isFake ? "\u2606" : (has ? "\u2713" : "+");
         html.push(

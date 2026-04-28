@@ -2241,10 +2241,6 @@ class Engine:
                 continue
             if p.character.acts_on_night(night_number):
                 chars.append(p.character)
-            elif p.character.name == "Ravenkeeper" and night_number >= 2:
-                # Ravenkeeper has other_night_order=45 already, so it's
-                # included by the check above.
-                pass
             perceived = p.character.acting_perceived_character()
             if perceived is not None and perceived.acts_on_night(night_number):
                 chars.append(perceived)
@@ -3532,11 +3528,39 @@ class Engine:
             "washerwoman_townsfolk": self.pool.washerwoman_townsfolk(),
             "washerwoman_wrong": self.pool.washerwoman_wrong(),
             "selected_preset": self.selected_preset_name,
+            # Setup-pick map: ``{owner_role: {slot: value}}`` derived
+            # from the registry, so the UI can render parenthetical
+            # annotations (e.g. "Drunk (Empath)", "Washerwoman
+            # (Soldier)") generically without per-character branches.
+            # Replaces the bespoke top-level keys above for new code;
+            # the named keys are kept for backward compat.
+            "setup_picks_by_role": self._setup_picks_by_role(),
             # Back-button affordance: the UI lights the button up only
             # while there is at least one checkpoint to return to.
             "history_size": self.history_size(),
             "completed_step_index": self._completed_step_index,
         }
+
+    def _setup_picks_by_role(self) -> Dict[str, Dict[str, str]]:
+        """Snapshot view of every setup pick currently on the pool,
+        grouped by owner-role and indexed by slot name.
+
+        Driven entirely by ``Character.setup_picks`` declarations —
+        the engine has no character-name knowledge here.
+        """
+        out: Dict[str, Dict[str, str]] = {}
+        for kind, spec in self._setup_pick_registry().items():
+            owner = spec.get("owner_role")
+            slot = spec.get("slot")
+            getter_name = spec.get("getter")
+            if not (owner and slot and getter_name):
+                continue
+            getter = getattr(self.pool, getter_name, None)
+            value = getter() if getter else None
+            if value is None:
+                continue
+            out.setdefault(owner, {})[slot] = value
+        return out
 
     def player_view(self, player_id: int) -> dict:
         """What ONE player sees on their phone (no other characters revealed)."""

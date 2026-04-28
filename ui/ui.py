@@ -1824,6 +1824,12 @@ def _character_pool_snapshot() -> dict:
         "scarlet_woman_promoted_player_ids": list(sw_promoted_ids),
         "slayer_no_ability_player_ids": slayer_no_ability_player_ids,
         "virgin_no_ability_player_ids": virgin_no_ability_player_ids,
+        # Generic setup-pick map sourced from Character.setup_picks.
+        # ``{owner_role: {slot: value}}``. Lets the UI render
+        # parenthetical annotations (e.g. "Drunk (Empath)") without
+        # per-character branches; the named ``*_role`` keys above are
+        # kept for backward compatibility with existing UI code.
+        "setup_picks_by_role": ENGINE._setup_picks_by_role(),
     }
 
 
