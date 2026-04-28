@@ -310,6 +310,200 @@ This logic lives in the Character base class so subclasses do not have to
 re-implement it.
 
 
+### Registering As
+
+Several abilities care not about who a player *truly* is but about what
+that player **registers as** to the ability — what the rulebook calls
+"registration". The Spy registers as good, as a Townsfolk or Outsider.
+The Recluse registers as evil, as a Minion or Demon. Both can register
+*differently for each ability that asks*, at the Storyteller's discretion.
+
+Rather than centralising registration logic in the engine — and rather
+than each detection-side character special-casing the Spy and the
+Recluse — we model detection through three layered concepts on
+`Character`:
+
+```python
+class Character:
+    @classmethod
+    def registration_categories(cls) -> tuple[CharType, ...]:
+        """The set of char_types this class' registers_as can return.
+        Default: just (cls.char_type,). Spy widens to (TF, Outsider,
+        Minion); Recluse widens to (Outsider, Minion, Demon)."""
+
+    def registers_as(self, engine, the_check: Check) -> str:
+        """How this player registers for the given Check. Default:
+        return self.name. Spy / Recluse override to prompt the ST when
+        the check's outcome could depend on the registration choice."""
+
+    def check(self, engine, target, the_check: Check) -> bool:
+        """Run the_check against the target's registers_as. Returns
+        True iff the target's registered attribute is in the_check.passes."""
+```
+
+#### `Check` — the question being asked
+
+`engine.check.Check` is a small dataclass that captures *what* a
+detector wants to know:
+
+```python
+@dataclass(frozen=True)
+class Check:
+    attribute: str               # "name" | "char_type" | "alignment"
+    passes: tuple                # values that count as a pass
+    detector_name: str = ""      # for ST prompt text / audit
+    detector_player_id: int = -1 # ST UI alignment
+    extra_meta: dict = field(default_factory=dict)
+```
+
+A Check is *just data* — it has no per-Engine state. Detectors construct
+a Check, hand it to `self.check(engine, target, the_check)`, and the
+helper takes care of:
+
+  1. dispatching to `target.character.registers_as(engine, the_check)`,
+  2. resolving the registered name's `attribute` (name / char_type /
+     alignment) — using `engine.check.attribute_value` which understands
+     both real script characters and the inert Stubs (below),
+  3. comparing the value against `the_check.passes`.
+
+Two of the Check's helper methods drive the Spy / Recluse override:
+
+- `Check.could_register_as_pass(categories)` — could a registration in
+  any of `categories` produce a passing answer? (Used at *setup time*
+  for token eligibility.)
+- `Check.registration_matters(categories)` — does the override's choice
+  actually affect the result, or is every category a pass / every
+  category a fail? (Used by Spy / Recluse to decide whether to prompt
+  the ST. When the result is deterministic regardless of choice, the
+  default registration is used and no prompt fires.)
+
+#### Stubs — anonymous registrations
+
+`engine.characters.stubs` defines five inert `Character` subclasses
+that exist only to *carry registration metadata*:
+
+| Stub             | char_type   | stub_alignment |
+|------------------|-------------|----------------|
+| `TownsfolkStub`  | TOWNSFOLK   | GOOD           |
+| `OutsiderStub`   | OUTSIDER    | GOOD           |
+| `MinionStub`     | MINION      | EVIL           |
+| `GoodStub`       | TOWNSFOLK*  | GOOD           |
+| `EvilStub`       | MINION*     | EVIL           |
+
+\* GoodStub / EvilStub are alignment-only — `char_type` is set to a
+sensible default for callers that read it, but the *meaning* is the
+alignment.
+
+The stubs replace the older `NoneCharacter` slot-filler. Two uses:
+
+  1. **`registers_as` shrunk eligible lists.** When a check inspects
+     `alignment` only, the Spy override offers `[GoodStub, "Spy"]`
+     instead of every Townsfolk and Outsider name on the script —
+     a 2-button prompt, not a 17-option dropdown. When a check
+     inspects `char_type`, the override offers `[TownsfolkStub,
+     OutsiderStub, "Spy"]`. The Recluse override is symmetric —
+     `[EvilStub, "Recluse"]` for alignment, `[MinionStub, ...Demons,
+     "Recluse"]` for char_type. Only `"name"`-attribute checks
+     surface the full role list.
+  2. **Setup-time placeholder slots.** When the Drunk impersonates
+     the Fortune Teller, the FT's red-herring slot needs to be
+     filled with *something* — but the impersonated FT has no
+     ability, so the herring has no real meaning. The setup helper
+     fills the slot with `GoodStub` ("some good player") rather
+     than asking the Storyteller. Any future role with a similar
+     "dummy slot" need uses the appropriate stub.
+
+The engine recognises stub names via
+`engine.characters.stubs.is_stub_name(name)` — they're not part of
+any script and never appear in the bag, in
+`in_play_character_names`, or anywhere setup-counts logic runs.
+
+#### Setup-time eligibility — `Character.could_pass_check`
+
+Token-application (the ST drops a WW seen-TF token, an INV seen-Minion
+token, the FT red-herring token, …) uses the Check abstraction to
+decide which chairs are valid drop targets:
+
+```python
+@classmethod
+def could_pass_check(cls, the_check: Check) -> bool:
+    """True iff this class' registration_categories overlaps the
+    char_types accepted by the_check. Static — no prompt fires."""
+    return the_check.could_register_as_pass(cls.registration_categories())
+```
+
+The engine wraps this in `_role_could_pass(name, the_check)`. The four
+seat-eligibility helpers are now:
+
+  * `_townsfolk_in_play(name)` — `Check(char_type, (TOWNSFOLK,))`. A
+    chair holding the Spy passes (Spy can register as a Townsfolk).
+  * `_outsider_in_play(name)` — `Check(char_type, (OUTSIDER,))`. The
+    Recluse passes (it *is* an Outsider); the Spy passes (it can
+    register as one).
+  * `_minion_in_play(name)` — `Check(char_type, (MINION,))`. The
+    Recluse passes (can register as a Minion).
+  * `_good_in_play(name)` — `Check(char_type, (TOWNSFOLK, OUTSIDER,))`.
+
+The Drunk token is the exception — it uses a *strict-true*
+`_true_townsfolk(name)` because the Drunk's perceived TF must be a
+real Townsfolk role, not a misregistered one.
+
+#### When detectors call `check`
+
+Every detection-style ability constructs a Check and calls
+`self.check(engine, target, the_check)`. The engine itself never
+constructs Checks behind the scenes — each character is responsible
+for the Checks it makes.
+
+| Detector       | Check                                                   |
+|----------------|---------------------------------------------------------|
+| Washerwoman    | `Check("name", (chosen_TF,))` — find the seen player    |
+| Librarian      | `Check("name", (chosen_Outsider,))`                     |
+| Investigator   | `Check("name", (chosen_Minion,))`                       |
+| Chef           | `Check("alignment", (EVIL,))` per ring neighbour pair   |
+| Empath         | `Check("alignment", (EVIL,))` per alive neighbour       |
+| Fortune Teller | `Check("char_type", (DEMON,))` per picked player        |
+| Undertaker     | `Check("name", all_character_names)` on executed player |
+| Ravenkeeper    | `Check("name", all_character_names)` on chosen target   |
+| Slayer         | `Check("char_type", (DEMON,))` on slayed target         |
+| Virgin         | `Check("char_type", (TOWNSFOLK,))` on nominator         |
+
+Setup-time slots like the Washerwoman's seen-Townsfolk and WRONG token
+are not authoritative — they are storyteller-supplied *defaults* for
+the night-1 prompts. At ability time the engine iterates the seated
+players and runs the Check on each; the seen pair is the players whose
+registration passes. This is what the project rules call "the
+seen/WRONG state just tells the character to check those players at
+ability time".
+
+#### Drunk/poisoned and registration
+
+Drunk/poisoned detectors run their wrong-info pre-fill (per
+`CLAUDE.md`) **on top of** whatever `registers_as` returned. The
+registration call still happens — the Spy or Recluse may still
+misregister to the drunk/poisoned detector — but the engine then
+overwrites the result with a Storyteller-pre-filled wrong default
+before the Information prompt goes to the player's phone.
+
+#### Why this design
+
+The Character / Check / Stub trio means:
+
+- Adding a new misregistration-style character is a one-file change:
+  override `registration_categories` + `registers_as` (with stub-aware
+  eligible lists). Spy and Recluse are both ~70 lines each.
+- Adding a new detection-style character is a one-file change:
+  construct a Check, call `self.check(engine, target, the_check)`. Spy
+  and Recluse handling is automatic — no per-detector special-cases,
+  no `find_spy_player` / `prompt_spy_register_as` / `find_recluse_…`
+  helpers anywhere.
+- The engine has zero knowledge of any specific character. Every
+  cross-character interaction is mediated through public methods on
+  `Character`. Setup-time eligibility shares the same machinery as
+  run-time detection — there is no duplicate "who's eligible for this
+  token?" logic.
+
+
 ### Script
 
 A `Script` carries:
@@ -470,14 +664,17 @@ Examples mapped onto the Trouble Brewing roster:
 - **Mayor** — reacts to Demon Resolution by Arbitrate-ing a redirect; reacts
   to DayEnd to check the alive-three / no-execution win condition.
 - **Drunk / Recluse / Saint / Butler** — Outsider behaviours largely live in
-  reactions: Drunk gets ability calls but suppresses effects; Recluse hooks
-  any "detect alignment" event to register evil; Saint reacts to its own
-  Execution by ending the game; Butler reacts to its own Vote intent by
-  checking master state.
+  reactions and hooks: Drunk gets ability calls but suppresses effects;
+  **Recluse** overrides `registers_as` so any detector whose categories
+  include Minion or Demon prompts the Storyteller; Saint reacts to its
+  own Execution by ending the game; Butler reacts to its own Vote
+  intent by checking master state.
 - **Poisoner** — every night Wakeup, Select, Resolution (toggle poisoned
   flag, scheduled to clear next dusk via a queued event).
 - **Spy** — every night Wakeup + ShowInformation that reveals the Grimoire;
-  reacts to detect events by Arbitrate-ing register-as choices.
+  overrides `registers_as` so detectors whose categories include
+  Townsfolk or Outsider prompt the Storyteller for the Spy's
+  per-ability registration.
 - **Scarlet Woman** — reacts to Demon Death by checking the alive-five
   threshold and emitting ChangeCharacter on itself.
 - **Baron** — Setup-time Resolution that swaps two Townsfolk slots for two
@@ -521,5 +718,42 @@ at NightEnd / DayEnd. Conditions:
 - Saint executed -> Evil wins.
 - Mayor's three-alive-no-execution condition -> Good wins.
 
-When end-of-game fires, the engine emits a GameOver event, the log is
-rendered as a transcript, and the UI moves to a recap screen.
+### Dawn-deferred announcement
+
+Per project rule, **the game can only end after a night, with the
+announcement at dawn**. So when one of the conditions above is
+satisfied the engine doesn't flip to FINISHED immediately — it
+records the result on `Engine.pending_winner` /
+`Engine.pending_win_reason` and emits a `win_pending` console entry.
+Play continues:
+
+- **Win triggered during the day** — players keep using abilities and
+  may keep nominating; `advance_to_night` still moves into NIGHT.
+  The night that follows is a *no-action* night: the storyteller
+  still sees the **Dusk** and **Dawn** preset announcements (so the
+  rhythm of the night is preserved), but every character ability,
+  Minion Info, Demon Info, the setup-action pass, and the
+  `NIGHT_START` / `NIGHT_END` event dispatches are all suppressed.
+  The next dawn finalizes the win.
+- **Win triggered during the night** — remaining preset steps for
+  abilities / Minion Info / Demon Info are skipped (Dusk/Dawn
+  announcements still run if they're still ahead in the sheet);
+  the night thread proceeds to `_auto_dawn`, which finalizes.
+- **Win triggered at dusk** (Mayor's three-alive-no-execution
+  condition) — same as the day case.
+
+`Engine._finalize_pending_win` is the single place that flips
+`phase` to FINISHED, copies the pending alignment/reason onto
+`winner`/`win_reason`, and emits the public `game_end` console event.
+It's called from both dawn paths (`advance_to_day` and `_auto_dawn`).
+`Engine._end_game(winner, reason)` is a thin convenience that parks
+the slots and immediately calls `_finalize_pending_win` — used by the
+storyteller's explicit "end game now" route.
+
+The first win condition to fire wins; subsequent ones are ignored, so
+e.g. a Saint execution that also drops the alive count to two still
+ends with "Evil wins — Saint" rather than "Evil wins — two players".
+The snapshot exposes both `winner`/`win_reason` (final) and
+`pending_winner`/`pending_win_reason` (parked) so the UI can show a
+"win pending — announced at dawn" banner during the intervening day
+and night.

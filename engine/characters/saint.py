@@ -38,8 +38,13 @@ class Saint(Character):
         The Saint reaction fires *during* the execution event. The
         engine's ``execute_player`` already calls
         ``_check_win_conditions`` after dispatching the EXECUTION event,
-        so by ending the game here we override the default
+        so by registering the pending win here we override the default
         "Demon-still-alive → no win yet" check.
+
+        Per the project rule the win is recorded as *pending*: the day
+        plays on (players may keep using abilities and nominating),
+        the next night runs no actions, and the announcement is made
+        at dawn.
         """
         if self.player is None:
             return super().reaction(event, engine)
@@ -56,14 +61,26 @@ class Saint(Character):
         # the Saint losing the game (the ability triggers *as* they
         # die).
         if self.player.drunk or self.player.poisoned:
-            engine.log(
-                f"Saint {self.player.name} executed while drunk/poisoned; "
-                f"loss condition does not trigger."
+            engine.log_reaction(
+                "Saint",
+                (
+                    f"{self.player.name} executed while drunk/poisoned; "
+                    f"loss condition does not trigger."
+                ),
+                target=self.player,
+                trigger="execution",
+                effect="no_loss_drunk_or_poisoned",
             )
             return super().reaction(event, engine)
-        engine.log(
-            f"Saint {self.player.name} executed — evil wins."
+        engine.log_reaction(
+            "Saint",
+            f"{self.player.name} executed — evil wins (pending).",
+            target=self.player,
+            trigger="execution",
+            effect="evil_win_pending",
         )
-        # End-game directly. Engine state is already FINISHED-eligible.
-        engine._end_game(Alignment.EVIL, "The Saint was executed.")
+        # Park the win as pending; the next dawn finalizes it.
+        engine._register_pending_win(
+            Alignment.EVIL, "The Saint was executed."
+        )
         return super().reaction(event, engine)

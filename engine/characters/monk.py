@@ -41,6 +41,24 @@ class Monk(Character):
         {"name": 'SAFE', "icon": 'monk_safe.png'},
     ]
 
+    def __init__(self, player=None) -> None:
+        super().__init__(player)
+        # Most-recent player chosen by the Monk this night. Surfaced
+        # to the UI grimoire so the SAFE reminder token can be drawn
+        # on the chosen seat. Cleared at NIGHT_START (see ``reaction``)
+        # so a stale pick from a previous night doesn't leak into the
+        # snapshot before the Monk has chosen tonight.
+        self._target = None
+
+    def reaction(self, event: "Event", engine: "Engine") -> None:
+        # Reset the surfaced target at the start of every night so the
+        # SAFE token disappears alongside the engine's reset of
+        # ``protected_from_demon``. The Monk's ability re-populates
+        # ``_target`` once the storyteller picks tonight.
+        if event.type is EventType.NIGHT_START:
+            self._target = None
+        return super().reaction(event, engine)
+
     def ability(self, engine: "Engine", night_number: int) -> None:
         if night_number == 1 or self.player is None or self.player.dead:
             return
@@ -93,10 +111,16 @@ class Monk(Character):
         # them, etc.) but no real protection lands.
         if self.player.has_ability:
             target.protected_from_demon = True
+            self._target = target
             engine.log(
                 f"Monk {self.player.name} protects {target.name} tonight."
             )
         else:
+            # Drunk/poisoned Monk still records the picked target so
+            # storytellers can audit what was chosen, but the SAFE
+            # token is gated on ``protected_from_demon`` in the UI
+            # snapshot — so it won't render when the flag isn't set.
+            self._target = target
             engine.log(
                 f"Monk {self.player.name} is drunk/poisoned — "
                 f"{target.name} is NOT actually protected."

@@ -27,3 +27,26 @@ Storyteller can simply hit Next and the player gets bad info.
 This applies to every info character (Empath, Fortune Teller,
 Washerwoman, Librarian, Investigator, Chef, Undertaker, Ravenkeeper,
 etc.) and to any future info ability added to the script.
+
+## End-of-game announcement timing
+
+The game can only end **after a night, at dawn**. When the engine
+detects a winning condition it parks the result on
+`Engine.pending_winner` / `Engine.pending_win_reason` and keeps
+playing:
+
+- If the win triggers **during the day**, players may continue to use
+  abilities and nominate. `advance_to_night` still moves to night.
+- The **next night runs no abilities** — every character step,
+  Minion Info, Demon Info, the setup-action pass, and the
+  `NIGHT_START` / `NIGHT_END` event dispatches are all suppressed.
+  The storyteller still sees the **Dusk** and **Dawn** preset
+  announcements so the night has its normal rhythm.
+- The **win is announced at dawn**: `_finalize_pending_win` flips the
+  phase to FINISHED, copies the pending values onto `winner` /
+  `win_reason`, and emits the `game_end` console event.
+
+The first win condition to fire wins; subsequent triggers don't
+overwrite it. This applies to every win/loss condition (Demon
+killed, two players left, Saint executed, Mayor's
+three-alive-no-execution, etc.).

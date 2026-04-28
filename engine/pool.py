@@ -23,10 +23,44 @@ from __future__ import annotations
 
 import random
 import threading
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from engine import script as script_data
 from engine.enums import CharType
+
+
+def _registration_categories(name: str) -> Tuple[CharType, ...]:
+    """Return the ``registration_categories`` for a script role.
+
+    Spy / Recluse expand the set beyond their literal ``char_type``
+    (Spy may register as Townsfolk or Outsider; Recluse may register
+    as Minion or Demon). For all other roles this is just the role's
+    char_type.
+
+    Looks up the concrete :class:`Character` subclass via
+    :data:`CHARACTER_REGISTRY` when present; falls back to the script's
+    char_type otherwise. Returns an empty tuple for unknown names.
+    """
+    from engine.characters import CHARACTER_REGISTRY
+
+    cls = CHARACTER_REGISTRY.get(name)
+    if cls is not None:
+        return cls.registration_categories()
+    spec = script_data.SCRIPT_BY_NAME.get(name)
+    if spec is None:
+        return ()
+    return (spec.char_type,)
+
+
+def _can_register_as(name: str, char_type: CharType) -> bool:
+    """True iff a chair holding ``name`` could register as ``char_type``.
+
+    Used by the pool-side validators to decide whether an in-pool role
+    is a legitimate target for a seen-token slot. The Lib OUTSIDER
+    seen-slot, for example, accepts true Outsiders *and* the Spy
+    (whose registration_categories includes Outsider).
+    """
+    return char_type in _registration_categories(name)
 
 
 class CharacterPool:
@@ -49,6 +83,20 @@ class CharacterPool:
         self._librarian_wrong: Optional[str] = None
         self._investigator_minion: Optional[str] = None
         self._investigator_wrong: Optional[str] = None
+        self._lock = threading.Lock()
+
+    # ------------------------------------------------------------------
+    # Pickling support — the lock is not picklable so we drop it on save
+    # and rebuild it on restore.
+    # ------------------------------------------------------------------
+
+    def __getstate__(self) -> dict:
+        state = self.__dict__.copy()
+        state.pop("_lock", None)
+        return state
+
+    def __setstate__(self, state: dict) -> None:
+        self.__dict__.update(state)
         self._lock = threading.Lock()
 
     # ------------------------------------------------------------------
@@ -129,6 +177,32 @@ class CharacterPool:
                 is CharType.MINION)
         ]
 
+    # Roles eligible for the seen-token of an info character. Includes
+    # true holders of the relevant char_type AND any role whose
+    # ``registration_categories`` include that char_type (Spy for
+    # TF/Outsider, Recluse for Minion). The autofill pickers prefer the
+    # true holders so the common case stays "show a real role"; the Spy
+    # / Recluse fallback only fires when no true holder is in the pool
+    # (e.g. a Librarian on a board with no Outsiders but a Spy in play).
+
+    def _lib_seen_eligible(self) -> List[str]:
+        return [
+            n for n in self._names
+            if _can_register_as(n, CharType.OUTSIDER)
+        ]
+
+    def _ww_seen_eligible(self) -> List[str]:
+        return [
+            n for n in self._names
+            if _can_register_as(n, CharType.TOWNSFOLK)
+        ]
+
+    def _inv_seen_eligible(self) -> List[str]:
+        return [
+            n for n in self._names
+            if _can_register_as(n, CharType.MINION)
+        ]
+
     def _autofill_ft_red_herring(self) -> None:
         """Pick a red herring for the FT.
 
@@ -156,6 +230,12 @@ class CharacterPool:
     def _autofill_washerwoman_townsfolk(self) -> None:
         """Pick the seen-Townsfolk for the WW.
 
+        Prefers true Townsfolk in the pool; if none are available but
+        the Spy is in the pool (Spy can register as a Townsfolk), the
+        Spy carries the seen-Townsfolk token instead. With no eligible
+        chair the slot stays ``None`` (degenerate setup; the WW
+        ability has nothing to point at).
+
         Self-avoidance: if the slot is currently sitting on
         ``"Washerwoman"`` (a degenerate auto-pick from a moment when
         the WW was the only Townsfolk in the pool) and another
@@ -169,12 +249,19 @@ class CharacterPool:
             return
         townsfolk = self._townsfolk_in_pool()
         non_self = [n for n in townsfolk if n != "Washerwoman"]
+        # Prefer real Townsfolk; only fall back to Spy when no real
+        # Townsfolk other than the Washerwoman herself is available.
+        spy_fallback = ["Spy"] if "Spy" in self._names else []
         if self._washerwoman_townsfolk == "Washerwoman" and non_self:
             self._washerwoman_townsfolk = random.choice(non_self)
             return
-        if self._washerwoman_townsfolk in self._names:
+        if self._washerwoman_townsfolk in self._names and (
+            _can_register_as(
+                self._washerwoman_townsfolk, CharType.TOWNSFOLK
+            )
+        ):
             return
-        candidates = non_self or townsfolk
+        candidates = non_self or (townsfolk + spy_fallback) or spy_fallback
         self._washerwoman_townsfolk = (
             random.choice(candidates) if candidates else None
         )
@@ -202,40 +289,61 @@ class CharacterPool:
         pick one uniformly at random from the Outsiders in the pool.
         Caller must already hold self._lock.
 
-        If there are no Outsiders in the pool the slot stays ``None``.
-        That's deliberate — the Librarian's first-night ability shows
-        the "0 Outsiders" reading when no Outsider role is selected,
-        which is exactly the rules-correct outcome when no Outsiders
-        are in play.
+        If no real Outsider is in the pool but the Spy is, the seen
+        token sits on the Spy (who can register as Outsider for the
+        Librarian's check).
+
+        If neither a real Outsider nor a Spy is in the pool the slot
+        stays ``None``. That's the rules-correct "0 Outsiders" state.
         """
         if "Librarian" not in self._names:
             self._librarian_outsider = None
             return
-        if self._librarian_outsider in self._names:
-            spec = script_data.SCRIPT_BY_NAME.get(self._librarian_outsider)
-            if spec is not None and spec.char_type is CharType.OUTSIDER:
-                return
+        if (
+            self._librarian_outsider in self._names
+            and _can_register_as(
+                self._librarian_outsider, CharType.OUTSIDER
+            )
+        ):
+            return
         outsiders = self._outsiders_in_pool()
-        self._librarian_outsider = (
-            random.choice(outsiders) if outsiders else None
-        )
+        if outsiders:
+            self._librarian_outsider = random.choice(outsiders)
+            return
+        # No real Outsider — fall back to Spy if available.
+        if "Spy" in self._names:
+            self._librarian_outsider = "Spy"
+            return
+        self._librarian_outsider = None
 
     def _autofill_investigator_minion(self) -> None:
         """If the Investigator is in the pool but no seen-Minion is
         set, pick one uniformly at random from the Minions in the
         pool. Caller must already hold self._lock.
+
+        Trouble Brewing always has at least one Minion in play, so the
+        Recluse fallback is only relevant for stripped-down test
+        setups; when no Minion is in the pool but the Recluse is, the
+        seen-token sits on the Recluse (who can register as a Minion).
         """
         if "Investigator" not in self._names:
             self._investigator_minion = None
             return
-        if self._investigator_minion in self._names:
-            spec = script_data.SCRIPT_BY_NAME.get(self._investigator_minion)
-            if spec is not None and spec.char_type is CharType.MINION:
-                return
+        if (
+            self._investigator_minion in self._names
+            and _can_register_as(
+                self._investigator_minion, CharType.MINION
+            )
+        ):
+            return
         minions = self._minions_in_pool()
-        self._investigator_minion = (
-            random.choice(minions) if minions else None
-        )
+        if minions:
+            self._investigator_minion = random.choice(minions)
+            return
+        if "Recluse" in self._names:
+            self._investigator_minion = "Recluse"
+            return
+        self._investigator_minion = None
 
     def _autofill_librarian_wrong(self) -> None:
         """If the Librarian is in the pool but no WRONG-role is set,
@@ -494,9 +602,13 @@ class CharacterPool:
             spec = script_data.SCRIPT_BY_NAME.get(name)
             if spec is None:
                 raise ValueError(f"unknown character {name!r}")
-            if spec.char_type is not CharType.TOWNSFOLK:
+            # Allow any role whose registration_categories include
+            # Townsfolk — that's true Townsfolk plus the Spy (who may
+            # register as a Townsfolk to a WW check).
+            if not _can_register_as(name, CharType.TOWNSFOLK):
                 raise ValueError(
-                    "WW's seen role must be a Townsfolk")
+                    "WW's seen role must be a Townsfolk (or the Spy, "
+                    "who may register as one)")
             self._washerwoman_townsfolk = name
             if self._washerwoman_wrong == name:
                 self._washerwoman_wrong = None
@@ -530,8 +642,9 @@ class CharacterPool:
         clear it.
 
         Raises ValueError if the pool doesn't contain the Librarian,
-        if ``name`` isn't already in the pool, or if ``name`` isn't
-        an Outsider.
+        if ``name`` isn't already in the pool, or if ``name`` couldn't
+        register as an Outsider (true Outsiders, plus the Spy via the
+        misregistration override, are accepted).
         """
         with self._lock:
             if name is None:
@@ -547,9 +660,12 @@ class CharacterPool:
             spec = script_data.SCRIPT_BY_NAME.get(name)
             if spec is None:
                 raise ValueError(f"unknown character {name!r}")
-            if spec.char_type is not CharType.OUTSIDER:
+            # Allow any role whose registration_categories include
+            # Outsider — true Outsiders plus the Spy.
+            if not _can_register_as(name, CharType.OUTSIDER):
                 raise ValueError(
-                    "Librarian's seen role must be an Outsider")
+                    "Librarian's seen role must be an Outsider (or "
+                    "the Spy, who may register as one)")
             self._librarian_outsider = name
             # Re-roll WRONG if it now collides with the new seen-TF.
             if self._librarian_wrong == name:
@@ -593,8 +709,9 @@ class CharacterPool:
         clear it.
 
         Raises ValueError if the pool doesn't contain the Investigator,
-        if ``name`` isn't already in the pool, or if ``name`` isn't a
-        Minion.
+        if ``name`` isn't already in the pool, or if ``name`` couldn't
+        register as a Minion (true Minions, plus the Recluse via the
+        misregistration override, are accepted).
         """
         with self._lock:
             if name is None:
@@ -609,14 +726,51 @@ class CharacterPool:
             spec = script_data.SCRIPT_BY_NAME.get(name)
             if spec is None:
                 raise ValueError(f"unknown character {name!r}")
-            if spec.char_type is not CharType.MINION:
+            # Allow any role whose registration_categories include
+            # Minion — true Minions plus the Recluse.
+            if not _can_register_as(name, CharType.MINION):
                 raise ValueError(
-                    "Investigator's seen role must be a Minion")
+                    "Investigator's seen role must be a Minion (or "
+                    "the Recluse, who may register as one)")
             self._investigator_minion = name
             if self._investigator_wrong == name:
                 self._investigator_wrong = None
             self._autofill_investigator_wrong()
             return self._investigator_minion
+
+    # ------------------------------------------------------------------
+    # Token-slot clears (no auto-refill).
+    #
+    # The Washerwoman / Librarian / Investigator "you start knowing"
+    # tokens are placed during setup so the storyteller can see who the
+    # ability will point at. Once the ability has resolved on night 1
+    # the slots have no further game effect; clearing them here makes
+    # the UI stop rendering the corresponding reminder tokens (token
+    # display is purely a function of state — there is no separate
+    # "first-night only" gate).
+    #
+    # These bypass the regular ``set_*(None)`` path, which would
+    # auto-refill the WRONG slot on a Washerwoman / Librarian /
+    # Investigator that's still in the pool.
+    # ------------------------------------------------------------------
+
+    def clear_washerwoman_token_slots(self) -> None:
+        """Clear both Washerwoman seen-TF and WRONG slots."""
+        with self._lock:
+            self._washerwoman_townsfolk = None
+            self._washerwoman_wrong = None
+
+    def clear_librarian_token_slots(self) -> None:
+        """Clear both Librarian seen-Outsider and WRONG slots."""
+        with self._lock:
+            self._librarian_outsider = None
+            self._librarian_wrong = None
+
+    def clear_investigator_token_slots(self) -> None:
+        """Clear both Investigator seen-Minion and WRONG slots."""
+        with self._lock:
+            self._investigator_minion = None
+            self._investigator_wrong = None
 
     def set_investigator_wrong(self, name: Optional[str]) -> Optional[str]:
         """Set the Investigator's WRONG role, or pass None to clear

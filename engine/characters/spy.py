@@ -3,7 +3,7 @@
     "Each night, you see the Grimoire. You might register as good and
      as a Townsfolk or Outsider, even if dead."
 
-Three pieces:
+Two pieces:
 
   * **Grimoire reveal.** The Spy is woken every night and shown the
     full grimoire. We model this as a ``ShowInformation``-style prompt
@@ -11,41 +11,40 @@ Three pieces:
     phone renders the grimoire so they can study it.
 
   * **Misregistration.** The Spy may register as good and as any
-    Townsfolk or Outsider, even when dead. Whenever a detection-style
-    ability would observe the Spy, the engine surfaces a
-    :class:`SelectCharacterPrompt` to the Storyteller asking what the
-    Spy registers as for that ability. The list is every good character
-    on the script plus the literal ``Spy`` option (to register as
-    themselves — evil). The default is the Spy's internally-tracked
-    "preferred good character" (a random good role currently *not* in
-    play, picked at setup), so a Storyteller who hits Next on every
-    such prompt gets a consistent registration across the night and
-    across nights — but can pick anything else for any given ability.
+    Townsfolk or Outsider, even when dead. This is implemented as an
+    override of :meth:`Character.registers_as` — every detection-side
+    ability calls ``target.character.registers_as(...)`` at check time;
+    the Spy's override fires whenever the detector's ``categories``
+    list includes ``TOWNSFOLK`` or ``OUTSIDER``, prompting the
+    Storyteller for the Spy's registration for that specific detection.
 
-    The Investigator is the one detector that does NOT prompt: per the
-    user's project rules the Investigator always sees the Spy as the
-    Spy. The Fortune Teller likewise does not prompt because the Spy
-    cannot register as a Demon under the rules wording (Townsfolk or
-    Outsider only) — the FT result from a chosen Spy is always NO
-    regardless of choice, so a prompt would be pure busywork.
+    Per the project's Spy.pdf wiki page and ``CLAUDE.md``: the engine
+    tracks an internal "preferred good character" — a random good role
+    currently NOT in play — refreshed lazily each night. This is never
+    displayed as game state; it is only the *default* offered on each
+    registration prompt, so a Storyteller who hits Next on every
+    registration prompt produces a consistent across-the-night Spy
+    character.
 
-  * **Preferred good character.** Picked once at setup (and refreshed
-    if it ever lands on a now-in-play role). Never displayed to the
-    Storyteller as a state value — it's only the *default* offered on
-    each per-ability registration prompt. Per project rules, this is
-    not an official game state; it's purely an ergonomic seed for the
-    Storyteller.
+    Per the project rule, when ``categories`` contains only ``MINION``
+    / ``DEMON`` (the Investigator / Fortune Teller checks) the Spy
+    override does NOT fire — the default ``self.name == "Spy"`` is
+    itself a Minion, which is the correct registration for those
+    checks. The Investigator therefore always sees the Spy as the Spy,
+    and the Fortune Teller's NO-on-Spy reading is preserved.
 
 Drunkenness / poisoning: a drunk or poisoned Spy still sees the
 grimoire (the rule isn't really an "ability", it's just exposure).
 We pass through the prompt regardless. Misregistration is always a
-Storyteller call regardless of the Spy's drunk/poisoned state.
+Storyteller call regardless of the Spy's drunk/poisoned state — the
+override fires the same way (``has_ability`` is irrelevant to
+registration).
 """
 
 from __future__ import annotations
 
 import random as _rand
-from typing import TYPE_CHECKING, Iterable, Optional, Sequence
+from typing import TYPE_CHECKING, Optional, Sequence
 
 from engine.character import Character
 from engine.enums import CharType, SetupMode
@@ -55,6 +54,7 @@ from engine.prompt import InformationPrompt, SelectCharacterPrompt
 if TYPE_CHECKING:
     from engine.engine import Engine
     from engine.player import Player
+
 
 class Spy(Character):
     name = "Spy"
@@ -179,122 +179,177 @@ class Spy(Character):
             Event(EventType.RESOLUTION, source=self, targets=[self.player])
         )
 
+    # ------------------------------------------------------------------
+    # Registration override.
+    # ------------------------------------------------------------------
 
-# ------------------------------------------------------------------
-# Helpers for detection-side characters (Empath, Chef, Undertaker, …).
-# ------------------------------------------------------------------
+    # Spy can fake Townsfolk or Outsider (good roles) in addition to
+    # being itself (a Minion). Used by setup-time eligibility helpers
+    # that need to know what registrations the Spy could plausibly
+    # produce without running the override at all.
+    @classmethod
+    def registration_categories(cls) -> "tuple[CharType, ...]":
+        return (CharType.TOWNSFOLK, CharType.OUTSIDER, cls.char_type)
 
-def find_spy_player(engine: "Engine") -> Optional["Player"]:
-    """Return the seated player whose character is the Spy, if any.
+    def registers_as(self, engine: "Engine", the_check) -> str:
+        """Spy registration override.
 
-    Returns ``None`` when no Spy is in play. Used by detection-side
-    characters to decide whether a misregistration prompt is needed.
-    """
-    for p in engine.players:
-        if p.character is not None and p.character.name == Spy.name:
-            return p
-    return None
+        Fires only when ``the_check`` could be passed by a TF/Outsider
+        registration. Otherwise returns ``self.name`` (Spy is a
+        Minion — the correct registration for Investigator / Fortune
+        Teller checks).
 
+        Eligible options offered to the Storyteller depend on
+        ``the_check.attribute``:
 
-def prompt_spy_register_as(
-    engine: "Engine",
-    spy_player: "Player",
-    *,
-    detector_name: str,
-    detector_player_id: Optional[int] = None,
-    categories: Sequence[str] = ("townsfolk", "outsider", "spy"),
-    text: str = "Spy registers as",
-    stage: str = "st_pre",
-    extra_meta: Optional[dict] = None,
-) -> str:
-    """Ask the Storyteller what the Spy registers as for an ability.
+          * ``"alignment"`` — eligible = ``[GoodStub, "Spy"]``. A
+            two-button choice: register as good or as evil (Spy).
+          * ``"char_type"`` — eligible = the relevant stub(s) for the
+            check's ``passes`` plus ``"Spy"`` itself.
+          * ``"name"`` — eligible = full TF + Outsider names + "Spy".
 
-    Eligible categories restrict the choices:
+        Default is the Spy's preferred-good-character (if it's in the
+        eligible list) so a Storyteller hitting Next on every check
+        produces a consistent across-the-night reading.
 
-      * ``"townsfolk"`` / ``"outsider"`` — every role of that type on
-        the script is offered (good registration).
-      * ``"spy"`` — the literal ``Spy`` option, meaning "register as
-        themselves" (evil, Minion).
+        The check may pass an ``extra_meta["restrict_categories"]`` hint
+        — a tuple of :class:`CharType` values. When present, the ST's
+        eligible list is restricted to names registering as one of
+        those categories (and ``"Spy"`` is suppressed). This is used by
+        the Librarian / Washerwoman seen-token-on-Spy paths to force
+        the ST to pick a specific Outsider / Townsfolk role for the
+        Spy to register as. Without the hint the full eligible list is
+        offered — the standard Investigator / Empath / Chef / etc.
+        flow.
+        """
+        from engine.characters.stubs import GoodStub, TownsfolkStub, OutsiderStub
 
-    The Washerwoman uses ``("townsfolk", "spy")``; the Librarian uses
-    ``("outsider", "spy")``; everything else uses the full set.
+        # Pull the per-check restriction (if any). Used by the
+        # Lib/WW seen-on-Spy paths to pin the registration to a
+        # specific char_type, so the ST must pick a real Outsider /
+        # Townsfolk name (not the Spy itself or a different category).
+        restrict = ()
+        if the_check.extra_meta:
+            restrict = tuple(
+                the_check.extra_meta.get("restrict_categories") or ()
+            )
 
-    The default is the Spy's internally-tracked
-    ``_preferred_good_character`` (when a good category is allowed and
-    the preferred role is in the eligible list); otherwise the literal
-    ``Spy`` option; otherwise the first eligible character.
+        if not the_check.registration_matters(
+            self.registration_categories()
+        ):
+            # The check's outcome doesn't depend on registration
+            # choice — every category the Spy could fake produces the
+            # same pass/fail result. Default Spy registration is the
+            # correct answer; no ST prompt needed.
+            return self.name
 
-    Returns the chosen character name. ``"Spy"`` means the Spy
-    registered as themselves (evil); any other name means good.
-    """
-    spy_char = spy_player.character if spy_player else None
+        # Refresh the preferred default in case the in-play set has
+        # shifted since setup.
+        self._refresh_preferred_good_character(engine)
 
-    eligible: list = []
-    if "townsfolk" in categories:
-        eligible.extend(
-            engine.all_character_names_by_type(CharType.TOWNSFOLK)
-        )
-    if "outsider" in categories:
-        eligible.extend(
-            engine.all_character_names_by_type(CharType.OUTSIDER)
-        )
-    if "spy" in categories:
-        eligible.append(Spy.name)
-    # De-duplicate while preserving a stable sorted-ish order: good
-    # roles in script order, with Spy at the end.
-    seen: set = set()
-    deduped: list = []
-    for n in eligible:
-        if n not in seen:
-            seen.add(n)
-            deduped.append(n)
-    eligible = deduped
+        # Build the eligible list from the Spy's registration
+        # categories — ALL of them, not just those passing the check.
+        # The ST is choosing which way to misregister; both pass and
+        # fail options must be available so the choice is meaningful.
+        eligible: list = []
+        attribute = the_check.attribute
+        if attribute == "alignment":
+            # Two-option list: GoodStub ("register as good") and
+            # Spy itself ("register as evil"). Each Spy registration
+            # category maps to one of these via its default alignment.
+            eligible.append(GoodStub.name)
+            eligible.append(self.name)
+        elif attribute == "char_type":
+            # One stub per char_type the Spy could fake, plus Spy.
+            eligible.append(TownsfolkStub.name)
+            eligible.append(OutsiderStub.name)
+            eligible.append(self.name)
+        else:  # attribute == "name"
+            if restrict:
+                # Caller (Lib / WW seen-on-Spy) wants the prompt
+                # narrowed to a specific category — no Spy-itself
+                # option, no Townsfolk if asking for an Outsider, etc.
+                for ct in restrict:
+                    eligible.extend(
+                        engine.all_character_names_by_type(ct)
+                    )
+            else:
+                eligible.extend(
+                    engine.all_character_names_by_type(CharType.TOWNSFOLK)
+                )
+                eligible.extend(
+                    engine.all_character_names_by_type(CharType.OUTSIDER)
+                )
+                if self.name not in eligible:
+                    eligible.append(self.name)
 
-    # Default: preferred good character (when a good category is
-    # allowed and the preferred role is eligible). Else "Spy" if
-    # offered. Else the first eligible name.
-    default: Optional[str] = None
-    if isinstance(spy_char, Spy):
-        pref = spy_char._preferred_good_character
+        # De-duplicate while preserving stable order.
+        seen: set = set()
+        deduped: list = []
+        for n in eligible:
+            if n not in seen:
+                seen.add(n)
+                deduped.append(n)
+        eligible = deduped
+
+        # Smart skip for name attribute: if no value in the check's
+        # passes is in our eligible set, the override has no choice
+        # that would change the result. Stay silent. (E.g. WW asking
+        # "is this Mayor?" of a Recluse — Recluse can't fake TF; so
+        # the equivalent intersect-check on Spy keeps the WW from
+        # firing a no-op prompt for any name not on the Spy's TF/
+        # Outsider list.)
+        if attribute == "name" and not any(
+            p in eligible for p in the_check.passes
+        ):
+            return self.name
+
+        # Default: preferred good character if it's eligible (only
+        # possible on attribute="name"); otherwise the first
+        # non-Spy eligible (so the ST sees a "register good"
+        # default), falling back to Spy.
+        default: Optional[str] = None
+        pref = self._preferred_good_character
         if pref and pref in eligible:
             default = pref
-    if default is None:
-        if Spy.name in eligible:
-            default = Spy.name
-        elif eligible:
-            default = eligible[0]
+        if default is None:
+            non_self = [n for n in eligible if n != self.name]
+            if non_self:
+                default = non_self[0]
+            else:
+                default = self.name
 
-    meta: dict = {
-        "character": detector_name,
-        "step": "spy_registers_as",
-        "stage": stage,
-        "default": default,
-        "spy_player_id": spy_player.id if spy_player else None,
-        "spy_player_name": spy_player.name if spy_player else None,
-    }
-    if extra_meta:
-        meta.update(extra_meta)
+        detector_name = the_check.detector_name or "?"
+        detector_player_id = (
+            the_check.detector_player_id
+            if the_check.detector_player_id != -1 else None
+        )
+        meta: dict = {
+            "character": detector_name,
+            "step": "spy_registers_as",
+            "stage": "st_pre",
+            "default": default,
+            "spy_player_id": self.player.id if self.player else None,
+            "spy_player_name": self.player.name if self.player else None,
+            "attribute": attribute,
+        }
+        if the_check.extra_meta:
+            meta.update(the_check.extra_meta)
 
-    target_id = (
-        detector_player_id if detector_player_id is not None
-        else (spy_player.id if spy_player else None)
-    )
-    prompt = SelectCharacterPrompt(
-        text=text,
-        eligible_characters=eligible,
-        target_player_id=target_id,
-        meta=meta,
-    )
-    chosen = engine.send_prompt(prompt)
-    if not isinstance(chosen, str) or chosen not in eligible:
-        chosen = default if default else Spy.name
-    return chosen
-
-
-def spy_registers_as_evil(register_as: str) -> bool:
-    """True iff the Spy is registering as themselves (evil/Minion).
-
-    Convenience predicate: anything other than the literal ``"Spy"``
-    is a good (Townsfolk/Outsider) registration.
-    """
-    return register_as == Spy.name
+        target_id = (
+            detector_player_id if detector_player_id is not None
+            else (self.player.id if self.player else None)
+        )
+        # Prompt text doesn't include the detector name — the Storyteller
+        # already sees the panel header ("Show the Townsfolk token to
+        # the Washerwoman", etc.) and the duplicate is noise.
+        prompt = SelectCharacterPrompt(
+            text="Spy registers as",
+            eligible_characters=eligible,
+            target_player_id=target_id,
+            meta=meta,
+        )
+        chosen = engine.send_prompt(prompt)
+        if not isinstance(chosen, str) or chosen not in eligible:
+            chosen = default
+        return chosen

@@ -1,5 +1,5 @@
-1. Virgin ability is once per game
-2. UI on states. Drunk/poisoned, dead/alive is a state. Demon protected should not be displayed as a state but a tag. Side panel UI should display tag such as butler master, washerwoman seen, and such. These are states tracked by tokens.
-3. Dead character voting should display dead vote
-4. Ending night should generate prompt to display what happened during the night.
-5. Imp dead should be removed the day after.
+6. Poisoner poison must end after ability ends
+7. Storyteller local UI and player UI.
+8. Spy grimoire UI.
+9. Add a backup debug panel that can add or modify any character property
+12. Back button can be enabled now. Just make it [back] [next] but make [back] smaller

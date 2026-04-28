@@ -13,10 +13,16 @@ Two interesting pieces here:
 
 * a *nightly* information ability that fires on the first night and
   every other night. The storyteller picks two players for the FT to
-  point at; the FT learns YES iff at least one of those two is the
-  Demon *or* the red herring. When the FT is drunk/poisoned the
-  engine pre-fills the *flipped* (wrong) answer on a YesNoPrompt; the
-  ST may change it before sending. See CLAUDE.md.
+  point at; for each picked player the engine asks
+  :meth:`Character.registers_as` (with categories=(DEMON,)) — YES iff
+  any picked player registers as the Demon, or is the red herring.
+  Spy never registers as a Demon (categories doesn't include
+  TF/Outsider, so its override is silent — and the rules disallow Spy
+  registering as Demon anyway). Recluse's override fires and may pick
+  a Demon role.
+  When the FT is drunk/poisoned the engine pre-fills the *flipped*
+  (wrong) answer on a YesNoPrompt; the ST may change it before sending.
+  See CLAUDE.md.
 """
 
 from __future__ import annotations
@@ -48,6 +54,8 @@ class FortuneTeller(Character):
     reminder_tokens: list = [
         {"name": 'RED HERRING', "icon": 'fortune_teller_red_herring.png'},
     ]
+
+    DETECTION_CATEGORIES = (CharType.DEMON,)
 
     def __init__(self, player: Optional["Player"] = None) -> None:
         super().__init__(player)
@@ -239,14 +247,28 @@ class FortuneTeller(Character):
             Event(EventType.SELECT, source=self, targets=chosen_players)
         )
 
-        # Compute the default answer. YES iff any chosen player is the
-        # Demon, or is the red herring.
-        rh = self._red_herring
-        auto_yes = any(
-            (p.char_type is CharType.DEMON)
-            or (rh is not None and p.id == rh.id)
-            for p in chosen_players
+        # Compute the default answer. YES iff any chosen player passes
+        # a char_type=DEMON check (Recluse may misregister) OR is the
+        # red herring.
+        from engine.check import Check
+        demon_check = Check(
+            attribute="char_type",
+            passes=(CharType.DEMON,),
+            detector_name=self.name,
+            detector_player_id=self.player.id,
+            extra_meta={"step_for": "fortune_teller_pick"},
         )
+        rh = self._red_herring
+        auto_yes = False
+        for p in chosen_players:
+            if rh is not None and p.id == rh.id:
+                auto_yes = True
+                # Don't break — still run the check on the other
+                # picked player so a Recluse / misregister prompt
+                # fires consistently regardless of pick order.
+                continue
+            if self.check(engine, p, demon_check):
+                auto_yes = True
 
         # Sober + healthy: trust the auto-computed answer, no ST prompt.
         # Drunk/poisoned: binary info — pre-fill the *flipped* (wrong)

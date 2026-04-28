@@ -5,14 +5,15 @@
 
 Reaction-based daytime ability. The Virgin's "trigger" is the first
 nomination targeted at them. We listen for ``NOMINATION`` events on
-ourselves; on the first hit, if the nominator is a Townsfolk, the
-nominator is executed. Once consumed (success or not), the ability
-is spent.
+ourselves; on the first hit, if the nominator registers as a Townsfolk
+(via :meth:`Character.registers_as` with categories=(TOWNSFOLK,)) the
+nominator is executed. So a Spy nominator may register as a Townsfolk
+and trigger the Virgin's execute; the Recluse override does not fire
+for a TOWNSFOLK-only check. Once consumed (success or not), the
+ability is spent.
 
 Drunkenness / poisoning: a drunk or poisoned Virgin still consumes
-their trigger but does NOT execute the nominator. When sober and
-healthy the engine acts directly on the nominator's actual
-``char_type`` — no ST verify/override prompt.
+their trigger but does NOT execute the nominator.
 """
 
 from __future__ import annotations
@@ -38,6 +39,8 @@ class Virgin(Character):
     reminder_tokens: list = [
         {"name": 'NO ABILITY', "icon": 'virgin_no_ability.png'},
     ]
+
+    DETECTION_CATEGORIES = (CharType.TOWNSFOLK,)
 
     def __init__(self, player=None) -> None:
         super().__init__(player)
@@ -69,32 +72,61 @@ class Virgin(Character):
 
         # Drunk/poisoned Virgin: trigger is spent, but no execution.
         if not self.player.has_ability:
-            engine.log(
-                f"Virgin {self.player.name} nominated by "
-                f"{nominator.name if nominator else '?'} — "
-                f"ability spent (Virgin drunk/poisoned)."
+            engine.log_reaction(
+                "Virgin",
+                (
+                    f"{self.player.name} nominated by "
+                    f"{nominator.name if nominator else '?'} — "
+                    f"ability spent (Virgin drunk/poisoned)."
+                ),
+                target=self.player,
+                trigger="nomination",
+                effect="no_execute_drunk_or_poisoned",
             )
             return super().reaction(event, engine)
 
-        # Determine whether the nominator counts as a Townsfolk. The
-        # Virgin is sober + healthy at this point (drunk/poisoned was
-        # handled above), so we trust the nominator's actual char_type
-        # — no ST verify/override prompt.
+        # Determine whether the nominator registers as a Townsfolk.
+        # Spy override may fire (its registration_categories include
+        # TOWNSFOLK) and register the Spy as some Townsfolk, triggering
+        # the Virgin's execute. Recluse override is silent.
         if nominator is None:
             return super().reaction(event, engine)
-        is_townsfolk = nominator.char_type is CharType.TOWNSFOLK
+        from engine.check import Check
+        tf_check = Check(
+            attribute="char_type",
+            passes=(CharType.TOWNSFOLK,),
+            detector_name=self.name,
+            detector_player_id=self.player.id,
+            extra_meta={"step_for": "virgin_nominator"},
+        )
+        is_townsfolk = self.check(engine, nominator, tf_check)
         if not is_townsfolk:
-            engine.log(
-                f"Virgin {self.player.name} nominated by "
-                f"{nominator.name} — not a Townsfolk; ability "
-                f"spent without effect."
+            engine.log_reaction(
+                "Virgin",
+                (
+                    f"{self.player.name} nominated by {nominator.name} "
+                    f"— not a Townsfolk; ability spent without effect."
+                ),
+                target=self.player,
+                trigger="nomination",
+                effect="no_execute_not_townsfolk",
+                nominator_id=nominator.id,
+                nominator_name=nominator.name,
             )
             return super().reaction(event, engine)
 
         # Execute the nominator on the spot.
-        engine.log(
-            f"Virgin {self.player.name} executes {nominator.name} "
-            f"(first-nomination ability)."
+        engine.log_reaction(
+            "Virgin",
+            (
+                f"{self.player.name} executes {nominator.name} "
+                f"(first-nomination ability)."
+            ),
+            target=self.player,
+            trigger="nomination",
+            effect="execute_nominator",
+            nominator_id=nominator.id,
+            nominator_name=nominator.name,
         )
         engine.kill(nominator.id, DeathCause.EXECUTION)
         engine.dispatch(

@@ -55,6 +55,29 @@ class ChairStore:
         }
         self._seed_default_ring(count=default_seats)
 
+    # ------------------------------------------------------------------
+    # Pickling support.
+    #
+    # ``threading.Lock`` and ``itertools.count`` aren't picklable, so we
+    # strip them out on save and rebuild on restore. The ``next_id`` is
+    # serialized as a plain int (the next id we'd hand out) so the
+    # restored store keeps issuing fresh ids.
+    # ------------------------------------------------------------------
+
+    def __getstate__(self) -> Dict[str, Any]:
+        state = self.__dict__.copy()
+        state.pop("_lock", None)
+        # Capture the next id without consuming it from the live counter.
+        max_id = max(self._chairs) if self._chairs else 0
+        state["_next_id"] = max(max_id + 1, 1)
+        return state
+
+    def __setstate__(self, state: Dict[str, Any]) -> None:
+        next_id_value = state.pop("_next_id", 1)
+        self.__dict__.update(state)
+        self._lock = threading.Lock()
+        self._next_id = itertools.count(int(next_id_value))
+
     def reseed(self, count: int) -> None:
         """Replace the chair set with ``count`` freshly-seeded chairs."""
         with self._lock:
@@ -154,8 +177,37 @@ class ChairStore:
             return cid
 
     def _renumber(self) -> None:
-        """Compact chair ids to 1..N preserving their existing order."""
-        ordered = sorted(self._chairs.values(), key=lambda c: c["id"])
+        """Renumber chair ids to 1..N going clockwise from bottom-left.
+
+        Chair number 1 is always the chair closest to the bottom-left
+        (the start of the seeded 270° arc) and the numbering walks
+        clockwise from there — up the left side, across the top, and
+        down the right — to chair number N at the bottom-right. This
+        is the single numbering system shared with the badge rendered
+        on each chair and with ``engine.Player.id`` once the game
+        starts (see ``ui._sync_chairs_to_engine``).
+
+        Called after every ``add`` / ``remove`` so the invariant
+        survives any sequence of chair mutations. Drags update only
+        positions; if the storyteller wants the numbering to follow
+        a manually-rearranged board, a re-spread via the Circle /
+        Square arrangement buttons (or a subsequent add/remove) will
+        refresh the numbering against the new positions.
+        """
+        # Sort key: clockwise angle measured from "lower-left" (math
+        # angle 0.75π — the start of the seeded arc). For a chair at
+        # the default seeded position, this is exactly its arc index,
+        # so chair.id-1 == arc index == clockwise rank from bottom-left.
+        # The wrap-around modulo ensures bottom-right (math angle
+        # ~0.25π) sorts AFTER the top (math 1.5π), not before it.
+        origin = 0.75 * math.pi  # bottom-left direction from board center
+
+        def rank(c: Dict[str, Any]) -> float:
+            dx, dy = c["x"] - 0.5, c["y"] - 0.5
+            a = math.atan2(dy, dx)
+            return (a - origin) % (2 * math.pi)
+
+        ordered = sorted(self._chairs.values(), key=rank)
         new_chairs: Dict[int, Dict[str, Any]] = {}
         for new_id, chair in enumerate(ordered, start=1):
             chair["id"] = new_id

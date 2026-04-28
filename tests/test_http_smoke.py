@@ -114,10 +114,11 @@ def main() -> None:
         assert len(snap["players"]) == 5, snap
 
         # Figure out which engine player IDs got assigned to which named
-        # players. _sync_chairs_to_engine walks the chairs in clockwise
-        # order from 12 o'clock — and the seeded ring starts at the
-        # lower-left, so Eve actually gets player_id=1, Alice gets 2,
-        # etc. We look up the IDs from the snapshot rather than guessing.
+        # players. _sync_chairs_to_engine walks chairs in chair-id order
+        # so ``player.id == chair.id``. With Alice→chair 1, Bob→chair 2,
+        # Cara→chair 3, Dan→chair 4, Eve→chair 5, the players are
+        # numbered 1..5 in the same order. We still look up the IDs from
+        # the snapshot to keep the test resilient to the wiring.
         id_by_name = {p["name"]: p["id"] for p in snap["players"]}
         alice_id = id_by_name["Alice"]
         bob_id = id_by_name["Bob"]

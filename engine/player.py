@@ -121,12 +121,49 @@ class Player:
     def change_character(self, character: "Character") -> None:
         """Change to a different character mid-game (e.g., SW -> Imp).
 
-        Resets once_per_game_used so the new character can use its
-        own ability afresh. Alignment is preserved.
+        The incoming ``character`` MUST be a freshly-built instance
+        (the canonical path is :meth:`engine.engine.Engine.change_character`,
+        which builds via ``script_data.build_character`` — a clean
+        ``cls()`` call so any per-character internal state, including
+        ``Slayer._used``, ``Virgin._triggered``, ``Butler._master``,
+        ``Fortune Teller._red_herring``, etc., starts at its defaults.
+        We rely on that here; nothing in this method tries to reach
+        into the new Character's private attributes).
+
+        On the Player side, every condition that was tied to the OLD
+        character is cleared:
+
+        * ``once_per_game_used`` — the new character's once-per-game
+          ability is available afresh (Slayer slot resets, Virgin
+          execute-the-nominator slot resets, etc.).
+        * ``mad_about`` — any "must claim X" obligations from the
+          previous character are dropped; the new character has no
+          inherited madness.
+        * ``protected_from_demon`` — Monk-style nightly protection
+          set on the previous role doesn't bleed onto the new role.
+
+        Preserved (intentionally):
+
+        * ``alignment``, ``alive``, ``dead``, ``death_cause``,
+          ``has_dead_vote`` — identity / life state belongs to the
+          seat, not the role.
+        * ``drunk``, ``poisoned`` — these track the seat's status
+          inflicted by other characters' abilities. The Storyteller
+          can clear them explicitly via :meth:`Engine.cure_poison` /
+          :meth:`Engine.sober_up` if a particular ruling calls for it.
+        * ``has_nominated_today`` / ``has_been_nominated_today`` —
+          per-day flags belonging to the seat, cleared at dawn.
         """
         self.character = character
         self.char_type = character.char_type
+        # Per-role flags reset. Every entry here is a state the old
+        # character could have set; once the role is gone, the flag is
+        # gone with it.
         self.once_per_game_used = False
+        self.mad_about = []
+        self.protected_from_demon = False
+        # Wire the new Character back to this Player so it can mutate
+        # seat state from inside ability() / reaction().
         character.player = self
 
     def kill(self, cause: DeathCause = DeathCause.STORYTELLER) -> None:

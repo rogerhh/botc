@@ -34,7 +34,9 @@ engine for prompts and state changes.
 
 from __future__ import annotations
 
+import base64
 import itertools
+import pickle
 import threading
 import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -58,6 +60,24 @@ from engine.prompt import (
 # Sentinel used by ``Engine._auto_resolve`` to distinguish "no auto-resolve
 # possible" from a legitimately ``None`` storyteller answer.
 _NO_AUTO_RESOLVE = object()
+
+
+class _AbortAbility(BaseException):
+    """Raised inside ``Engine.send_prompt`` when the Storyteller hits Back.
+
+    Inherits from :class:`BaseException` (not :class:`Exception`) so the
+    ``except Exception`` wrappers in :meth:`Engine._run_preset_night`
+    don't swallow the abort — it has to bubble all the way up to
+    :meth:`Engine._run_night`, which discards the half-run ability and
+    lets :meth:`Engine.back` resume the night from a checkpoint.
+    """
+
+    pass
+
+
+# Save-string envelope. The first byte of the base64-decoded payload is
+# a version tag so future formats can be added without breaking saves.
+_SAVE_STATE_VERSION = 1
 
 
 class Engine:
@@ -111,27 +131,74 @@ class Engine:
         self._setup_actions_done: bool = False
 
         # Win state.
+        #
+        # ``_winner`` / ``_win_reason`` are only set once the game has
+        # actually ended (phase == FINISHED). Per the project rule
+        # *Game should only end after a night*: when a win condition is
+        # detected at any other time we record the result on the
+        # ``_pending_winner`` / ``_pending_win_reason`` slots and let
+        # the day or current night play out. The next dawn calls
+        # :meth:`_finalize_pending_win`, which copies the pending slots
+        # onto the live ``_winner`` slots, flips the phase to FINISHED
+        # and emits the public ``game_end`` console event.
         self._winner: Optional[Alignment] = None
         self._win_reason: Optional[str] = None
+        self._pending_winner: Optional[Alignment] = None
+        self._pending_win_reason: Optional[str] = None
 
         # Set when ANY execution has happened today. Cleared at dawn.
         # Read by ``_check_win_conditions`` for the Mayor's
         # "3-alive-no-execution" win at dusk.
         self._executed_today: bool = False
 
+        # Scarlet Woman bookkeeping.
+        # ``_sw_promoted_player_ids`` is the persistent set of player ids
+        # whose seat began the game as the Scarlet Woman and have been
+        # promoted to the Demon by the SW reaction. The UI grimoire keys
+        # off this list to render the "Scarlet Woman IS THE DEMON"
+        # reminder token on the SW's seat for the rest of the game.
+        # ``_sw_pending_demon_reveal`` is the queue of those player ids
+        # still awaiting the night-time "YOU ARE the <Demon>" reveal at
+        # the preset's "Scarlet Woman" step (per the trouble-brewing
+        # night sheet). Drained by ``_run_scarlet_woman_step``.
+        self._sw_promoted_player_ids: List[int] = []
+        self._sw_pending_demon_reveal: List[int] = []
+
+        # Callbacks to run after a DEATH dispatch completes, before
+        # ``_check_win_conditions`` runs. Lets a character's reaction
+        # detect a death of interest (e.g. the Imp's self-kill flow)
+        # and *defer* the actual handling until every other reaction
+        # has had a chance to fire — so reactions like the Scarlet
+        # Woman's "if the Demon dies, you become the Demon" promotion
+        # have already taken effect by the time the deferred callback
+        # observes engine state. Drained by ``Engine.kill`` after each
+        # DEATH dispatch.
+        self._post_death_callbacks: List[Callable[[], None]] = []
+
+        # Player ids that the Demon has killed since the last dawn.
+        # Drives the grimoire DEAD reminder token (Imp/Pukka/etc.):
+        # the token is placed when the Demon's nightly kill lands and
+        # cleared at the end of the night, when ``advance_to_day`` /
+        # ``_auto_dawn`` runs. The persistent ``Player.death_cause``
+        # is left untouched so post-mortem rulings (Undertaker info,
+        # win-condition reads, etc.) can still tell *how* the player
+        # died — only the visual reminder is transient.
+        self._demon_killed_player_ids: List[int] = []
+
         # Storyteller-readable event log.
         self._log: List[str] = []
 
-        # Structured "interesting events" log used by the end-of-game
-        # report (kills, executions, nominations, info shown to players,
-        # storyteller / player selections, game end). Kept alongside the
-        # human-readable ``_log`` so the UI can render a curated, typed
-        # report instead of the noisy line-oriented log.
+        # Structured "console" log surfaced live to the storyteller and
+        # replayed verbatim as the end-of-game report. Each entry is
+        # a typed, curated event (an ability firing, info shown to a
+        # player, a kill, a revive, a nomination, a selection, a phase
+        # transition, etc.) — distinct from the noisy free-form
+        # ``_log`` which mirrors every internal happening.
         #
         # Each entry is a dict with at least ``ts``, ``phase``,
         # ``night_number``, ``day_number``, ``kind``, ``summary``; the
-        # ``details`` sub-dict is kind-specific (see ``_record``).
-        self._game_events: List[Dict[str, Any]] = []
+        # ``details`` sub-dict is kind-specific (see ``_console_log``).
+        self._console: List[Dict[str, Any]] = []
 
         # The preset (script) drives the night order and storyteller-
         # facing descriptions. ``None`` means fall back to the legacy
@@ -156,6 +223,24 @@ class Engine:
         # cleared) so the UI can render the panel header without the
         # engine having to emit a redundant announce-prompt up front.
         self._current_step_meta: Optional[Dict[str, Any]] = None
+
+        # ---- Save / load + Back-button history ----
+        # Index of the next preset step to run within the current
+        # night. Reset to 0 by ``start_night``; advanced by
+        # ``_run_preset_night`` after each step completes. Persisted in
+        # save_state so restoring mid-night resumes from the correct
+        # step without re-running already-completed abilities.
+        self._completed_step_index: int = 0
+        # History of pickled engine snapshots, taken after each
+        # preset-night step completes (and after each setup-action
+        # character runs). The Back button pops the latest entry and
+        # restores it; consecutive Back presses walk further back.
+        self._history: List[str] = []
+        self._history_labels: List[str] = []
+        # Set by :meth:`back` to interrupt a blocked ``send_prompt``.
+        # The waiting character ability sees the flag, raises
+        # ``_AbortAbility``, and propagates out of ``_run_night``.
+        self._abort_requested: bool = False
 
     # ------------------------------------------------------------------
     # Read-only state.
@@ -190,22 +275,48 @@ class Engine:
         return list(self._log)
 
     @property
-    def game_events(self) -> List[Dict[str, Any]]:
-        """Structured "interesting events" recorded for the end-of-game report.
+    def console(self) -> List[Dict[str, Any]]:
+        """Structured live-console / end-of-game report log.
 
         Read-only copy; the engine owns the underlying list and appends
-        to it from ``_record`` (called by ``send_prompt``, ``kill``,
-        ``execute_player``, ``nominate``, ``_end_game``).
+        to it from ``_console_log`` (called by ``send_prompt``,
+        ``_announce_step``, ``kill``, ``revive``, ``poison`` /
+        ``make_drunk`` / ``sober_up`` / ``cure_poison``,
+        ``execute_player``, ``nominate``, phase-transition helpers,
+        and ``_end_game``).
         """
-        return [dict(e) for e in self._game_events]
+        return [dict(e) for e in self._console]
 
     @property
     def winner(self) -> Optional[Alignment]:
+        """Final winner, set only once the game has actually ended.
+
+        While a win has been triggered but the game is still waiting
+        for dawn to announce, this remains ``None``. Use
+        :attr:`pending_winner` to inspect a triggered-but-not-yet-
+        announced win.
+        """
         return self._winner
 
     @property
     def win_reason(self) -> Optional[str]:
         return self._win_reason
+
+    @property
+    def pending_winner(self) -> Optional[Alignment]:
+        """A win condition has triggered but the game is waiting for dawn.
+
+        Per the project rule: end-of-game announcements always happen
+        at dawn. When the engine detects a winning condition during
+        the day or mid-night, the alignment is parked here and players
+        keep going (use abilities, nominate, etc.); the next dawn
+        copies it onto :attr:`winner` and flips the phase to FINISHED.
+        """
+        return self._pending_winner
+
+    @property
+    def pending_win_reason(self) -> Optional[str]:
+        return self._pending_win_reason
 
     @property
     def preset(self) -> Optional["preset_module.Preset"]:
@@ -240,18 +351,71 @@ class Engine:
             pass
 
     # ------------------------------------------------------------------
-    # Structured "interesting events" log (drives the end-of-game report).
+    # Console log (drives both the live storyteller console panel and
+    # the end-of-game report — they are the same data, rendered twice).
     # ------------------------------------------------------------------
 
-    def _record(self, kind: str, summary: str, **details: Any) -> None:
-        """Append a structured entry to the game-events log.
+    def log_reaction(
+        self,
+        character: Optional[str],
+        summary: str,
+        *,
+        target: Optional["Player"] = None,
+        target_player_id: Optional[int] = None,
+        target_player_name: Optional[str] = None,
+        trigger: Optional[str] = None,
+        **details: Any,
+    ) -> None:
+        """Log an observable character reaction to the console feed.
 
-        ``kind`` is one of: ``info_shown``, ``st_selection``,
-        ``player_selection``, ``kill``, ``execution``, ``nomination``,
-        ``game_end``. The entry is timestamped and stamped with the
-        current phase / night / day numbers so the report can group
-        events by phase. Defensive: any exception is swallowed so
-        recording never breaks gameplay.
+        ``character`` is the role whose ability fired (e.g. "Soldier",
+        "Monk", "Virgin", "Mayor", "Saint", "Scarlet Woman"). The
+        ``summary`` is a one-line, storyteller-readable statement of
+        what observably happened (e.g. "Soldier — Bob cannot be
+        killed by the Demon.").
+
+        ``target`` / ``target_player_id`` / ``target_player_name`` is
+        whoever the reaction acted on (the player saved, the new
+        Demon, the executed nominator, …) — any one is fine; we
+        normalize. ``trigger`` is the EventType (or free-form label)
+        that caused the reaction to fire, captured for the report
+        details so you can later reconstruct the chain.
+
+        Also mirrors to the human-readable ``_log`` so the operator
+        terminal still sees the line.
+        """
+        # Normalize target details from whichever form the caller used.
+        if target is not None:
+            try:
+                target_player_id = int(target.id)
+                target_player_name = target.name
+            except Exception:  # pragma: no cover (defensive)
+                pass
+
+        char_label = character or "?"
+        # Mirror to the noisy log as well so the operator can grep for
+        # reactions in the terminal even if they aren't watching the
+        # console panel.
+        self.log(f"[reaction] {char_label}: {summary}")
+        self._console_log(
+            "reaction",
+            summary,
+            character=char_label,
+            target_player_id=target_player_id,
+            target_player_name=target_player_name,
+            trigger=trigger,
+            **details,
+        )
+
+    def _console_log(self, kind: str, summary: str, **details: Any) -> None:
+        """Append a structured entry to the console log.
+
+        ``kind`` is one of: ``ability``, ``info``, ``selection``,
+        ``kill``, ``revive``, ``execution``, ``nomination``,
+        ``state``, ``phase``, ``game_end``. The entry is timestamped
+        and stamped with the current phase / night / day numbers so
+        the renderer can group entries by phase. Defensive: any
+        exception is swallowed so logging never breaks gameplay.
         """
         try:
             entry: Dict[str, Any] = {
@@ -263,30 +427,27 @@ class Engine:
                 "summary": summary,
                 "details": dict(details),
             }
-            self._game_events.append(entry)
+            self._console.append(entry)
         except Exception:  # pragma: no cover (defensive)
             pass
 
     def _record_prompt_response(self, prompt: Prompt, response: Any) -> None:
-        """Record an interesting prompt+response pair to ``_game_events``.
+        """Log an interesting prompt+response pair to the console.
 
         Called from ``send_prompt`` once the storyteller has answered.
         Filters out announce-style information prompts that are not
-        shown to a player (e.g. Dusk / Dawn banners) and prompts whose
-        meta marks them as uninteresting.
+        shown to a player (e.g. Dusk / Dawn banners).
 
-        ``info_shown`` covers any InformationPrompt that targets a
-        specific player and was visible to them on their phone (the
-        bread-and-butter "info" abilities like Empath / Washerwoman /
-        Fortune Teller / Undertaker / Investigator).
+        ``info`` covers any InformationPrompt that targets a specific
+        player and was visible to them on their phone (Empath /
+        Washerwoman / Fortune Teller / Undertaker / Investigator,
+        minion- and demon-info, ...).
 
-        ``st_selection`` covers SelectPlayer/SelectCharacter/YesNo
-        prompts that the storyteller drove (typically the drunk/
-        poisoned override pre-fill the engine asks the ST to confirm).
-
-        ``player_selection`` covers select prompts whose stage is the
-        player's own decision (Fortune Teller picking 2 players, Monk
-        picking a target, Butler picking a master, ...).
+        ``selection`` covers SelectPlayer / SelectCharacter / YesNo
+        prompts. Whether the choice is the storyteller's (drunk /
+        poisoned overrides, demon bluffs) or the player's own decision
+        (Fortune Teller picks 2 players, Monk picks a target, Butler
+        picks a master, ...) is recorded under ``details.actor``.
         """
         meta = prompt.meta if isinstance(prompt.meta, dict) else {}
         character = meta.get("character") or ""
@@ -317,8 +478,8 @@ class Engine:
                 extras.append("players: " + ", ".join(highlight_names))
             tail = (" — " + "; ".join(extras)) if extras else ""
             summary = f"Showed {label} ({who}){tail}"
-            self._record(
-                "info_shown",
+            self._console_log(
+                "info",
                 summary,
                 character=character or None,
                 target_player_id=target_pid,
@@ -333,9 +494,8 @@ class Engine:
             )
             return
 
-        # Select / yes-no prompts: record both player- and ST-driven
-        # selections — both are "interesting" at the report layer.
-        kind = "st_selection" if is_st_stage else "player_selection"
+        # Select / yes-no prompts → "selection". Whether the choice is
+        # the storyteller's or the player's lives in details.actor.
         actor = "Storyteller" if is_st_stage else (
             target_name or (character or "Player")
         )
@@ -372,13 +532,15 @@ class Engine:
             + (f" ({target_name})" if target_name and not is_st_stage else "")
             + f": {value_str}"
         )
-        self._record(
-            kind,
+        self._console_log(
+            "selection",
             summary,
+            actor=actor,
             character=character or None,
             target_player_id=target_pid,
             target_player_name=target_name or None,
             stage=stage,
+            is_storyteller_pick=bool(is_st_stage),
             step=meta.get("step"),
             step_kind=meta.get("step_kind"),
             step_name=meta.get("step_name"),
@@ -422,6 +584,18 @@ class Engine:
 
     def all_character_names_by_type(self, char_type: CharType) -> List[str]:
         return script_data.names_by_type(char_type)
+
+    def char_type_of(self, name: str) -> CharType:
+        """Return the :class:`CharType` of a role given its name.
+
+        Used by detection-side abilities that look at a player's
+        *registered* role name (returned from
+        :meth:`Character.registers_as`) and need the corresponding
+        char_type to count alignment, check Demon status, etc.
+
+        Raises :class:`KeyError` if the name is not on the script.
+        """
+        return script_data.SCRIPT_BY_NAME[name].char_type
 
     def build_character(self, name: str) -> Character:
         """Construct a fresh, unseated :class:`Character` by name.
@@ -668,6 +842,10 @@ class Engine:
 
         self._phase = Phase.FIRST_NIGHT
         self._night_number = 1
+        # Fresh game → blank slate for the Back-button history. The
+        # storyteller can still rewind to the start of night 1 once
+        # the night begins (start_night pushes its own checkpoint).
+        self.reset_history()
         self.log("Game started; entering the first night.")
 
     def recommended_counts(self) -> Tuple[int, int, int, int]:
@@ -682,23 +860,87 @@ class Engine:
     # success or a human-readable error string on rejection.
     # ------------------------------------------------------------------
 
-    def _townsfolk_in_play(self, name: str) -> bool:
+    def _role_could_pass(self, name: str, the_check) -> bool:
+        """Setup-time eligibility test: could a chair holding ``name``
+        pass ``the_check`` at run time?
+
+        Looks up the character class for ``name`` and delegates to
+        :meth:`Character.could_pass_check`. Used by the token-application
+        helpers below: a Spy chair is eligible for a WW TOWNSFOLK
+        token (Spy can register as TF), a Recluse chair is eligible
+        for an INV MINION token (Recluse can register as Minion), etc.
+
+        Returns False for unknown names.
+        """
         spec = script_data.SCRIPT_BY_NAME.get(name)
-        return spec is not None and spec.char_type is CharType.TOWNSFOLK
+        if spec is None:
+            return False
+        from engine.characters import CHARACTER_REGISTRY
+        from engine.character import Character
+        cls = CHARACTER_REGISTRY.get(name)
+        if cls is None:
+            # Stub-class character (no registered subclass): use the
+            # script's char_type as its registration_categories so the
+            # default-Character path still works.
+            class _Spec(Character):
+                pass
+            _Spec.char_type = spec.char_type
+            cls = _Spec
+        return cls.could_pass_check(the_check)
+
+    def _townsfolk_in_play(self, name: str) -> bool:
+        """True iff a chair holding ``name`` could register as a Townsfolk.
+
+        Used by token-application helpers (WW TOWNSFOLK seen-token,
+        Drunk token). With registration semantics, a Spy chair is also
+        eligible (Spy may register as a Townsfolk for the WW). The
+        Drunk token's caller still semantically wants a *true* TF role,
+        but at the seat level "could register as TF" is a strict superset
+        and the Drunk's swap logic guards on the actual role anyway.
+        """
+        from engine.check import Check
+        return self._role_could_pass(
+            name, Check(attribute="char_type", passes=(CharType.TOWNSFOLK,))
+        )
 
     def _good_in_play(self, name: str) -> bool:
-        spec = script_data.SCRIPT_BY_NAME.get(name)
-        return spec is not None and spec.char_type in (
-            CharType.TOWNSFOLK, CharType.OUTSIDER,
+        """True iff a chair holding ``name`` could register as good.
+
+        Good = Townsfolk or Outsider. Used by the FT red-herring token
+        (the herring is "a good player").
+        """
+        from engine.check import Check
+        return self._role_could_pass(
+            name,
+            Check(
+                attribute="char_type",
+                passes=(CharType.TOWNSFOLK, CharType.OUTSIDER),
+            ),
         )
 
     def _outsider_in_play(self, name: str) -> bool:
-        spec = script_data.SCRIPT_BY_NAME.get(name)
-        return spec is not None and spec.char_type is CharType.OUTSIDER
+        """True iff a chair holding ``name`` could register as an Outsider."""
+        from engine.check import Check
+        return self._role_could_pass(
+            name, Check(attribute="char_type", passes=(CharType.OUTSIDER,))
+        )
 
     def _minion_in_play(self, name: str) -> bool:
+        """True iff a chair holding ``name`` could register as a Minion."""
+        from engine.check import Check
+        return self._role_could_pass(
+            name, Check(attribute="char_type", passes=(CharType.MINION,))
+        )
+
+    def _true_townsfolk(self, name: str) -> bool:
+        """True iff ``name`` is *literally* a Townsfolk role on the script.
+
+        Used by the Drunk-token swap (the chair's current role becomes
+        the Drunk's perceived TF — and the perceived TF must be a real
+        Townsfolk, not a misregistered one).
+        """
         spec = script_data.SCRIPT_BY_NAME.get(name)
-        return spec is not None and spec.char_type is CharType.MINION
+        return spec is not None and spec.char_type is CharType.TOWNSFOLK
 
     def move_drunk_token(self, dest_chair_id: int) -> Optional[str]:
         """Drop the IS-THE-DRUNK reminder onto ``dest_chair_id``.
@@ -725,7 +967,12 @@ class Engine:
                 break
         if source is not None and source["id"] == dest_chair_id:
             return None  # no-op
-        if not self._townsfolk_in_play(dest_char):
+        # Drunk token requires the chair to literally hold a Townsfolk
+        # role — the perceived TF the Drunk thinks they are has to be a
+        # real Townsfolk on the script, not a misregistered one. So we
+        # use the strict ``_true_townsfolk`` test here, NOT the
+        # registration-based ``_townsfolk_in_play``.
+        if not self._true_townsfolk(dest_char):
             return "destination chair must hold a Townsfolk role"
         if dest_char not in pool_names:
             return f"{dest_char!r} is not in the pool"
@@ -923,6 +1170,309 @@ class Engine:
         self._retrigger_setup_for_role("Investigator")
         return None
 
+    # ------------------------------------------------------------------
+    # Unified token-apply with swap semantics.
+    #
+    # Each ``move_*_token`` method above handles one token at a time and
+    # is the right primitive for tests + the engine. The UI, however,
+    # benefits from one entry point that knows which mutex pairs swap
+    # rather than overwrite: dragging the WW TOWNSFOLK token onto a
+    # chair already carrying the WW WRONG token swaps the two; ditto
+    # Librarian and Investigator pairs. The non-paired tokens (Drunk,
+    # FT red herring) just delegate to the underlying ``move_*``.
+    # ------------------------------------------------------------------
+
+    # Mutex partners — dropping ``kind`` on a chair currently carrying
+    # ``partner`` triggers a swap rather than a plain overwrite. None
+    # of the remaining tokens (Drunk / FT red herring / pre-game
+    # nightly-state markers) are paired this way, so they simply
+    # delegate to their ``move_*`` method.
+    _TOKEN_MUTEX_PARTNERS = {
+        "washerwoman_townsfolk": "washerwoman_wrong",
+        "washerwoman_wrong":     "washerwoman_townsfolk",
+        "librarian_outsider":    "librarian_wrong",
+        "librarian_wrong":       "librarian_outsider",
+        "investigator_minion":   "investigator_wrong",
+        "investigator_wrong":    "investigator_minion",
+    }
+
+    def _token_move_method(self, kind: str):
+        """Return the ``move_*`` method for ``kind`` (or None)."""
+        return {
+            "drunk":                 self.move_drunk_token,
+            "ft_red_herring":        self.move_ft_red_herring_token,
+            "washerwoman_townsfolk": self.move_washerwoman_townsfolk_token,
+            "washerwoman_wrong":     self.move_washerwoman_wrong_token,
+            "librarian_outsider":    self.move_librarian_outsider_token,
+            "librarian_wrong":       self.move_librarian_wrong_token,
+            "investigator_minion":   self.move_investigator_minion_token,
+            "investigator_wrong":    self.move_investigator_wrong_token,
+        }.get(kind)
+
+    def _token_role_for_kind(self, kind: str) -> Optional[str]:
+        """Return the *character name* the token of ``kind`` currently
+        sits on, or ``None`` if no chair carries it.
+        """
+        if kind == "drunk":
+            # The Drunk token always sits on the chair whose character
+            # is "Drunk"; if no such chair exists yet (Drunk in pool but
+            # not seated), there's nothing to swap from.
+            for c in self.chairs.list():
+                if (c.get("character") or "").strip() == "Drunk":
+                    return "Drunk"
+            return None
+        getters = {
+            "ft_red_herring":        self.pool.ft_red_herring,
+            "washerwoman_townsfolk": self.pool.washerwoman_townsfolk,
+            "washerwoman_wrong":     self.pool.washerwoman_wrong,
+            "librarian_outsider":    self.pool.librarian_outsider,
+            "librarian_wrong":       self.pool.librarian_wrong,
+            "investigator_minion":   self.pool.investigator_minion,
+            "investigator_wrong":    self.pool.investigator_wrong,
+        }
+        getter = getters.get(kind)
+        return getter() if getter else None
+
+    # Token kinds whose pool slot is the *typed* (seen) half of an
+    # info-character pair — Townsfolk for WW, Outsider for Librarian,
+    # Minion for Investigator. The matching ``_wrong`` kinds are the
+    # other half.
+    _TYPED_TOKEN_KINDS = frozenset({
+        "washerwoman_townsfolk",
+        "librarian_outsider",
+        "investigator_minion",
+    })
+
+    def apply_token(self, kind: str, dest_chair_id: int) -> Optional[str]:
+        """Apply token ``kind`` to ``dest_chair_id`` with swap semantics.
+
+        If the destination chair currently carries the mutex partner of
+        ``kind`` (e.g. dropping WW TOWNSFOLK on a chair carrying WW
+        WRONG), the partner is moved to the chair that previously held
+        ``kind`` so the two effectively swap places. For all other
+        cases this delegates to the corresponding ``move_*_token``
+        method, whose autofill rules handle invalidations (e.g. the
+        Drunk taking over a chair the WW had pointed at).
+
+        Returns ``None`` on success, or a human-readable error string
+        on rejection (mirrors the underlying ``move_*`` methods).
+        """
+        move = self._token_move_method(kind)
+        if move is None:
+            return f"unknown token kind {kind!r}"
+
+        partner_kind = self._TOKEN_MUTEX_PARTNERS.get(kind)
+        if partner_kind is not None:
+            dest = self.chairs.get(dest_chair_id)
+            if dest is None:
+                return f"no chair with id {dest_chair_id}"
+            dest_char = (dest.get("character") or "").strip()
+            partner_role = self._token_role_for_kind(partner_kind)
+            if partner_role and dest_char and dest_char == partner_role:
+                # Swap path. Capture the chair currently holding
+                # ``kind`` *before* we overwrite anything, then apply
+                # the two moves in the right order so the pool's
+                # "WRONG must differ from seen" validation never trips:
+                # set the typed/seen slot first (a Townsfolk/Outsider/
+                # Minion role), then the WRONG slot. Each of the
+                # individual ``set_*`` calls happens to also clear and
+                # autofill the partner slot, but the second move
+                # overwrites that autofilled value with the role we
+                # actually want, so the end state matches the swap.
+                source_role = self._token_role_for_kind(kind)
+                source_chair_id: Optional[int] = None
+                if source_role:
+                    for c in self.chairs.list():
+                        if (c.get("character") or "").strip() == source_role:
+                            source_chair_id = c["id"]
+                            break
+                if (
+                    source_chair_id is None
+                    or source_chair_id == dest_chair_id
+                ):
+                    # No real swap to do — fall through to the regular
+                    # move. (Either the kind isn't currently seated, or
+                    # the user dropped it back where it started.)
+                    return move(dest_chair_id)
+
+                # Decide which of (kind, partner_kind) is the typed slot.
+                if kind in self._TYPED_TOKEN_KINDS:
+                    typed_kind, typed_chair = kind, dest_chair_id
+                    wrong_kind, wrong_chair = partner_kind, source_chair_id
+                else:
+                    typed_kind, typed_chair = partner_kind, source_chair_id
+                    wrong_kind, wrong_chair = kind, dest_chair_id
+
+                typed_move = self._token_move_method(typed_kind)
+                wrong_move = self._token_move_method(wrong_kind)
+                if typed_move is None or wrong_move is None:
+                    # Defensive — shouldn't happen for the documented
+                    # mutex pairs, but log + fall back to the basic
+                    # move so the storyteller's drag still does
+                    # *something* useful.
+                    self.log(
+                        f"apply_token swap: missing move method for "
+                        f"{typed_kind!r} / {wrong_kind!r}"
+                    )
+                    return move(dest_chair_id)
+
+                err = typed_move(typed_chair)
+                if err is None:
+                    err = wrong_move(wrong_chair)
+                    if err is not None:
+                        self.log(
+                            f"apply_token swap fallback: "
+                            f"{wrong_kind} → chair {wrong_chair} failed: {err}"
+                        )
+                    return None
+
+                # The clean swap failed — typically because the source
+                # chair's character isn't compatible with the seen
+                # token's required type (e.g. user drags Lib WRONG
+                # from a Townsfolk chair onto the Lib SEEN chair). If
+                # there's *another* in-pool role of the right type the
+                # seen token can move to, do a "displaced swap": land
+                # WRONG on dest, autofill seen onto a different valid
+                # chair. If there are no other candidates, refuse the
+                # drop so the seen token doesn't disappear.
+                alt_candidates = self._seen_candidates_excluding(
+                    typed_kind, dest_char
+                )
+                if not alt_candidates:
+                    self.log(
+                        f"apply_token swap infeasible and no alternate "
+                        f"seen candidate ({typed_kind}); refusing drop"
+                    )
+                    return f"swap infeasible: {err}"
+
+                self.log(
+                    f"apply_token swap infeasible "
+                    f"({typed_kind} → chair {typed_chair}): {err}; "
+                    f"performing displaced swap (seen rerolls to a "
+                    f"different chair)"
+                )
+                self._clear_token_slot(typed_kind)
+                err2 = wrong_move(wrong_chair)
+                if err2 is not None:
+                    return err2
+                self._reroll_seen_excluding(typed_kind, dest_char)
+                return None
+
+        return move(dest_chair_id)
+
+    def _clear_token_slot(self, kind: str) -> None:
+        """Set the pool slot for ``kind`` to None, bypassing the
+        ``set_*`` methods' cross-slot side effects when possible.
+
+        Used by :meth:`apply_token` when an in-progress swap turns
+        out to be infeasible — we need to clear the typed slot so the
+        partner WRONG can be set without tripping the "must differ
+        from seen" validation, then trigger a fresh autofill pick.
+        """
+        setters = {
+            "ft_red_herring":        self.pool.set_ft_red_herring,
+            "washerwoman_townsfolk": self.pool.set_washerwoman_townsfolk,
+            "washerwoman_wrong":     self.pool.set_washerwoman_wrong,
+            "librarian_outsider":    self.pool.set_librarian_outsider,
+            "librarian_wrong":       self.pool.set_librarian_wrong,
+            "investigator_minion":   self.pool.set_investigator_minion,
+            "investigator_wrong":    self.pool.set_investigator_wrong,
+        }
+        setter = setters.get(kind)
+        if setter is not None:
+            try:
+                setter(None)
+            except ValueError:
+                pass
+
+    def _seen_candidates_excluding(
+        self, typed_kind: str, exclude_role: str
+    ) -> List[str]:
+        """Return all in-pool roles that could legitimately receive
+        the typed seen token, *excluding* ``exclude_role``.
+
+        Used by :meth:`apply_token` to decide whether an infeasible
+        swap can fall back to a displaced reroll (there's another
+        valid home for the seen token) or has to refuse the drop
+        outright (no alternate home; the seen would be left empty).
+        """
+        names = self.pool.list()
+        ok = {
+            "washerwoman_townsfolk":
+                lambda n: self._townsfolk_in_play(n) and n != "Washerwoman",
+            "librarian_outsider":   self._outsider_in_play,
+            "investigator_minion":  self._minion_in_play,
+        }.get(typed_kind)
+        if ok is None:
+            return []
+        return [n for n in names if n != exclude_role and ok(n)]
+
+    def _reroll_seen_excluding(
+        self, typed_kind: str, exclude_role: str
+    ) -> None:
+        """Pick a random new role for the typed seen-slot that isn't
+        ``exclude_role``.
+
+        Used by :meth:`apply_token` after the WRONG slot has been
+        forced to ``exclude_role`` — we need to re-pick the seen slot
+        from the same pool of candidates as the autofill, minus the
+        WRONG role, so the pool invariant "WRONG must differ from
+        seen" stays valid. Uses the appropriate ``set_*`` setter so
+        all the side-effect bookkeeping (e.g. retriggering setup
+        absorption) runs.
+        """
+        import random as _random
+        names = self.pool.list()
+        picker = {
+            "washerwoman_townsfolk": (
+                self.pool.set_washerwoman_townsfolk,
+                lambda n: self._townsfolk_in_play(n) and n != "Washerwoman",
+            ),
+            "librarian_outsider": (
+                self.pool.set_librarian_outsider,
+                lambda n: self._outsider_in_play(n),
+            ),
+            "investigator_minion": (
+                self.pool.set_investigator_minion,
+                lambda n: self._minion_in_play(n),
+            ),
+        }
+        entry = picker.get(typed_kind)
+        if entry is None:
+            return
+        setter, ok = entry
+        candidates = [n for n in names if n != exclude_role and ok(n)]
+        if not candidates:
+            return
+        try:
+            setter(_random.choice(candidates))
+        except ValueError:
+            # Defensive — the candidate list satisfies the type check
+            # by construction, but a stale pool race could drop it.
+            pass
+
+    def _autofill_token_slot(self, kind: str) -> None:
+        """Re-run the autofill for ``kind``'s pool slot.
+
+        Pool autofills are private (underscore-prefixed) helpers; this
+        wraps them so apply_token can re-roll a slot it just cleared.
+        Acquires the pool's lock manually for the duration.
+        """
+        autofills = {
+            "ft_red_herring":        self.pool._autofill_ft_red_herring,
+            "washerwoman_townsfolk": self.pool._autofill_washerwoman_townsfolk,
+            "washerwoman_wrong":     self.pool._autofill_washerwoman_wrong,
+            "librarian_outsider":    self.pool._autofill_librarian_outsider,
+            "librarian_wrong":       self.pool._autofill_librarian_wrong,
+            "investigator_minion":   self.pool._autofill_investigator_minion,
+            "investigator_wrong":    self.pool._autofill_investigator_wrong,
+        }
+        fn = autofills.get(kind)
+        if fn is None:
+            return
+        with self.pool._lock:
+            fn()
+
     def _retrigger_setup_for_role(
         self, role_name: str, *, reset_first: bool = False
     ) -> None:
@@ -987,32 +1537,73 @@ class Engine:
         for p in self._players:
             p.reset_night_flags()
 
+        # Fresh night → start over from step 0. (``back()`` later
+        # restores a snapshot whose ``_completed_step_index`` points
+        # at whichever step it was on.)
+        self._completed_step_index = 0
+        self._abort_requested = False
+
         self.log(f"Night {self._night_number} begins.")
-
-        self._night_thread = threading.Thread(
-            target=self._run_night, name="botc-night", daemon=True
+        self._console_log(
+            "phase",
+            (
+                "First night begins"
+                if self._phase is Phase.FIRST_NIGHT
+                else f"Night {self._night_number} begins"
+            ),
+            phase=self._phase.value,
+            night_number=self._night_number,
         )
-        self._night_thread.start()
 
-    def _run_night(self) -> None:
+        # Initial checkpoint: state at night-start, before any ability
+        # has run. Pressing Back during the very first ability of the
+        # night restores this checkpoint.
+        self._save_history_checkpoint(
+            f"start of night {self._night_number}"
+        )
+
+        self._launch_night_thread(resume=False)
+
+    def _run_night(self, resume: bool = False) -> None:
         try:
-            # Pre-first-night setup actions: each character that
-            # overrides Character.setup_ability gets a chance to ask the
-            # storyteller a question (Drunk's fake Townsfolk, Fortune
-            # Teller's red herring, etc.). Runs once, latched by
-            # ``_setup_actions_done`` so a re-entrant start_night doesn't
-            # repeat the prompts.
-            if self._night_number == 1 and not self._setup_actions_done:
-                self._run_setup_actions()
-                self._setup_actions_done = True
+            # Per project rule, a night that follows a triggered win
+            # runs **no abilities** — but the storyteller still sees
+            # the start-of-night and end-of-night announcements
+            # (Dusk / Dawn preset steps) so the night has its normal
+            # rhythm. We skip the setup-action pass and the
+            # NIGHT_START / NIGHT_END event dispatch (those drive
+            # character reactions, which are abilities), and we walk
+            # the preset which short-circuits every non-Dusk/Dawn step
+            # internally. After the Dawn announcement we fall through
+            # to the auto-dawn block which finalizes the pending win.
+            pending = self._pending_winner is not None
+            if pending:
+                self.log(
+                    f"Night {self._night_number}: win is pending "
+                    f"({self._pending_winner.value}); abilities skipped, "
+                    f"Dusk/Dawn announcements still fire."
+                )
 
-            self._dispatch(Event(EventType.NIGHT_START))
+            if not resume and not pending:
+                # Pre-first-night setup actions: each character that
+                # overrides Character.setup_ability gets a chance to ask
+                # the storyteller a question (Drunk's fake Townsfolk,
+                # Fortune Teller's red herring, etc.). Runs once, latched
+                # by ``_setup_actions_done`` so a re-entrant start_night
+                # doesn't repeat the prompts.
+                if self._night_number == 1 and not self._setup_actions_done:
+                    self._run_setup_actions()
+                    self._setup_actions_done = True
+
+                self._dispatch(Event(EventType.NIGHT_START))
 
             if self._preset is not None:
                 self._run_preset_night(self._night_number)
             else:
                 # Legacy path: fall back to Character.night_order if no
                 # preset is installed (used by tests that don't set one).
+                # The legacy path is not back-aware; checkpoints just
+                # mark each character's ability boundary.
                 order = self._build_action_order(self._night_number)
                 self.log(
                     f"Action order ({self._night_number}): "
@@ -1021,15 +1612,36 @@ class Engine:
                         for c in order
                     )
                 )
-                for char in order:
+                # ``_completed_step_index`` doubles as the legacy-path
+                # cursor when no preset is installed.
+                while self._completed_step_index < len(order):
                     if self._phase is Phase.FINISHED:
                         break
+                    # If a win condition tripped during a previous
+                    # ability this night, skip the rest of the night
+                    # and let the dawn announce the result.
+                    if self._pending_winner is not None:
+                        self.log(
+                            "Win pending mid-night — skipping remaining "
+                            "abilities."
+                        )
+                        break
+                    char = order[self._completed_step_index]
                     try:
                         char.ability(self, self._night_number)
                     except Exception as exc:  # pragma: no cover (defensive)
                         self.log(f"Error in {char.name} ability: {exc!r}")
+                    self._completed_step_index += 1
+                    self._save_history_checkpoint(
+                        f"after {char.name} (night "
+                        f"{self._night_number})"
+                    )
 
-            self._dispatch(Event(EventType.NIGHT_END))
+            # NIGHT_END drives reactions (Undertaker bookkeeping,
+            # etc.) — those are abilities, so on a pending-win night
+            # we don't dispatch it.
+            if not pending:
+                self._dispatch(Event(EventType.NIGHT_END))
 
             if self._auto_advance_to_day and self._phase.is_night:
                 # Drop into day automatically. The engine.advance_to_day
@@ -1037,6 +1649,13 @@ class Engine:
                 # already on the night thread, so bypass the
                 # join-on-self by inlining the state transition.
                 self._auto_dawn()
+        except _AbortAbility:
+            # The Storyteller hit Back while a character ability was
+            # waiting on a prompt. We swallow the exception here and
+            # bail out of the night thread without advancing; the
+            # ``back()`` call that triggered the abort is responsible
+            # for restoring state and re-launching the thread.
+            self.log("Night aborted (Back button).")
         finally:
             with self._lock:
                 self._pending_prompt = None
@@ -1068,7 +1687,25 @@ class Engine:
         for p in self._players:
             if p.character is None:
                 continue
-            in_play[p.character.name] = p.character
+            # Prefer alive instances over dead ones when two seated
+            # players share a character name. Canonical example: after
+            # a Scarlet Woman promotion, the (dead) original Demon and
+            # the freshly-promoted Scarlet Woman both have
+            # ``character.name`` equal to the demon class. Without this
+            # guard the dead instance can win the in_play slot, and
+            # ``would_act_tonight`` then short-circuits on the demon
+            # step because ``self.player.dead`` is True.
+            existing = in_play.get(p.character.name)
+            if (
+                existing is not None
+                and existing.player is not None
+                and not existing.player.dead
+            ):
+                # Already have an alive instance — don't overwrite with
+                # a (possibly dead) duplicate.
+                pass
+            else:
+                in_play[p.character.name] = p.character
             perceived = p.character.acting_perceived_character()
             if perceived is not None:
                 # Don't shadow a real seated holder of that role: only
@@ -1078,23 +1715,77 @@ class Engine:
                 # defensive no-op in the canonical case.)
                 in_play.setdefault(perceived.name, perceived)
 
-        for step in steps:
+        # Resume support: ``self._completed_step_index`` is 0 on a
+        # fresh night and >0 after a Back-button restore. We iterate
+        # by index (not by step value) so the index advances atomically
+        # alongside the step it represents — this is what makes the
+        # post-step checkpoint reflect "step N is done".
+        while self._completed_step_index < len(steps):
             if self._phase is Phase.FINISHED:
                 break
+            step = steps[self._completed_step_index]
 
+            # Dusk / Dawn announcements are ALWAYS run, including on a
+            # pending-win night — the storyteller still sees "Dusk"
+            # and "Dawn" so the night has its normal rhythm.
             if step.name in (preset_module.DUSK, preset_module.DAWN):
                 self._announce_step(step)
+                self._completed_step_index += 1
+                self._save_history_checkpoint(
+                    f"after {step.name} (night {night_number})"
+                )
                 continue
+
+            # Project rule: when a win is pending, every NON-Dusk/Dawn
+            # step is silently skipped — minion info, demon info, and
+            # every character ability stay quiet. We don't break out
+            # of the loop because Dawn (the closing announcement)
+            # might still be ahead of us in the sheet.
+            if self._pending_winner is not None:
+                self._completed_step_index += 1
+                continue
+
             if step.name == preset_module.MINION_INFO:
                 self._run_minion_info(step)
+                self._completed_step_index += 1
+                self._save_history_checkpoint(
+                    f"after Minion Info (night {night_number})"
+                )
                 continue
             if step.name == preset_module.DEMON_INFO:
                 self._run_demon_info(step)
+                self._completed_step_index += 1
+                self._save_history_checkpoint(
+                    f"after Demon Info (night {night_number})"
+                )
+                continue
+
+            # Special case: the Scarlet Woman step on the night sheet
+            # exists to walk a freshly-promoted Scarlet Woman through
+            # the demon-role reveal (per the trouble-brewing night
+            # sheet, but consolidated into a single "YOU ARE the
+            # <Demon>" prompt — no separate YOU ARE token stage).
+            # Once the SW reaction has fired, the seated player's
+            # ``character`` is no longer Scarlet Woman, so the generic
+            # ``in_play.get(step.name)`` lookup below would silently
+            # skip the step. Handle the reveal explicitly here, ahead of
+            # that lookup, so the reveal still runs.
+            if step.name == "Scarlet Woman":
+                if self._sw_pending_demon_reveal:
+                    self._announce_step(step)
+                    self._run_scarlet_woman_step(step)
+                self._completed_step_index += 1
+                self._save_history_checkpoint(
+                    f"after Scarlet Woman (night {night_number})"
+                )
                 continue
 
             char = in_play.get(step.name)
             if char is None:
                 # That character isn't in this game — skip silently.
+                # Still take a checkpoint so the Back button has a
+                # consistent "after each step" history.
+                self._completed_step_index += 1
                 continue
             # Trigger condition gating: if the character won't actually
             # do anything tonight (Ravenkeeper still alive, Undertaker
@@ -1106,12 +1797,19 @@ class Engine:
                     f"Skipping {char.name}: trigger condition not met "
                     f"tonight."
                 )
+                self._completed_step_index += 1
                 continue
             self._announce_step(step, character=char)
             try:
                 char.ability(self, night_number)
             except Exception as exc:  # pragma: no cover (defensive)
                 self.log(f"Error in {char.name} ability: {exc!r}")
+            self._completed_step_index += 1
+            # Per the project rule: after each ability, save the game
+            # state. The checkpoint is what the Back button restores.
+            self._save_history_checkpoint(
+                f"after {char.name} (night {night_number})"
+            )
 
     def _announce_step(
         self,
@@ -1178,6 +1876,15 @@ class Engine:
         # picks it up; no blocking storyteller prompt.
         if character is not None and character.player is not None:
             self._current_step_meta = dict(meta)
+            self._console_log(
+                "ability",
+                f"{character.name} ({character.player.name}) — {step.name}",
+                character=character.name,
+                target_player_id=character.player.id,
+                target_player_name=character.player.name,
+                step_name=step.name,
+                step_description=step.description,
+            )
             return
 
         # Non-character steps (Dusk / Dawn): keep emitting the prompt
@@ -1193,8 +1900,15 @@ class Engine:
         )
 
     def _run_minion_info(self, step: "preset_module.NightStep") -> None:
-        """Show each evil Minion who their Demon is and who else is on
-        the evil team. Only fires in games of 7+ players (per the rule).
+        """Show the evil Minions who their Demon is. Only fires in
+        games of 7+ players (per the rule).
+
+        Project rule: all Minions are presumed to wake up at the same
+        time, so the engine emits a single consolidated prompt that
+        wakes every Minion together and shows them only the
+        ``THIS IS THE DEMON`` token. (The Minions are awake in the
+        same room and can already see each other, so the
+        ``THESE ARE YOUR MINIONS`` token is redundant.)
         """
         non_traveler_count = len([
             p for p in self._players
@@ -1208,42 +1922,41 @@ class Engine:
             return
         demon_names = ", ".join(p.name for p in demons)
         minion_names = ", ".join(p.name for p in minions)
-        # The TARGET of minion-info is the Demon (and any fellow Minions)
-        # the receiving Minion needs to learn about — those are the chairs
-        # we want bright on the board, with everyone else dampened.
+        # ``THIS IS THE DEMON`` is the only token shown, so only the
+        # Demon's chair is highlighted on the board. The Minions that
+        # are being woken are conveyed via ``target_player_name`` (and
+        # rendered as the wake-up line in the storyteller UI).
         demon_char_names = sorted({
             p.character.name for p in demons if p.character is not None
         })
-        for minion in minions:
-            text = (
-                f"Wake {minion.name} (Minion). Show: the Demon is {demon_names}. "
-                f"Other Minions: {minion_names}."
-            )
-            highlight_ids = [p.id for p in demons] + [
-                p.id for p in minions if p.id != minion.id
-            ]
-            self.send_prompt(InformationPrompt(
-                text=text,
-                target_player_id=minion.id,
-                shown_to_player=True,
-                highlight_player_ids=highlight_ids,
-                highlight_characters=demon_char_names,
-                meta={
-                    "step_kind": "minion_info",
-                    "step_name": step.name,
-                    "description": step.description,
-                    # ``character`` and ``target_player_name`` let the
-                    # storyteller UI synthesize the standard
-                    # "Wake up <Role> (<Player>)" line above this
-                    # info — the same 6-section layout used for ordinary
-                    # ability prompts.
-                    "character": "Minion",
-                    "target_player_name": minion.name,
-                    "stage": "info",
-                    "demon_player_names": [p.name for p in demons],
-                    "minion_player_names": [p.name for p in minions],
-                },
-            ))
+        text = (
+            f"Wake {minion_names} (Minions). Show: the Demon is {demon_names}."
+        )
+        self.send_prompt(InformationPrompt(
+            text=text,
+            target_player_id=None,
+            shown_to_player=True,
+            highlight_player_ids=[p.id for p in demons],
+            highlight_characters=demon_char_names,
+            meta={
+                "step_kind": "minion_info",
+                "step_name": step.name,
+                "description": step.description,
+                # ``character`` and ``target_player_name`` let the
+                # storyteller UI synthesize the standard
+                # "Wake up <Role> (<Player>)" line above this
+                # info — the same 6-section layout used for ordinary
+                # ability prompts. For the consolidated minion-info
+                # prompt the "Role" is the plural ``Minions`` and the
+                # "Player" slot lists every Minion's name.
+                "character": "Minions",
+                "target_player_name": minion_names,
+                "stage": "info",
+                "demon_player_names": [p.name for p in demons],
+                "minion_player_names": [p.name for p in minions],
+                "minion_player_ids": [p.id for p in minions],
+            },
+        ))
 
     def _run_demon_info(self, step: "preset_module.NightStep") -> None:
         """Show the Demon their Minions and 3 not-in-play good roles to
@@ -1383,15 +2096,81 @@ class Engine:
                 },
             ))
 
+    def _run_scarlet_woman_step(self, step: "preset_module.NightStep") -> None:
+        """Walk a freshly-promoted Scarlet Woman through the demon reveal.
+
+        The trouble-brewing night sheet's "Scarlet Woman" line tells the
+        storyteller to inform the freshly-promoted Scarlet Woman of her
+        new demon role. We collapse this into a single prompt: wake the
+        player up and show them the "YOU ARE the <Demon>" text in one
+        go (no separate YOU ARE token reveal).
+
+        We deliberately do NOT run DEMON INFO here — the rules only call
+        for the role reveal (no minion list, no bluffs). Per the project
+        rule, no ``confirm`` / ``override`` language: the storyteller
+        clicks Next on the reveal.
+
+        Drains ``self._sw_pending_demon_reveal``; the persistent
+        ``_sw_promoted_player_ids`` list is left untouched so the
+        grimoire reminder ("Scarlet Woman IS THE DEMON") keeps showing
+        for the rest of the game.
+        """
+        if not self._sw_pending_demon_reveal:
+            return
+        # Drain the queue defensively — pop ids one at a time so a Back
+        # button mid-reveal restores the queue alongside the pickled
+        # engine snapshot.
+        pending = list(self._sw_pending_demon_reveal)
+        self._sw_pending_demon_reveal = []
+        for pid in pending:
+            try:
+                player = self.get_player(pid)
+            except KeyError:
+                continue
+            if player.character is None:
+                continue
+            demon_name = player.character.name
+            # WAKEUP — engine-internal event so audit tooling sees a
+            # real wakeup; the UI synthesizes the "Wake up <player>"
+            # line from the prompt meta.
+            self._dispatch(
+                Event(EventType.WAKEUP, source=None, targets=[player])
+            )
+            # Single consolidated reveal — "YOU ARE THE <DEMON>".
+            # Uppercase demon name matches the all-caps token style
+            # ("YOU ARE THE IMP" / "YOU ARE THE PUKKA" / …) the
+            # storyteller shows the freshly-promoted player.
+            self.send_prompt(InformationPrompt(
+                text=f"YOU ARE THE {demon_name.upper()}.",
+                target_player_id=player.id,
+                shown_to_player=True,
+                highlight_characters=[demon_name],
+                meta={
+                    "step_kind": "scarlet_woman_reveal",
+                    "step_name": step.name,
+                    "description": step.description,
+                    "character": "Scarlet Woman",
+                    "target_player_name": player.name,
+                    "stage": "info",
+                    "reveal": "demon_role",
+                    "demon_character": demon_name,
+                },
+            ))
+
     def _auto_dawn(self) -> None:
         """Internal version of advance_to_day for the night-thread.
 
         ``advance_to_day`` joins the night thread; we can't call that
         from the night thread itself or it'd deadlock. So we replicate
         the state-transition steps without the join.
+
+        Per project rule, this is also where any pending win condition
+        is finalized — game-end announcements happen at dawn.
         """
         deaths = list(self._pending_night_deaths)
         self._pending_night_deaths.clear()
+        # End-of-night cleanup — see ``advance_to_day``.
+        self._demon_killed_player_ids.clear()
         self._phase = Phase.DAY
         self._day_number += 1
         self._executed_today = False
@@ -1401,7 +2180,14 @@ class Engine:
             f"Dawn (auto): day {self._day_number} begins. "
             f"Night deaths: {[p.name for p in deaths]}."
         )
+        # Re-run win-condition detection now that we've stepped into
+        # day; any newly-tripped condition becomes pending and is
+        # finalized below alongside any pending win carried over from
+        # the previous day or night.
         self._check_win_conditions()
+        if self._pending_winner is not None:
+            self._finalize_pending_win()
+            return
         if self._phase is not Phase.FINISHED:
             self._dispatch(Event(EventType.DAY_START))
 
@@ -1469,7 +2255,13 @@ class Engine:
         return chars
 
     def advance_to_day(self) -> List[Player]:
-        """End the night, move to day. Returns players who died this night."""
+        """End the night, move to day. Returns players who died this night.
+
+        Per project rule, this is also a dawn — a pending win
+        condition (set during the day before, at dusk, or mid-night)
+        is finalized here and the game ends with the standard
+        ``game_end`` announcement.
+        """
         if self._phase not in (Phase.FIRST_NIGHT, Phase.NIGHT):
             raise RuntimeError("advance_to_day requires NIGHT phase.")
         # Wait for the night thread to finish, if any.
@@ -1479,6 +2271,11 @@ class Engine:
         deaths = list(self._pending_night_deaths)
         self._pending_night_deaths.clear()
 
+        # End-of-night cleanup: the DEAD reminder marker for the
+        # Demon's nightly kill is dropped at dawn. Per project rule,
+        # this marker exists only for the night the kill landed.
+        self._demon_killed_player_ids.clear()
+
         self._phase = Phase.DAY
         self._day_number += 1
         self._executed_today = False
@@ -1486,17 +2283,41 @@ class Engine:
             p.reset_day_flags()
         self.log(f"Dawn: day {self._day_number} begins. "
                  f"Night deaths: {[p.name for p in deaths]}.")
+        death_names = [p.name for p in deaths]
+        death_summary = (
+            f"Night deaths: {', '.join(death_names)}"
+            if death_names else "No deaths overnight"
+        )
+        self._console_log(
+            "phase",
+            f"Day {self._day_number} begins — {death_summary}",
+            phase=self._phase.value,
+            day_number=self._day_number,
+            night_deaths=death_names,
+        )
         self._check_win_conditions()
+        # Dawn announcement: if any win condition is pending (from
+        # this dawn's check, or carried over from earlier), finalize
+        # it now.
+        if self._pending_winner is not None:
+            self._finalize_pending_win()
         return deaths
 
     def advance_to_night(self) -> None:
         if self._phase is not Phase.DAY:
             raise RuntimeError("advance_to_night requires DAY phase.")
         # Dusk — fire DAY_END and run the dusk win check (Mayor's
-        # 3-alive-no-execution condition activates here). If the game
-        # ends, don't bother advancing the phase.
+        # 3-alive-no-execution condition activates here).
+        #
+        # Per project rule, a triggered win condition no longer ends
+        # the game immediately — it's parked as a pending win and the
+        # phase still advances to NIGHT. The night thread will run no
+        # actions (see :meth:`_run_night`) and the next dawn will
+        # finalize the win.
         self._dispatch(Event(EventType.DAY_END))
         self._check_win_conditions(at_dusk=True)
+        # Defensive: storyteller-driven _end_game could already have
+        # marked the game finished. Don't try to advance past it.
         if self._phase is Phase.FINISHED:
             return
         # Cure any one-day-only poisoning here; the Poisoner unpoisons
@@ -1516,7 +2337,22 @@ class Engine:
         self,
         player_id: int,
         cause: DeathCause = DeathCause.STORYTELLER,
+        source: Optional["Character"] = None,
     ) -> Player:
+        """Kill ``player_id`` with the given cause.
+
+        ``source`` is the :class:`Character` whose ability initiated
+        this kill (e.g. the Imp passes ``source=self`` from its
+        nightly demon kill). The source flows through the dispatched
+        ``PRE_DEATH`` and ``DEATH`` events so reactions can attribute
+        the kill — most importantly, redirect abilities like the
+        Mayor's preserve the original source when re-entering
+        :meth:`kill`, so a kill the Imp originated and the Mayor
+        bounces back to the Imp still reads as a self-attributed
+        demon kill at the dispatch level (without any
+        character-specific knowledge in either ability). Default is
+        ``None`` (engine/Storyteller-attributed).
+        """
         player = self.get_player(player_id)
         if player.dead:
             return player
@@ -1524,15 +2360,50 @@ class Engine:
         # Demon-kill protection (Soldier, Monk).
         if cause is DeathCause.DEMON_KILL:
             if player.protected_from_demon:
-                self.log(f"{player.name!r} is protected from the Demon; no death.")
+                # Monk-style protection: someone is shielding ``player``
+                # from the demon for this night. Log the reaction with
+                # the protector's role so the report is unambiguous;
+                # ``protected_from_demon`` is set by the Monk's ability
+                # path, so attribute it to the Monk here.
+                self.log_reaction(
+                    "Monk",
+                    f"{player.name} is protected from the Demon — no death.",
+                    target=player,
+                    trigger="demon_kill",
+                )
                 return player
             if (
                 player.character is not None
                 and player.character.name == "Soldier"
                 and player.has_ability
             ):
-                self.log(f"{player.name!r} is the Soldier (safe from Demon).")
+                self.log_reaction(
+                    "Soldier",
+                    f"{player.name} cannot be killed by the Demon.",
+                    target=player,
+                    trigger="demon_kill",
+                )
                 return player
+
+        # PRE_DEATH hook — fires after protection checks but BEFORE the
+        # death actually lands. A reaction may cancel the kill by
+        # setting ``event.data["cancelled"] = True`` (Mayor's night
+        # redirect uses this so the Mayor never transiently appears
+        # dead). If cancelled, the death never lands: no
+        # ``_pending_night_deaths`` entry, no DEMON_KILL marker, no
+        # ``DEATH`` event, no ``_check_win_conditions``. The
+        # reaction is responsible for any replacement effect (e.g.
+        # killing the redirected target via a re-entrant
+        # ``Engine.kill``).
+        pre_event = Event(
+            EventType.PRE_DEATH,
+            source=source,
+            targets=[player],
+            data={"cause": cause, "cancelled": False},
+        )
+        self._dispatch(pre_event)
+        if pre_event.data.get("cancelled"):
+            return player
 
         player.kill(cause)
         self.log(f"{player.name!r} dies ({cause.value}).")
@@ -1540,11 +2411,37 @@ class Engine:
         if self._phase.is_night and cause is not DeathCause.EXECUTION:
             self._pending_night_deaths.append(player)
 
+        # Demon kill lands → place the DEAD reminder marker on the
+        # seat. Cleared at the end of the night by ``advance_to_day``
+        # / ``_auto_dawn``.
+        if cause is DeathCause.DEMON_KILL:
+            if player.id not in self._demon_killed_player_ids:
+                self._demon_killed_player_ids.append(player.id)
+
         self._dispatch(
-            Event(EventType.DEATH, targets=[player], data={"cause": cause})
+            Event(
+                EventType.DEATH,
+                source=source,
+                targets=[player],
+                data={"cause": cause},
+            )
         )
+        # Drain deferred post-DEATH callbacks. Reactions that need to
+        # observe the *settled* state after every other reaction has
+        # fired (e.g. Imp self-kill, which must let the Scarlet
+        # Woman's "Demon dies → you become the Demon" reaction take
+        # effect first before deciding whether to prompt the ST for a
+        # replacement Minion) queue here during dispatch and run now.
+        if self._post_death_callbacks:
+            callbacks = list(self._post_death_callbacks)
+            self._post_death_callbacks.clear()
+            for cb in callbacks:
+                try:
+                    cb()
+                except Exception as exc:  # pragma: no cover (defensive)
+                    self.log(f"Post-DEATH callback crashed: {exc!r}")
         char_name = player.character.name if player.character else None
-        self._record(
+        self._console_log(
             "kill",
             f"{player.name} dies ({cause.value})",
             player_id=player.id,
@@ -1558,8 +2455,20 @@ class Engine:
     def revive(self, player_id: int) -> Player:
         player = self.get_player(player_id)
         player.revive()
+        # Revived seats lose any in-flight demon-kill marker — they
+        # are alive again and the DEAD reminder no longer applies.
+        if player.id in self._demon_killed_player_ids:
+            self._demon_killed_player_ids.remove(player.id)
         self.log(f"{player.name!r} is revived.")
         self._dispatch(Event(EventType.REVIVE, targets=[player]))
+        char_name = player.character.name if player.character else None
+        self._console_log(
+            "revive",
+            f"{player.name} is revived",
+            player_id=player.id,
+            player_name=player.name,
+            character=char_name,
+        )
         return player
 
     def poison(self, player_id: int) -> None:
@@ -1567,23 +2476,81 @@ class Engine:
         player.set_poisoned(True)
         self.log(f"{player.name!r} is poisoned.")
         self._dispatch(Event(EventType.POISON, targets=[player]))
+        self._console_log(
+            "state",
+            f"{player.name} is poisoned",
+            player_id=player.id, player_name=player.name, change="poison_on",
+        )
 
     def cure_poison(self, player_id: int) -> None:
-        self.get_player(player_id).set_poisoned(False)
-        self.log(f"{self.get_player(player_id).name!r} is no longer poisoned.")
+        player = self.get_player(player_id)
+        player.set_poisoned(False)
+        self.log(f"{player.name!r} is no longer poisoned.")
+        self._console_log(
+            "state",
+            f"{player.name} is no longer poisoned",
+            player_id=player.id, player_name=player.name, change="poison_off",
+        )
 
     def make_drunk(self, player_id: int) -> None:
-        self.get_player(player_id).set_drunk(True)
-        self.log(f"{self.get_player(player_id).name!r} is drunk.")
-        self._dispatch(Event(EventType.DRUNK, targets=[self.get_player(player_id)]))
+        player = self.get_player(player_id)
+        player.set_drunk(True)
+        self.log(f"{player.name!r} is drunk.")
+        self._dispatch(Event(EventType.DRUNK, targets=[player]))
+        self._console_log(
+            "state",
+            f"{player.name} is drunk",
+            player_id=player.id, player_name=player.name, change="drunk_on",
+        )
 
     def sober_up(self, player_id: int) -> None:
-        self.get_player(player_id).set_drunk(False)
+        player = self.get_player(player_id)
+        player.set_drunk(False)
+        self._console_log(
+            "state",
+            f"{player.name} is no longer drunk",
+            player_id=player.id, player_name=player.name, change="drunk_off",
+        )
 
     def change_character(self, player_id: int, character_name: str) -> None:
+        """Swap a player's character class mid-game.
+
+        The new character is a *fresh instantiation*: every per-character
+        flag (Slayer's spent-shot, Virgin's triggered nominator-execute,
+        Butler's master, Fortune Teller's red-herring resolution, Mayor's
+        redirect-in-flight, etc.) starts at its class default because
+        ``script_data.build_character(name)`` calls ``cls()`` with no
+        carry-over. On the Player side,
+        :meth:`Player.change_character` resets the per-role flags
+        (``once_per_game_used``, ``mad_about``, ``protected_from_demon``)
+        so once-per-game and first-night abilities are available to
+        the new role. Identity (alignment, alive, drunk, poisoned,
+        per-day flags) belongs to the seat and is preserved.
+
+        The chair store is also updated so ``chair.character`` tracks
+        the engine truth — there is exactly one place that records
+        "what role is this seat playing right now". Keeping
+        ``chair.character == player.character.name`` avoids the "two
+        copies of the player's role" problem the UI used to have
+        (engine sees Imp, chair shows Scarlet Woman).
+
+        Status reminders that depend on the seat's *original* role
+        (e.g. "Scarlet Woman IS THE DEMON" — the SW promoted, so
+        chair.character is now "Imp") use a separate per-seat list
+        on the engine (``_sw_promoted_player_ids``); UI rendering
+        keys off that, not chair.character.
+        """
         player = self.get_player(player_id)
+        # ``build_character`` returns a freshly-constructed instance —
+        # the source of "all conditions reset" for the new role.
         char = script_data.build_character(character_name)
         player.change_character(char)
+        # Mirror the change onto the chair store so chair.character is
+        # the single source of truth visible to the UI.
+        for chair in self.chairs.list():
+            if chair.get("player_id") == player_id:
+                self.chairs.update(chair["id"], character=character_name)
+                break
         self.log(f"{player.name!r} is now the {character_name}.")
 
     def execute_player(self, player_id: int) -> Player:
@@ -1595,17 +2562,42 @@ class Engine:
         # 3-alive-no-execution win check at dusk.
         self._executed_today = True
         self.log(f"{player.name!r} is executed.")
+        # EXECUTION is the execution-specific signal (Saint, Undertaker,
+        # Mayor's no-execution latch). It fires first so an executed
+        # Saint can register a pending evil win before the broader
+        # DEATH reactions run.
         self._dispatch(
             Event(EventType.EXECUTION, targets=[player],
                   data={"cause": DeathCause.EXECUTION})
         )
+        # An execution IS a death, so the broader DEATH event must
+        # also fire — otherwise reactions that listen for DEATH
+        # (notably the Scarlet Woman's Demon takeover, which only
+        # promotes when the Demon dies) silently miss executed-Demon
+        # kills, and a 5+-alive table that executes the Demon would
+        # incorrectly end the game with good winning. Dispatched after
+        # EXECUTION so per-event ordering matches engine.kill (kill →
+        # dispatch DEATH) and so any pending win Saint already
+        # registered isn't reordered.
+        self._dispatch(
+            Event(EventType.DEATH, targets=[player],
+                  data={"cause": DeathCause.EXECUTION})
+        )
         char_name = player.character.name if player.character else None
-        self._record(
+        self._console_log(
             "execution",
             f"{player.name} is executed",
             player_id=player.id,
             player_name=player.name,
             character=char_name,
+        )
+        self._console_log(
+            "kill",
+            f"{player.name} dies (execution)",
+            player_id=player.id,
+            player_name=player.name,
+            character=char_name,
+            cause=DeathCause.EXECUTION.value,
         )
         self._check_win_conditions()
         return player
@@ -1659,7 +2651,7 @@ class Engine:
                 },
             )
         )
-        self._record(
+        self._console_log(
             "nomination",
             f"{nominator.name} nominates {nominee.name}",
             nominator_id=nominator.id,
@@ -1717,6 +2709,14 @@ class Engine:
                 "An ability worker is already running; wait for it to finish."
             )
         char = player.character
+        self._console_log(
+            "ability",
+            f"{char.name} ({player.name}) — daytime ability",
+            character=char.name,
+            target_player_id=player.id,
+            target_player_name=player.name,
+            ability_kind="daytime",
+        )
         thread = threading.Thread(
             target=self._run_daytime_ability,
             args=(char,),
@@ -1806,6 +2806,11 @@ class Engine:
         via the panel session in the UI.
         """
         self._merge_step_meta_into(prompt)
+        # An ability that pre-emptively checks the abort flag (e.g. the
+        # Storyteller hit Back twice in quick succession) shouldn't end
+        # up emitting another prompt to the UI; bail early.
+        if self._abort_requested:
+            raise _AbortAbility()
         auto = self._auto_resolve(prompt)
         if auto is not _NO_AUTO_RESOLVE:
             self.log(
@@ -1820,6 +2825,15 @@ class Engine:
             self._response_ready.clear()
         self.log(f"Prompt: {prompt.text}")
         self._response_ready.wait()
+        # If ``back()`` woke us up to abort, the response slot is still
+        # ``None`` (we didn't get a real Storyteller answer). Raise
+        # ``_AbortAbility`` so the character ability unwinds without
+        # treating the missing response as a legitimate pick.
+        if self._abort_requested:
+            with self._lock:
+                self._pending_prompt = None
+                self._prompt_response = None
+            raise _AbortAbility()
         with self._lock:
             response = self._prompt_response
             self._prompt_response = None
@@ -1946,9 +2960,31 @@ class Engine:
     # ==================================================================
     #                       WIN CONDITIONS
     # ==================================================================
+    #
+    # Project rule: *Game should only end after a night*. When a win
+    # condition is satisfied at any time other than a dawn transition
+    # we record it on ``_pending_winner`` / ``_pending_win_reason`` and
+    # let play continue:
+    #
+    #   * Win triggered DURING DAY — players keep using abilities and
+    #     nominating; advance_to_night still works; the night that
+    #     follows runs no actions; dawn finalizes the win.
+    #   * Win triggered DURING NIGHT — remaining night abilities are
+    #     skipped (the night thread fast-forwards to dawn); dawn
+    #     finalizes the win.
+    #   * Win triggered AT DUSK (Mayor) — recorded; advance_to_night
+    #     still moves into NIGHT, that night is a no-op, dawn
+    #     finalizes.
+    #
+    # The first win condition to trigger wins; subsequent triggers are
+    # ignored so a chain reaction (e.g. Saint executed *and* the Demon
+    # already dead) doesn't overwrite the original cause.
 
     def _check_win_conditions(self, at_dusk: bool = False) -> None:
         if self._phase is Phase.FINISHED:
+            return
+        if self._pending_winner is not None:
+            # Already pending — first one to fire wins, don't overwrite.
             return
         alive = self.alive_players
         alive_demons = [
@@ -1956,14 +2992,16 @@ class Engine:
             if p.char_type is CharType.DEMON
         ]
         if not alive_demons:
-            self._end_game(Alignment.GOOD, "The Demon is dead.")
+            self._register_pending_win(Alignment.GOOD, "The Demon is dead.")
             return
         counted = [
             p for p in alive
             if p.char_type not in (CharType.TRAVELER, CharType.FABLED)
         ]
         if len(counted) <= 2:
-            self._end_game(Alignment.EVIL, "Only two players remain.")
+            self._register_pending_win(
+                Alignment.EVIL, "Only two players remain."
+            )
             return
 
         # Mayor: at dusk, if exactly 3 non-Traveler/Fabled players are
@@ -1985,28 +3023,481 @@ class Engine:
                 self.log(
                     f"Mayor {mayor_player.name} triggers win — "
                     f"3 alive, no execution; "
-                    f"{winner.value} wins."
+                    f"{winner.value} pending."
                 )
-                self._end_game(
+                self._register_pending_win(
                     winner,
                     "Mayor: 3 alive players and no execution today.",
                 )
 
-    def _end_game(self, winner: Alignment, reason: str) -> None:
+    def _register_pending_win(self, winner: Alignment, reason: str) -> None:
+        """Record a triggered win without ending the game yet.
+
+        The actual phase flip and ``game_end`` console event are
+        deferred to :meth:`_finalize_pending_win`, which is called by
+        the dawn paths (:meth:`advance_to_day` and :meth:`_auto_dawn`).
+        Per project rule, this lets the day finish out normally and
+        makes the next night a no-op.
+        """
+        if self._phase is Phase.FINISHED:
+            return
+        if self._pending_winner is not None:
+            return
+        self._pending_winner = winner
+        self._pending_win_reason = reason
+        self.log(
+            f"Win pending: {winner.value} — {reason}. "
+            f"Will be announced at dawn."
+        )
+        self._console_log(
+            "win_pending",
+            f"{winner.value.capitalize()} win pending — {reason} "
+            f"(announced at dawn)",
+            winner=winner.value,
+            reason=reason,
+        )
+
+    def _finalize_pending_win(self) -> None:
+        """Promote the pending win to a real game-over.
+
+        Called from the dawn transition. Idempotent — if there is no
+        pending win or the game already finished, this is a no-op.
+        """
+        if self._phase is Phase.FINISHED:
+            return
+        if self._pending_winner is None:
+            return
+        winner = self._pending_winner
+        reason = self._pending_win_reason or ""
         self._phase = Phase.FINISHED
         self._winner = winner
         self._win_reason = reason
+        # Clear the pending slots so a snapshot taken after end-of-game
+        # only shows the final winner, not the (now-stale) pending one.
+        self._pending_winner = None
+        self._pending_win_reason = None
         self.log(f"Game over: {winner.value} wins — {reason}")
-        self._record(
+        self._console_log(
             "game_end",
             f"{winner.value.capitalize()} wins — {reason}",
             winner=winner.value,
             reason=reason,
         )
 
+    def _end_game(self, winner: Alignment, reason: str) -> None:
+        """Storyteller-driven end-of-game.
+
+        The ``/api/engine/end_game`` route calls this, as does any
+        external caller that wants to override the dawn-deferred
+        behavior. Internal win-condition detection should call
+        :meth:`_register_pending_win` instead so the project rule
+        (announcements only at dawn) is respected.
+        """
+        if self._phase is Phase.FINISHED:
+            return
+        # Route through the pending machinery so the bookkeeping is in
+        # one place; immediately finalize since the storyteller asked
+        # for an explicit end.
+        self._pending_winner = winner
+        self._pending_win_reason = reason
+        self._finalize_pending_win()
+
+    # ==================================================================
+    #                  SAVE / LOAD / BACK-BUTTON HISTORY
+    # ==================================================================
+    #
+    # The engine state is serializable to a string and reloadable. The
+    # primary use case is the Back button: after every ability the
+    # engine takes a snapshot and pushes it on ``self._history``;
+    # pressing Back pops the most recent snapshot and restores it,
+    # which (during a night) interrupts the running ability and
+    # re-enters the preset loop at the same step so the Storyteller
+    # can redo any selections in that ability.
+    #
+    # Threading state (the prompt lock, response event, and night
+    # thread handle) is *not* part of a saved state — it's reconstructed
+    # fresh on restore, since resuming requires a brand new thread.
+    # ------------------------------------------------------------------
+
+    # Attributes that don't survive a save/load round-trip. They are
+    # transient brokerage state, not part of the game's logical state,
+    # and we recreate them in :meth:`__setstate__`.
+    _NON_PERSISTED_ATTRS: Tuple[str, ...] = (
+        "_lock",
+        "_response_ready",
+        "_night_thread",
+        "_pending_prompt",
+        "_prompt_response",
+        "_current_step_meta",
+        "_abort_requested",
+    )
+
+    def __getstate__(self) -> Dict[str, Any]:
+        """Drop non-picklable / transient attributes for serialization.
+
+        The history list is also dropped — otherwise each new history
+        entry would recursively contain every prior entry, blowing up
+        in size after a few abilities.
+        """
+        state = self.__dict__.copy()
+        for k in self._NON_PERSISTED_ATTRS:
+            state.pop(k, None)
+        # Don't recursively serialize the history list inside each
+        # snapshot; the history is engine-instance-local and rebuilt
+        # on the live engine, not part of the logical game state.
+        state["_history"] = []
+        state["_history_labels"] = []
+        # The preset object is rebuilt by name on restore; saving it
+        # keeps the snapshot self-contained but the on-disk preset
+        # files are the authoritative source.
+        return state
+
+    def __setstate__(self, state: Dict[str, Any]) -> None:
+        """Rehydrate from :meth:`__getstate__` and rebuild thread state.
+
+        Resets all prompt-broker plumbing to a clean baseline so a
+        :meth:`back` call (which restores then restarts the night
+        thread) starts from a known state.
+        """
+        self.__dict__.update(state)
+        self._lock = threading.Lock()
+        self._response_ready = threading.Event()
+        self._night_thread = None
+        self._pending_prompt = None
+        self._prompt_response = None
+        self._current_step_meta = None
+        self._abort_requested = False
+        # Backwards-compat: older snapshots won't have the
+        # pending-win fields; default them so a load doesn't crash on
+        # older save states.
+        if "_pending_winner" not in self.__dict__:
+            self._pending_winner = None
+        if "_pending_win_reason" not in self.__dict__:
+            self._pending_win_reason = None
+        if "_demon_killed_player_ids" not in self.__dict__:
+            self._demon_killed_player_ids = []
+        # The history list isn't persisted in the snapshot itself; the
+        # caller (``load_state``) preserves the live engine's history.
+        if "_history" not in self.__dict__ or self._history is None:
+            self._history = []
+        if (
+            "_history_labels" not in self.__dict__
+            or self._history_labels is None
+        ):
+            self._history_labels = []
+
+    def save_state(self) -> str:
+        """Return an opaque, base64-encoded pickle of the engine state.
+
+        The string is stable across processes (subject to the engine's
+        Python module layout matching) and small enough to store in
+        memory or send over HTTP. ``load_state`` restores it back onto
+        the same :class:`Engine` instance, preserving the engine's
+        live history list.
+        """
+        payload = pickle.dumps(
+            {"version": _SAVE_STATE_VERSION, "state": self.__getstate__()},
+            protocol=pickle.HIGHEST_PROTOCOL,
+        )
+        return base64.b64encode(payload).decode("ascii")
+
+    def load_state(self, blob: str) -> None:
+        """Restore engine state from a string produced by ``save_state``.
+
+        The current ``_history`` / ``_history_labels`` lists are
+        preserved across the restore so back-navigation can keep
+        walking further back even after a load. If the caller
+        explicitly wants to discard history they should call
+        :meth:`reset_history` afterwards.
+        """
+        if not isinstance(blob, str) or not blob:
+            raise ValueError("save-state blob must be a non-empty string")
+        try:
+            payload = pickle.loads(base64.b64decode(blob.encode("ascii")))
+        except Exception as exc:
+            raise ValueError(f"could not decode save-state blob: {exc!r}") from exc
+        if not isinstance(payload, dict) or "state" not in payload:
+            raise ValueError("save-state blob is not a recognized envelope")
+        version = payload.get("version")
+        if version != _SAVE_STATE_VERSION:
+            raise ValueError(
+                f"save-state version {version!r} not supported "
+                f"(expected {_SAVE_STATE_VERSION!r})"
+            )
+        # Preserve the live engine's history across the restore.
+        saved_history = list(self._history)
+        saved_history_labels = list(self._history_labels)
+        self.__setstate__(payload["state"])
+        self._history = saved_history
+        self._history_labels = saved_history_labels
+
+    def reset_history(self) -> None:
+        """Drop every saved Back-button checkpoint."""
+        self._history = []
+        self._history_labels = []
+
+    def history_size(self) -> int:
+        """Number of Back-button checkpoints currently held."""
+        return len(self._history)
+
+    def history_labels(self) -> List[str]:
+        """Human-readable label for each checkpoint, oldest first.
+
+        Mirrors the order of ``self._history``. Useful for UI tooling
+        that wants to surface "you can rewind to: <label>".
+        """
+        return list(self._history_labels)
+
+    def _save_history_checkpoint(self, label: str) -> None:
+        """Push a fresh checkpoint onto the Back-button history.
+
+        Called after each preset step completes (and after each
+        first-night setup action). The label is human-readable and is
+        only used by the UI / log; the engine never inspects it.
+        """
+        try:
+            blob = self.save_state()
+        except Exception as exc:  # pragma: no cover (defensive)
+            self.log(f"history checkpoint save failed: {exc!r}")
+            return
+        self._history.append(blob)
+        self._history_labels.append(label)
+
+    def back(self) -> bool:
+        """Pop the latest Back-button checkpoint and restore it.
+
+        Behaviour:
+
+          * If a night thread is running (the Storyteller is mid-night
+            or mid-ability), this signals the thread to abort, joins
+            it, restores the latest checkpoint, and restarts the night
+            thread at the same step. This re-runs the ability the
+            Storyteller was on, so any selections made during it can
+            be redone.
+          * If no thread is running, the latest checkpoint is restored
+            in place (e.g. to step back across nights). Future Back
+            presses keep walking further back.
+
+        Returns ``True`` if a checkpoint was restored, ``False`` if
+        the history is empty and there is nothing to revert to.
+        """
+        if not self._history:
+            return False
+
+        # Tell any blocked ability to abort. ``send_prompt`` re-raises
+        # ``_AbortAbility`` once it sees the flag, which propagates up
+        # to ``_run_night`` and tears the night thread down cleanly.
+        was_running = bool(self._night_thread and self._night_thread.is_alive())
+        if was_running:
+            self._abort_requested = True
+            with self._lock:
+                # Wake the prompt-response wait without supplying a
+                # real answer; ``send_prompt`` will see the abort flag
+                # and raise rather than treat the (unset) response as
+                # the Storyteller's choice.
+                self._response_ready.set()
+            try:
+                self._night_thread.join(timeout=2.0)
+            except Exception:  # pragma: no cover (defensive)
+                pass
+
+        blob = self._history.pop()
+        try:
+            self._history_labels.pop()
+        except IndexError:  # pragma: no cover (defensive)
+            pass
+        try:
+            self.load_state(blob)
+        except Exception as exc:  # pragma: no cover (defensive)
+            self.log(f"back() restore failed: {exc!r}")
+            return False
+
+        self.log(
+            f"Back: restored checkpoint "
+            f"({len(self._history)} earlier checkpoint(s) remaining)."
+        )
+
+        # If we were mid-night, re-launch the night thread so the
+        # current step (the one the Storyteller wanted to redo) runs
+        # again from scratch.
+        if was_running and self._phase in (Phase.FIRST_NIGHT, Phase.NIGHT):
+            self._launch_night_thread(resume=True)
+        return True
+
+    def _launch_night_thread(self, *, resume: bool) -> None:
+        """Spawn the night worker thread.
+
+        ``resume=False`` is the fresh-start path used by
+        :meth:`start_night`. ``resume=True`` skips the
+        once-per-night NIGHT_START / setup-action work and picks up
+        from ``self._completed_step_index``.
+        """
+        self._night_thread = threading.Thread(
+            target=self._run_night,
+            kwargs={"resume": resume},
+            name="botc-night",
+            daemon=True,
+        )
+        self._night_thread.start()
+
     # ==================================================================
     #                       SNAPSHOTS
     # ==================================================================
+
+    # Setup-time tokens key off the matching pool slot's role name —
+    # the token sits on whichever chair currently holds that role.
+    _SETUP_TOKEN_GETTERS = (
+        ("ft_red_herring",        "ft_red_herring"),
+        ("washerwoman_townsfolk", "washerwoman_townsfolk"),
+        ("washerwoman_wrong",     "washerwoman_wrong"),
+        ("librarian_outsider",    "librarian_outsider"),
+        ("librarian_wrong",       "librarian_wrong"),
+        ("investigator_minion",   "investigator_minion"),
+        ("investigator_wrong",    "investigator_wrong"),
+    )
+
+    def _per_seat_tokens(self) -> Dict[str, Any]:
+        """Per-seat (player_id) reminder-token presence.
+
+        Walks every seated player and returns each runtime token kind
+        as either a single ``player_id`` (singleton tokens) or a list
+        of ``player_id``s (multi-target tokens). Absent tokens come
+        back as ``None`` / ``[]``.
+        """
+        butler_master: Optional[int] = None
+        monk_safe: Optional[int] = None
+        poisoned: Optional[int] = None
+        undertaker_died_today: Optional[int] = None
+        slayer_no_ability: List[int] = []
+        virgin_no_ability: List[int] = []
+
+        for p in self.players:
+            char = getattr(p, "character", None)
+            if char is None:
+                continue
+            # Source-character tokens gate on ``has_ability`` (alive,
+            # sober, healthy). Spent / persistent tokens below do not.
+            if p.has_ability:
+                if char.name == "Poisoner":
+                    target = getattr(char, "_last_target", None)
+                    if (target is not None
+                            and getattr(target, "character", None) is not None
+                            and target.poisoned):
+                        poisoned = target.id
+                elif char.name == "Butler":
+                    master = getattr(char, "_master", None)
+                    if (master is not None
+                            and getattr(master, "character", None) is not None):
+                        butler_master = master.id
+                elif char.name == "Monk":
+                    target = getattr(char, "_target", None)
+                    if (target is not None
+                            and target.alive
+                            and getattr(target, "protected_from_demon", False)
+                            and getattr(target, "character", None) is not None):
+                        monk_safe = target.id
+            # Spent / persistent — Slayer/Virgin no-ability tokens
+            # survive death; Undertaker DIED TODAY tracks the executed
+            # seat regardless of the Undertaker's own state.
+            if char.name == "Slayer" and getattr(char, "_used", False):
+                slayer_no_ability.append(p.id)
+            elif char.name == "Virgin" and getattr(char, "_triggered", False):
+                virgin_no_ability.append(p.id)
+            elif char.name == "Undertaker":
+                executed = getattr(char, "_last_executed", None)
+                if (executed is not None
+                        and getattr(executed, "character", None) is not None):
+                    undertaker_died_today = executed.id
+
+        return {
+            "butler_master":          butler_master,
+            "monk_safe":              monk_safe,
+            "poisoned":               poisoned,
+            "imp_dead":               list(getattr(self, "_demon_killed_player_ids", []) or []),
+            "undertaker_died_today":  undertaker_died_today,
+            "scarlet_woman_is_demon": list(getattr(self, "_sw_promoted_player_ids", []) or []),
+            "slayer_no_ability":      slayer_no_ability,
+            "virgin_no_ability":      virgin_no_ability,
+        }
+
+    def chair_views(self) -> List[Dict[str, Any]]:
+        """Enriched chair dicts for the UI.
+
+        Each entry has every field from :meth:`ChairStore.list` plus:
+
+          - ``display_character``: the role the seat *appears* to be
+            (the Drunk's pretend Townsfolk if set; otherwise the real
+            character).
+          - ``tokens``: ``[{"kind": str}, ...]`` — every reminder token
+            currently sitting on this chair. Token visibility is purely
+            a function of state; the engine clears the underlying slot
+            when the relevant ability resolves and the entry simply
+            stops appearing here.
+          - ``eligible_token_kinds``: list of setup-token kinds whose
+            drag would land here. Sourced from the chair's character
+            class' :meth:`Character.accepts_tokens`, gated on the
+            character being in the current pool. The UI uses this to
+            highlight valid drop targets.
+
+        The UI is expected to render these directly without re-deriving
+        eligibility or perceived character.
+        """
+        from engine.characters import CHARACTER_REGISTRY
+
+        raw = self.chairs.list()
+        seat = self._per_seat_tokens()
+        # Resolve each setup token's current role-name once per call.
+        setup_roles = {
+            kind: getattr(self.pool, getter)()
+            for kind, getter in self._SETUP_TOKEN_GETTERS
+        }
+        drunk_fake_role = self.pool.drunk_fake()
+        pool_names = set(self.pool.list())
+
+        out: List[Dict[str, Any]] = []
+        for c in raw:
+            char = (c.get("character") or "").strip()
+            pid = c.get("player_id")
+            kinds: List[str] = []
+
+            # IS THE DRUNK token sits on the Drunk's own chair.
+            if char == "Drunk":
+                kinds.append("drunk")
+
+            # Setup tokens key off chair.character matching the slot.
+            for kind, role in setup_roles.items():
+                if role and char == role:
+                    kinds.append(kind)
+
+            # Runtime per-seat tokens key off chair.player_id.
+            if pid is not None:
+                for kind, holders in seat.items():
+                    if isinstance(holders, list):
+                        if pid in holders:
+                            kinds.append(kind)
+                    elif holders == pid:
+                        kinds.append(kind)
+
+            display = char
+            if char == "Drunk" and drunk_fake_role:
+                display = drunk_fake_role
+
+            # Drag eligibility — only meaningful when the chair holds an
+            # in-pool role. The character class declares which token
+            # kinds its chair can host.
+            eligible: List[str] = []
+            if char and char in pool_names:
+                klass = CHARACTER_REGISTRY.get(char)
+                if klass is not None:
+                    eligible = sorted(klass.accepts_tokens())
+
+            out.append({
+                **c,
+                "display_character": display,
+                "tokens": [{"kind": k} for k in kinds],
+                "eligible_token_kinds": eligible,
+            })
+        return out
 
     def snapshot(self) -> dict:
         """A storyteller-view JSON-serializable snapshot of the game.
@@ -2025,8 +3516,17 @@ class Engine:
             ],
             "winner": self._winner.value if self._winner else None,
             "win_reason": self._win_reason,
+            # A *pending* win has been triggered but the game hasn't
+            # ended yet — players are still using abilities / nominating
+            # during the day, or the next night is running as a no-op.
+            # The UI can show this so the storyteller knows the next
+            # dawn will finalize the result.
+            "pending_winner": (
+                self._pending_winner.value if self._pending_winner else None
+            ),
+            "pending_win_reason": self._pending_win_reason,
             "log_tail": self._log[-50:],
-            "chairs": self.chairs.list(),
+            "chairs": self.chair_views(),
             "storyteller": self.chairs.get_storyteller(),
             "pool": self.pool.list(),
             "drunk_fake": self.pool.drunk_fake(),
@@ -2034,6 +3534,10 @@ class Engine:
             "washerwoman_townsfolk": self.pool.washerwoman_townsfolk(),
             "washerwoman_wrong": self.pool.washerwoman_wrong(),
             "selected_preset": self.selected_preset_name,
+            # Back-button affordance: the UI lights the button up only
+            # while there is at least one checkpoint to return to.
+            "history_size": self.history_size(),
+            "completed_step_index": self._completed_step_index,
         }
 
     def player_view(self, player_id: int) -> dict:

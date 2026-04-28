@@ -13,8 +13,11 @@ fires once and is then spent (whether or not the target was the Demon).
 Drunkenness / poisoning: the slot is still consumed (per the
 rulebook), but no kill happens.
 
-When the Slayer is sober and healthy, the engine acts directly on the
-target's actual ``char_type`` — no ST verify/override prompt.
+The Slayer uses :meth:`Character.registers_as` (categories=(DEMON,))
+to learn whether the target registers as a Demon. So a Recluse may
+register as the Demon and die to a Slayer shot; the Spy never
+registers as a Demon (categories doesn't include TF/Outsider, so its
+override is silent and returns "Spy" — a Minion, not the Demon).
 """
 
 from __future__ import annotations
@@ -45,6 +48,8 @@ class Slayer(Character):
     reminder_tokens: list = [
         {"name": 'NO ABILITY', "icon": 'slayer_no_ability.png'},
     ]
+
+    DETECTION_CATEGORIES = (CharType.DEMON,)
 
     def __init__(self, player=None) -> None:
         super().__init__(player)
@@ -115,10 +120,18 @@ class Slayer(Character):
             )
             return
 
-        # Sober + healthy Slayer: trust the target's actual char_type,
-        # no ST verify/override prompt. The drunk/poisoned branch was
-        # handled above.
-        is_demon = target.char_type is CharType.DEMON
+        # Sober + healthy Slayer: run a char_type=DEMON check on the
+        # target. Spy override is silent (Spy is a Minion, not a
+        # Demon); Recluse override fires and may register as a Demon.
+        from engine.check import Check
+        demon_check = Check(
+            attribute="char_type",
+            passes=(CharType.DEMON,),
+            detector_name=self.name,
+            detector_player_id=self.player.id,
+            extra_meta={"step_for": "slayer_target"},
+        )
+        is_demon = self.check(engine, target, demon_check)
 
         if is_demon:
             engine.log(f"Slayer kills {target.name} (was a Demon).")

@@ -97,7 +97,7 @@
     padding: 16px;
   }
 
-  /* The board is a true square, sized to fit the available space. */
+  /* Square board, sized to fit the available space. */
   #boardWrap {
     position: relative;
     aspect-ratio: 1 / 1;
@@ -112,7 +112,7 @@
     border: 2px solid var(--board-edge);
     border-radius: 6px;
     box-shadow: 0 4px 24px #00000088, inset 0 0 60px #00000077;
-    touch-action: none; /* let us handle touch drags */
+    touch-action: none; /* we handle touch drags */
   }
 
   .chair {
@@ -315,8 +315,7 @@
 <main>
   <div id="boardWrap">
     <svg id="board" viewBox="0 0 1000 1000" preserveAspectRatio="xMidYMid meet">
-      <!-- Storyteller sits below the chairs so chair drags win when
-           markers overlap. -->
+      <!-- Storyteller below chairs so chair drags win on overlap. -->
       <g id="storyteller"></g>
       <g id="chairs"></g>
     </svg>
@@ -374,9 +373,9 @@
 <script>
 (() => {
   const BOARD_SIZE = 1000;          // SVG viewBox units
-  const CHAIR_RADIUS = 51;          // ~50% larger than the original 34
-  const DRAG_SLOP = 10;             // board units the pointer must move before it's a drag
-  const MAX_CHAIR_TEXT = 88;        // widest text we let a chair display (board units)
+  const CHAIR_RADIUS = 51;
+  const DRAG_SLOP = 10;             // board units before pointer-down counts as a drag
+  const MAX_CHAIR_TEXT = 88;        // max chair text width (board units)
   const board = document.getElementById("board");
   const chairsG = document.getElementById("chairs");
   const storytellerG = document.getElementById("storyteller");
@@ -384,7 +383,7 @@
 
   // Local mirror of server state, keyed by chair id.
   const chairs = new Map();
-  // The (single) storyteller marker. Width/height come from the server.
+  // Single storyteller marker; width/height come from the server.
   let storyteller = null;
 
   // ----- server IO -----
@@ -470,7 +469,7 @@
     renderStoryteller();
 
     chairsG.innerHTML = "";
-    // Draw in id order so overlaps behave predictably.
+    // Draw in id order for stable overlap behavior.
     const ordered = [...chairs.values()].sort((a, b) => a.id - b.id);
     for (const c of ordered) {
       const g = document.createElementNS("http://www.w3.org/2000/svg", "g");
@@ -489,8 +488,7 @@
       const character = (c.character || "").trim();
       const textsToFit = [];
       if (name && character) {
-        // Both set: name above, role below. Vertical offsets account
-        // for the larger font sizes so they don't visually touch.
+        // Name above, role below.
         const tName = svgText("chair-name", name, 0, -13);
         const tChar = svgText("chair-character", character, 0, 15);
         g.appendChild(tName);
@@ -507,8 +505,7 @@
       }
 
       chairsG.appendChild(g);
-      // Shrink any text that would spill outside the circle. Must run
-      // after the element is in the DOM so getComputedTextLength works.
+      // Fit text to the chair (after DOM insert so getComputedTextLength works).
       for (const t of textsToFit) fitText(t, MAX_CHAIR_TEXT);
       attachChairInteractions(g, c);
     }
@@ -520,19 +517,17 @@
     el.setAttribute("class", cls);
     el.setAttribute("x", x);
     el.setAttribute("y", y);
-    // dominant-baseline=central so y is the visual midline.
     el.setAttribute("dominant-baseline", "central");
     el.textContent = text;
     return el;
   }
 
-  // Scale an SVG <text> horizontally so it never exceeds maxWidth. Short
-  // text is left alone so it renders at its natural size.
+  // Horizontally squish <text> if it's wider than maxWidth.
   function fitText(el, maxWidth) {
     let actual = 0;
     try { actual = el.getComputedTextLength(); } catch (e) { actual = 0; }
     if (!actual) {
-      // Fallback estimate when layout info isn't available yet.
+      // Fallback when layout info isn't ready yet.
       const fs = parseFloat(getComputedStyle(el).fontSize) || 14;
       actual = (el.textContent || "").length * fs * 0.55;
     }
@@ -560,7 +555,6 @@
     rect.setAttribute("y", -h / 2);
     rect.setAttribute("width", w);
     rect.setAttribute("height", h);
-    // Sharp corners as requested.
     rect.setAttribute("fill", "var(--st-fill)");
     rect.setAttribute("stroke", "var(--st-edge)");
     rect.setAttribute("stroke-width", "3");
@@ -589,11 +583,8 @@
   }
 
   function attachChairInteractions(g, chair) {
-    // A pointer interaction on a chair is either:
-    //   * a click (press-release with no movement) → open the editor, or
-    //   * a drag (press-move-release) → reposition the chair.
-    // We don't commit to either until we see (or don't see) enough
-    // movement to exceed DRAG_SLOP.
+    // Click → open editor, drag → reposition.
+    // We commit one way or the other once movement exceeds DRAG_SLOP.
     let pointerId = null;
     let startX = 0, startY = 0;       // board-units where the pointer went down
     let offsetX = 0, offsetY = 0;     // within-chair grab offset
@@ -602,7 +593,7 @@
     const circle = g.querySelector("circle");
 
     function onDown(ev) {
-      // Left mouse button or any touch/pen. Ignore middle/right buttons.
+      // Left mouse only; touch/pen always pass.
       if (ev.button !== 0 && ev.pointerType === "mouse") return;
 
       pointerId = ev.pointerId;
@@ -621,7 +612,7 @@
       const { x, y } = clientToBoard(ev.clientX, ev.clientY);
 
       if (mode === "pending") {
-        // Promote to a drag once we move beyond the slop threshold.
+        // Promote to drag once past the slop threshold.
         const dx = x - startX;
         const dy = y - startY;
         if (dx * dx + dy * dy < DRAG_SLOP * DRAG_SLOP) return;
@@ -667,8 +658,7 @@
     g.addEventListener("pointermove", onMove);
     g.addEventListener("pointerup", onUp);
     g.addEventListener("pointercancel", onUp);
-    // Suppress the OS right-click menu on chairs; the board-level
-    // handler takes care of it elsewhere.
+    // Suppress context menu on chairs (board handles its own).
     g.addEventListener("contextmenu", (ev) => ev.preventDefault());
   }
 
@@ -692,7 +682,7 @@
     function onMove(ev) {
       if (!dragging || ev.pointerId !== pointerId) return;
       const { x, y } = clientToBoard(ev.clientX, ev.clientY);
-      // Keep the full rectangle inside the board.
+      // Clamp so the rectangle stays fully on the board.
       const minX = w / 2;
       const minY = h / 2;
       const maxX = BOARD_SIZE - w / 2;
@@ -743,8 +733,7 @@
     editName.value = chair.name || "";
     editCharacter.value = chair.character || "";
     editBackdrop.classList.add("open");
-    // Small delay lets the modal render before we focus so iOS doesn't
-    // fight us over the keyboard.
+    // Delay focus so iOS doesn't fight the keyboard.
     setTimeout(() => editName.focus(), 30);
   }
 
@@ -783,8 +772,7 @@
     pushChairInfo(id, name, character);
   });
 
-  // Suppress the browser default context menu on the whole board so
-  // right-click on empty board space doesn't pop the OS menu.
+  // Suppress context menu on empty board space.
   board.addEventListener("contextmenu", (ev) => ev.preventDefault());
 
   // ----- QR-code modal -----
@@ -799,7 +787,7 @@
   const qrClose = document.getElementById("qrClose");
 
   function baseUrlFor(ip, port) {
-    // Raw LAN IPs only speak HTTP; TLS on a bare IP requires a cert.
+    // HTTP only — TLS on a bare LAN IP needs a cert.
     const portPart = port ? ":" + port : "";
     return `http://${ip}${portPart}`;
   }
@@ -819,7 +807,7 @@
     } catch (e) {
       console.warn("host_info failed:", e);
     }
-    // Fallback: whatever origin the storyteller loaded the page from.
+    // Fallback to the origin we loaded from.
     return {
       url: window.location.origin,
       candidates: [],
@@ -848,8 +836,7 @@
   }
 
   async function openQrModal() {
-    // Open immediately with a placeholder, then upgrade when the
-    // server tells us the LAN IP.
+    // Open with a placeholder; upgrade when host_info responds.
     qrUrlInput.value = window.location.origin;
     qrCodeInput.value = "";
     qrCandidates.innerHTML = "";
@@ -857,7 +844,7 @@
     renderQr();
 
     const info = await detectBestUrl();
-    // Only overwrite if the user hasn't already typed something.
+    // Only overwrite if the user hasn't typed something else.
     if (qrUrlInput.value === window.location.origin) {
       qrUrlInput.value = info.url;
     }
@@ -873,7 +860,7 @@
     const base = qrUrlInput.value.trim().replace(/\/+$/, "");
     const code = qrCodeInput.value.trim();
 
-    // Build the phone URL: base + /phone [+ ?code=...].
+    // Phone URL: base + /phone [+ ?code=...].
     let url = base;
     if (!url) {
       qrSvgWrap.innerHTML = "";
@@ -887,7 +874,7 @@
 
     qrLinkWrap.textContent = url;
 
-    // Warn if the URL would only work on the Storyteller's own machine.
+    // Warn if this URL only works on the Storyteller's own machine.
     try {
       const host = new URL(url).hostname;
       if (host === "localhost" || host === "127.0.0.1" || host === "::1") {
@@ -905,8 +892,7 @@
       return;
     }
 
-    // Encode. Higher error-correction (Q) tolerates some camera glare /
-    // small rendering artifacts.
+    // Quartile EC tolerates camera glare and minor rendering artifacts.
     const QRC = qrcodegen.QrCode;
     let qr;
     try {
@@ -920,18 +906,16 @@
     qrSvgWrap.innerHTML = qrMatrixToSvg(qr, 4);
   }
 
-  // Build an SVG with one rect per dark module. ``border`` is the
-  // "quiet zone" in modules; the QR spec recommends at least 4.
+  // border = quiet-zone width in modules (spec recommends ≥4).
   function qrMatrixToSvg(qr, border) {
     const n = qr.size + border * 2;
     const parts = [];
     parts.push(
       `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${n} ${n}" ` +
       `shape-rendering="crispEdges">`);
-    // White background so the quiet zone stays light.
+    // White background keeps the quiet zone light.
     parts.push(`<rect width="100%" height="100%" fill="#ffffff"/>`);
-    // Build a single path for all dark modules — many fewer SVG nodes
-    // than one <rect> per module.
+    // One path for all dark modules (cheaper than per-module rects).
     let d = "";
     for (let y = 0; y < qr.size; y++) {
       for (let x = 0; x < qr.size; x++) {
@@ -965,9 +949,8 @@
   // Initial load.
   refresh();
 
-  // Light polling so another browser's changes show up here too.
+  // Poll for cross-browser sync; skip while a drag is in flight.
   setInterval(() => {
-    // Skip polling while the user is mid-drag.
     if (board.querySelector(".dragging")) return;
     refresh();
   }, 2000);

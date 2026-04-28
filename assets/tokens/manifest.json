@@ -203,6 +203,10 @@
       {
         "icon": "investigator_minion.png",
         "name": "MINION"
+      },
+      {
+        "icon": "investigator_wrong.png",
+        "name": "WRONG"
       }
     ],
     "slug": "investigator"
@@ -213,6 +217,10 @@
       {
         "icon": "librarian_outsider.png",
         "name": "OUTSIDER"
+      },
+      {
+        "icon": "librarian_wrong.png",
+        "name": "WRONG"
       }
     ],
     "slug": "librarian"

@@ -2,10 +2,22 @@
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<title>Town Square</title>
-<!-- Full-bleed mobile viewport; no user zoom so the board keeps its
-     aspect ratio and the double-tap-to-zoom gesture doesn't interfere
-     with future tap interactions. -->
+<title>Storyteller — Town Square</title>
+<!-- Mobile storyteller UI. Mirrors the desktop town-square + grimoire
+     view but lays it out for a portrait phone screen. Renders the
+     full grimoire (player names, characters, status reminder tokens,
+     dead shrouds) in setup view-only mode and during the game. During
+     the game tapping a chair opens the per-player side panel (and is
+     also how the storyteller answers SELECT_PLAYER prompts).
+
+     Special "show-player" mode: when a SHOW-THIS-TO-PLAYER prompt is
+     active, the grimoire collapses to just the player names (no
+     tokens, no states, no alive/dead). The desktop prompt UI is
+     hidden and a bottom-of-screen card displays the message the
+     player should read before the storyteller hands the phone over.
+
+     Player phone UI (the read-only view a player gets when they scan
+     their own QR) is a *separate* file (player.html). -->
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="mobile-web-app-capable" content="yes" />
@@ -14,14 +26,20 @@
   :root {
     --bg: #1a1410;
     --panel: #221c17;
+    --panel2: #2b2218;
     --board-edge: #8a6a4b;
     --chair: #d9c9a8;
     --chair-edge: #5a3f27;
+    --chair-hover: #f0dfb8;
     --st-fill: #6e1f1b;
     --st-edge: #f0c27a;
     --st-text: #f5e6c4;
     --text: #ece3d3;
     --muted: #a99880aa;
+    --accent: #f0c27a;
+    --danger: #c7453a;
+    --good: #8cc97a;
+    --evil: #d77676;
   }
 
   * { box-sizing: border-box; }
@@ -34,58 +52,75 @@
     color: var(--text);
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
     overflow: hidden;
-    /* Disable all text selection and tap highlighting for a chrome-free
-       display. */
     -webkit-tap-highlight-color: transparent;
     -webkit-user-select: none;
     user-select: none;
     -webkit-touch-callout: none;
   }
 
-  header {
-    padding: 10px 14px max(10px, env(safe-area-inset-top));
+  /* ---------------------- top bar ---------------------- */
+  header.topbar {
+    position: fixed;
+    top: 0; left: 0; right: 0;
+    height: calc(40px + env(safe-area-inset-top));
+    padding: env(safe-area-inset-top) 12px 0;
     background: var(--panel);
-    border-bottom: 1px solid #00000066;
+    border-bottom: 1px solid #00000088;
     display: flex;
-    align-items: baseline;
+    align-items: center;
     gap: 10px;
+    z-index: 30;
   }
-
-  header h1 {
+  header.topbar h1 {
     margin: 0;
     font-size: 14px;
     font-weight: 600;
-    letter-spacing: 0.02em;
+    letter-spacing: 0.04em;
     flex: 1;
   }
-
-  header .tag {
-    font-size: 11px;
+  header.topbar .phase-tag {
+    font-size: 10px;
     text-transform: uppercase;
-    letter-spacing: 0.12em;
+    letter-spacing: 0.14em;
     color: var(--muted);
+    padding: 3px 8px;
+    border: 1px solid #ffffff22;
+    border-radius: 999px;
+  }
+  body.phase-night header.topbar .phase-tag {
+    background: #1f2c40; color: #c7d4ff;
+    border-color: #2d4263;
+  }
+  body.phase-day header.topbar .phase-tag {
+    background: #3b2a1c; color: #f0c27a;
+    border-color: #5a3f27;
+  }
+  body.phase-finished header.topbar .phase-tag {
+    background: #3b1f1c; color: #f5b8b3;
+    border-color: #5a2e29;
   }
 
+  /* ---------------------- main board ------------------- */
   main {
     position: absolute;
-    top: 44px;
+    top: calc(40px + env(safe-area-inset-top));
     left: 0;
     right: 0;
     bottom: 0;
-    padding: 8px;
-    padding-bottom: max(8px, env(safe-area-inset-bottom));
+    padding: 6px;
+    padding-bottom: max(6px, env(safe-area-inset-bottom));
     display: flex;
-    align-items: center;
-    justify-content: center;
+    flex-direction: column;
+    align-items: stretch;
+    justify-content: flex-start;
   }
 
-  /* The board is a true square sized to the shorter of the two
-     available dimensions, so it always fits a portrait phone. */
   #boardWrap {
     position: relative;
     aspect-ratio: 1 / 1;
-    width: min(100%, calc(100dvh - 60px));
-    max-width: 100%;
+    width: min(100%, 96vw);
+    margin: 4px auto 0;
+    flex: 0 0 auto;
   }
 
   #board {
@@ -95,22 +130,23 @@
     border: 2px solid var(--board-edge);
     border-radius: 6px;
     box-shadow: 0 4px 24px #00000088, inset 0 0 60px #00000077;
-    /* No touch interactions on the board — pan/zoom on the page is
-       already disabled but we also want to be explicit. */
-    touch-action: none;
+    touch-action: manipulation;
   }
 
-  /* Chairs — styled like the storyteller view but without any
-     pointer/cursor affordances. */
+  /* Chair circles + text */
   .chair {
-    /* cursor left at auto so it doesn't invite dragging. */
+    cursor: pointer;
+    transition: fill 0.12s, stroke 0.12s;
   }
+  body.show-player .chair { cursor: default; }
 
   .chair-name {
     font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, "Times New Roman", serif;
-    font-size: 24px;
+    font-size: 22px;
     font-weight: 700;
     fill: #2a1c13;
+    pointer-events: none;
+    user-select: none;
     text-anchor: middle;
   }
   .chair-character {
@@ -118,25 +154,493 @@
     font-weight: 500;
     font-style: italic;
     fill: #5a3f27;
+    pointer-events: none;
+    user-select: none;
+    text-anchor: middle;
+  }
+  .chair-num {
+    font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, "Times New Roman", serif;
+    font-size: 16px;
+    font-weight: 700;
+    fill: #2a1c13;
+    pointer-events: none;
+    user-select: none;
     text-anchor: middle;
   }
 
+  /* Status tokens (all <image> + halo) */
+  .chair-status-token { pointer-events: none; }
+  .chair-status-halo  { pointer-events: none; }
+
+  /* Storyteller marker */
+  .storyteller-rect {
+    fill: var(--st-fill);
+    stroke: var(--st-edge);
+    stroke-width: 3;
+  }
   .storyteller-label {
-    font-size: 15px;
+    font-size: 16px;
     font-weight: 700;
     letter-spacing: 0.08em;
     fill: var(--st-text);
     dominant-baseline: central;
     text-anchor: middle;
+    pointer-events: none;
+    user-select: none;
   }
+
+  /* Highlighting for prompts */
+  #chairs.highlight-active g[data-id] {
+    opacity: 0.25;
+    transition: opacity 0.18s;
+  }
+  #chairs.highlight-active g[data-id].highlight-target {
+    opacity: 1;
+    filter: drop-shadow(0 0 12px #f0c27aaa);
+  }
+  /* Selection ring (storyteller picks) */
+  g[data-id].chair-picked .chair {
+    stroke: #6fd4d2;
+    stroke-width: 5;
+    filter: drop-shadow(0 0 14px #6fd4d2cc);
+  }
+
+  /* Dead shroud */
+  .chair-shroud { pointer-events: none; user-select: none; }
+  .chair-shroud .shroud-cloth {
+    fill: #0c0a08;
+    fill-opacity: 0.78;
+    stroke: #000;
+    stroke-width: 1.5;
+    stroke-opacity: 0.9;
+  }
+  .chair-shroud .shroud-fold {
+    fill: none;
+    stroke: #2a1f17;
+    stroke-width: 1.2;
+    stroke-opacity: 0.55;
+  }
+  .chair-shroud .shroud-mark {
+    fill: var(--danger);
+    fill-opacity: 0.92;
+    font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+    font-size: 36px;
+    font-weight: 700;
+    text-anchor: middle;
+    dominant-baseline: central;
+  }
+  g[data-id].chair-dead .chair-name,
+  g[data-id].chair-dead .chair-character,
+  g[data-id].chair-dead .chair-num {
+    opacity: 0.45;
+  }
+  g[data-id].chair-dead .chair-status-token { opacity: 0.75; }
+
+  /* In show-player mode the chairs strip down to just the name —
+     no character text, no shroud, no tokens, no highlights for
+     non-target chairs. The grimoire is being shown to a player; we
+     don't want to leak any state. */
+  body.show-player g[data-id].chair-dead .chair-name { opacity: 1; }
+  body.show-player .chair-shroud,
+  body.show-player .chair-character,
+  body.show-player .chair-num,
+  body.show-player .chair-status-token,
+  body.show-player .chair-status-halo {
+    display: none;
+  }
+
+  /* ----------------- bottom prompt panel ---------------- */
+  /* Fixed slide-up card at the bottom — the equivalent of the
+     desktop's #phaseDock + #promptPanel. Visible whenever the
+     engine has produced a prompt; in show-player mode this is
+     replaced by #showCard below. */
+  #promptCard {
+    position: fixed;
+    left: 8px;
+    right: 8px;
+    bottom: max(8px, env(safe-area-inset-bottom));
+    background: var(--panel);
+    border: 1px solid #ffffff1c;
+    border-radius: 14px;
+    box-shadow: 0 -8px 32px #000000aa;
+    z-index: 20;
+    padding: 10px 12px 12px;
+    max-height: 55vh;
+    overflow-y: auto;
+    display: none;
+  }
+  body.has-prompt:not(.show-player) #promptCard { display: block; }
+
+  #promptCard .title {
+    font-size: 15px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    color: var(--accent);
+    margin-bottom: 4px;
+  }
+  #promptCard .impaired-label {
+    color: #d77676;
+    font-style: italic;
+    font-weight: 500;
+    font-size: 12px;
+  }
+  #promptCard .description {
+    font-size: 12.5px;
+    color: var(--text);
+    opacity: 0.85;
+    line-height: 1.35;
+    margin-bottom: 6px;
+  }
+  #promptCard .stage {
+    font-size: 12.5px;
+    color: var(--text);
+    margin: 4px 0;
+  }
+  #promptCard .stage .q { color: #c8b994; }
+  #promptCard .stage .a {
+    color: #1a1410;
+    background: var(--accent);
+    border-radius: 6px;
+    padding: 1px 6px;
+    margin-left: 6px;
+    font-weight: 600;
+    font-size: 11.5px;
+    display: inline-block;
+  }
+  #promptCard .stage.active .q { color: #f5e6c4; font-weight: 600; }
+
+  #promptCard .options {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 6px;
+    margin-bottom: 6px;
+  }
+  #promptCard .option {
+    background: #2f2418;
+    color: var(--text);
+    border: 1px solid #ffffff20;
+    border-radius: 8px;
+    padding: 6px 10px;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  #promptCard .option.default-hint {
+    border-color: var(--accent);
+    background: #3b2a1c;
+  }
+  #promptCard .option.correct-hint {
+    box-shadow: 0 0 0 2px #5db05688;
+  }
+  #promptCard .option.picked {
+    background: var(--accent);
+    color: #1a1410;
+    border-color: var(--accent);
+    font-weight: 600;
+  }
+
+  #promptCard .actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 8px;
+  }
+  #promptCard .actions .left {
+    font-size: 11.5px;
+    color: var(--muted);
+    flex: 1;
+  }
+  #promptCard button.action {
+    border: none;
+    border-radius: 8px;
+    padding: 8px 14px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  #promptCard button.action.next {
+    background: var(--accent);
+    color: #1a1410;
+  }
+  #promptCard button.action.back {
+    background: #3a2a22;
+    color: #d8b8a8;
+  }
+  #promptCard button.action.danger {
+    background: var(--danger);
+    color: #fff;
+  }
+  #promptCard button.action.start {
+    background: var(--good);
+    color: #143215;
+  }
+  #promptCard button.action[disabled] { opacity: 0.45; cursor: not-allowed; }
+
+  /* SHOW THIS TO PLAYER card. Replaces #promptCard while
+     ``body.show-player`` is set. The grimoire above it has already
+     collapsed to player-name-only mode with the highlight set still
+     active — this card shows the actual message the player will
+     read off the phone. */
+  #showCard {
+    position: fixed;
+    left: 8px;
+    right: 8px;
+    bottom: max(8px, env(safe-area-inset-bottom));
+    background: linear-gradient(180deg, #2b2218 0%, #1f1813 100%);
+    border: 1px solid var(--accent);
+    border-radius: 14px;
+    box-shadow: 0 -8px 32px #000000aa, 0 0 0 1px #f0c27a33;
+    z-index: 20;
+    padding: 12px 14px;
+    max-height: 50vh;
+    overflow-y: auto;
+    display: none;
+  }
+  body.show-player #showCard { display: block; }
+  #showCard .show-header {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.16em;
+    color: var(--accent);
+    margin-bottom: 6px;
+  }
+  #showCard .show-target {
+    font-size: 17px;
+    font-weight: 700;
+    color: #f5e6c4;
+    margin-bottom: 8px;
+  }
+  #showCard .token-row {
+    background: #1a1410;
+    border: 1px solid #f0c27a44;
+    border-radius: 10px;
+    padding: 8px 10px;
+    margin: 6px 0;
+  }
+  #showCard .token-label {
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: var(--accent);
+    font-weight: 600;
+  }
+  #showCard .token-body {
+    font-size: 15px;
+    margin-top: 4px;
+    color: var(--text);
+    line-height: 1.35;
+  }
+  #showCard .actions {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: 10px;
+  }
+  #showCard button {
+    background: var(--accent);
+    color: #1a1410;
+    border: none;
+    border-radius: 8px;
+    padding: 8px 16px;
+    font-size: 14px;
+    font-weight: 700;
+    cursor: pointer;
+  }
+
+  /* ----------------- side panel ------------------------ */
+  /* Slim mobile side panel; slides in from the right when the
+     storyteller taps a chair during the game. View-only during
+     setup, never opens in show-player mode. */
+  #seatPanel {
+    position: fixed;
+    top: 0; right: 0; bottom: 0;
+    width: min(85vw, 320px);
+    background: linear-gradient(180deg, var(--panel) 0%, var(--panel2) 100%);
+    border-left: 1px solid #00000088;
+    box-shadow: -10px 0 32px #00000099;
+    transform: translateX(100%);
+    transition: transform 0.22s ease;
+    z-index: 40;
+    overflow-y: auto;
+    padding: calc(env(safe-area-inset-top) + 14px) 14px max(14px, env(safe-area-inset-bottom));
+  }
+  #seatPanel.open { transform: translateX(0); }
+
+  #seatPanel .close-btn {
+    position: absolute;
+    top: calc(env(safe-area-inset-top) + 6px);
+    right: 8px;
+    background: transparent;
+    color: var(--muted);
+    border: none;
+    font-size: 22px;
+    line-height: 1;
+    padding: 6px 10px;
+    cursor: pointer;
+  }
+  #seatPanel .close-btn:hover { color: #fff; }
+
+  #seatPanel .player-name {
+    font-size: 19px;
+    font-weight: 700;
+    color: #f5e6c4;
+    margin: 4px 0 2px;
+    padding-right: 30px;
+  }
+  #seatPanel .player-sub {
+    font-size: 12px;
+    color: var(--muted);
+    margin-bottom: 12px;
+  }
+
+  #seatPanel .section-title {
+    font-size: 10.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: var(--accent);
+    margin-top: 14px;
+    margin-bottom: 4px;
+  }
+  #seatPanel .row {
+    display: flex;
+    justify-content: space-between;
+    border-bottom: 1px solid #ffffff14;
+    padding: 5px 0;
+    font-size: 13px;
+  }
+  #seatPanel .row .label { color: #c8b994; }
+  #seatPanel .row .value { color: var(--text); font-weight: 600; }
+  #seatPanel .row .value.dead { color: var(--evil); }
+  #seatPanel .row .value.alive { color: var(--good); }
+  #seatPanel .row .value.evil { color: var(--evil); }
+  #seatPanel .row .value.good { color: var(--good); }
+  #seatPanel .row .value.flag-on { color: var(--accent); }
+  #seatPanel .row .value.flag-off { color: #6a5e44; }
+
+  #seatPanel .actions {
+    margin-top: 18px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+  #seatPanel .actions button {
+    background: #3a2a22;
+    color: var(--text);
+    border: 1px solid #ffffff22;
+    border-radius: 8px;
+    padding: 9px 8px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  #seatPanel .actions button.danger {
+    background: var(--danger);
+    color: #fff;
+    border-color: #c7453a;
+  }
+  #seatPanel .actions button[disabled] {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+  #seatPanel .seat-msg {
+    margin-top: 10px;
+    font-size: 12px;
+    color: var(--evil);
+  }
+  #seatPanel .seat-msg.ok { color: var(--good); }
+
+  /* ----------------- floating bottom-left phase button ------ */
+  #phaseFab {
+    position: fixed;
+    left: 12px;
+    bottom: max(12px, env(safe-area-inset-bottom));
+    z-index: 19;
+    background: #3a2a22;
+    color: var(--text);
+    border: 1px solid var(--accent);
+    border-radius: 999px;
+    padding: 8px 14px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    display: none;
+  }
+  body.phase-day:not(.has-prompt):not(.show-player) #phaseFab.start-night,
+  body.phase-setup:not(.has-prompt):not(.show-player) #phaseFab.start-game {
+    display: block;
+  }
+  #phaseFab.start-night { background: #1f2c40; color: #c7d4ff; border-color: #4d6ba0; }
+  #phaseFab.start-game  { background: var(--good); color: #143215; border-color: #5db056; }
+
+  /* Setup view-only banner */
+  #setupBanner {
+    position: fixed;
+    top: calc(40px + env(safe-area-inset-top) + 4px);
+    left: 50%;
+    transform: translateX(-50%);
+    background: #3a2a22cc;
+    color: var(--accent);
+    border: 1px solid #f0c27a55;
+    border-radius: 999px;
+    padding: 4px 12px;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    z-index: 25;
+    pointer-events: none;
+  }
+  body:not(.phase-setup) #setupBanner { display: none; }
+  body.show-player #setupBanner { display: none; }
+
+  /* Show-player banner (top-of-board reminder) */
+  #showBanner {
+    position: fixed;
+    top: calc(40px + env(safe-area-inset-top) + 4px);
+    left: 50%;
+    transform: translateX(-50%);
+    background: var(--accent);
+    color: #1a1410;
+    border-radius: 999px;
+    padding: 4px 14px;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.16em;
+    z-index: 25;
+    pointer-events: none;
+    display: none;
+  }
+  body.show-player #showBanner { display: block; }
+
+  /* Game-end banner */
+  #gameEndBanner {
+    position: fixed;
+    top: calc(40px + env(safe-area-inset-top) + 4px);
+    left: 50%;
+    transform: translateX(-50%);
+    background: #3a1a1a;
+    color: #f5b8b3;
+    border: 1px solid var(--danger);
+    border-radius: 999px;
+    padding: 4px 14px;
+    font-size: 11.5px;
+    font-weight: 600;
+    z-index: 25;
+    pointer-events: none;
+    display: none;
+  }
+  body.phase-finished:not(.show-player) #gameEndBanner { display: block; }
 </style>
 </head>
-<body>
+<body class="phase-setup">
 
-<header>
-  <h1>Town Square</h1>
-  <span class="tag">view only</span>
+<header class="topbar">
+  <h1>Storyteller — Town Square</h1>
+  <span class="phase-tag" id="phaseTag">setup</span>
 </header>
+
+<div id="setupBanner">view only · use computer to edit</div>
+<div id="showBanner">SHOW THIS TO PLAYER</div>
+<div id="gameEndBanner"></div>
 
 <main>
   <div id="boardWrap">
@@ -147,76 +651,209 @@
   </div>
 </main>
 
+<!-- Per-player side panel. Mirrors index.html's seatPanel with a
+     mobile-friendly layout. Hidden behind the slide-in transform
+     until openSeatPanel() runs. -->
+<aside id="seatPanel" aria-hidden="true">
+  <button class="close-btn" id="seatClose" aria-label="Close">×</button>
+  <div class="player-name" id="seatName">—</div>
+  <div class="player-sub"  id="seatSub"></div>
+  <div id="seatStates"></div>
+  <div class="actions">
+    <button type="button" id="seatAct_useAbility">Use ability</button>
+    <button type="button" id="seatAct_nominate">Nominate</button>
+    <button type="button" id="seatAct_voted">Voted</button>
+    <button type="button" id="seatAct_execute" class="danger">Execute</button>
+  </div>
+  <div class="seat-msg" id="seatMsg"></div>
+</aside>
+
+<!-- Storyteller prompt card at bottom -->
+<div id="promptCard" role="dialog" aria-live="polite" aria-label="Engine prompt">
+  <div class="title" id="promptTitle"></div>
+  <div class="description" id="promptDescription"></div>
+  <div id="promptStages"></div>
+  <div class="options" id="promptOptions"></div>
+  <div class="actions">
+    <span class="left" id="promptHint"></span>
+    <button type="button" class="action back" id="btnBack">◀</button>
+    <button type="button" class="action next" id="btnNext">Next ▶</button>
+  </div>
+</div>
+
+<!-- Show-this-to-player card. Sits in the same screen position as
+     the prompt card, but is the only thing visible below the
+     grimoire while body.show-player is set. -->
+<div id="showCard" role="dialog" aria-live="polite">
+  <div class="show-header">Show this to</div>
+  <div class="show-target" id="showTarget">—</div>
+  <div id="showTokens"></div>
+  <div class="actions">
+    <button type="button" id="showNext">Done ▶</button>
+  </div>
+</div>
+
+<button type="button" id="phaseFab" class="start-night">🌙 Start Night</button>
+
 <script>
 (() => {
+  // -----------------------------------------------------------------
+  // Constants. Mirror the desktop UI so chair positions / token sizes
+  // line up cleanly when the storyteller flips between the two.
+  // -----------------------------------------------------------------
   const BOARD_SIZE = 1000;
   const CHAIR_RADIUS = 51;
   const MAX_CHAIR_TEXT = 88;
-  const POLL_MS = 1500;
+  const POLL_STATE_MS = 1500;
+  const POLL_PROMPT_MS = 600;
 
-  const chairsG = document.getElementById("chairs");
-  const storytellerG = document.getElementById("storyteller");
+  const SVG_NS = "http://www.w3.org/2000/svg";
+  const XLINK_NS = "http://www.w3.org/1999/xlink";
 
-  const chairs = new Map();
-  let storyteller = null;
+  // Mirror of TOKEN_FILES from index.html. Maps semantic names to
+  // the token PNG basename in /assets/tokens/.
+  const TOKEN_FILES = {
+    drunk:                      "drunk_is_the_drunk",
+    fortune_teller_red_herring: "fortune_teller_red_herring",
+    poisoned:                   "poisoner_poisoned",
+    imp_dead:                   "imp_dead",
+    monk_safe:                  "monk_safe",
+    butler_master:              "butler_master",
+    investigator_minion:        "investigator_minion",
+    librarian_outsider:         "librarian_outsider",
+    scarlet_woman_is_demon:     "scarlet_woman_is_the_demon",
+    slayer_no_ability:          "slayer_no_ability",
+    undertaker_died_today:      "undertaker_died_today",
+    virgin_no_ability:          "virgin_no_ability",
+    washerwoman_townsfolk:      "washerwoman_townsfolk",
+    washerwoman_wrong:          "washerwoman_wrong",
+    librarian_wrong:            "librarian_wrong",
+    investigator_wrong:         "investigator_wrong",
+  };
+  function tokenUrl(key) {
+    const base = TOKEN_FILES[key];
+    return base ? "/assets/tokens/" + base + ".png" : null;
+  }
 
+  // -----------------------------------------------------------------
+  // State.
+  // -----------------------------------------------------------------
+  const chairsG       = document.getElementById("chairs");
+  const storytellerG  = document.getElementById("storyteller");
+
+  const chairs              = new Map();   // chair id -> chair record
+  const enginePlayersById   = new Map();   // engine player id -> Player
+  let storyteller           = null;
+  let poolState             = {};
+  let engineState           = { phase: "setup", night_number: 0, day_number: 0,
+                                winner: null, win_reason: null };
+
+  // Prompt + selection state.
+  let _currentPrompt = null;
+  let _panelSession  = null;     // { key, character, target_pid, ... }
+  let _selectedYesNo = null;
+  let _selectedPlayerIds = [];
+  let _selectedCharacter = null;
+  let _selectedCharacters = [];
+  let _currentHighlightPlayerIds = [];
+  let _currentChairPickedIds = [];
+
+  // Side panel state.
+  let seatPanelChair = null;
+  let seatPanelTokensExpanded = false;
+
+  // -----------------------------------------------------------------
+  // Server I/O.
+  // -----------------------------------------------------------------
   async function refresh() {
     try {
       const r = await fetch("/api/state", { cache: "no-store" });
       if (!r.ok) return;
       const data = await r.json();
+
       chairs.clear();
-      for (const c of data.chairs) chairs.set(c.id, c);
+      for (const c of data.chairs || []) chairs.set(c.id, c);
       storyteller = data.storyteller || null;
+
+      enginePlayersById.clear();
+      if (data.engine && Array.isArray(data.engine.players)) {
+        for (const ep of data.engine.players) {
+          if (ep && typeof ep.id === "number") {
+            enginePlayersById.set(ep.id, ep);
+          }
+        }
+      }
+      if (data.engine) {
+        engineState = {
+          phase:        data.engine.phase || "setup",
+          night_number: data.engine.night_number || 0,
+          day_number:   data.engine.day_number || 0,
+          winner:       data.engine.winner || null,
+          win_reason:   data.engine.win_reason || null,
+        };
+      }
+      poolState = data.character_pool || {};
+      reflectPhaseClass();
       render();
+      reflectSeatPanel();
     } catch (e) {
-      // Transient network error; next tick will retry.
+      // transient — next tick will retry
     }
   }
 
+  async function pollPrompt() {
+    try {
+      const r = await fetch("/api/prompt", { cache: "no-store" });
+      if (!r.ok) return;
+      const data = await r.json();
+      const p = data.prompt;
+      const samePrompt = p && _currentPrompt && p.id === _currentPrompt.id;
+      if (!samePrompt) {
+        _currentPrompt = p || null;
+        _selectedYesNo = null;
+        _selectedPlayerIds = [];
+        _selectedCharacter = null;
+        _selectedCharacters = [];
+        renderPrompt();
+      }
+    } catch (e) { /* ignore */ }
+  }
+
+  function reflectPhaseClass() {
+    const tag = document.getElementById("phaseTag");
+    document.body.classList.remove(
+      "phase-setup", "phase-night", "phase-day", "phase-finished"
+    );
+    document.body.classList.add("phase-" + engineState.phase);
+    let label = engineState.phase;
+    if (engineState.phase === "night" && engineState.night_number) {
+      label = "Night " + engineState.night_number;
+    } else if (engineState.phase === "day" && engineState.day_number) {
+      label = "Day " + engineState.day_number;
+    } else if (engineState.phase === "finished") {
+      label = "ended";
+    }
+    tag.textContent = label;
+    if (engineState.phase === "finished") {
+      const banner = document.getElementById("gameEndBanner");
+      const w = engineState.winner;
+      const r = engineState.win_reason || "";
+      if (w) {
+        banner.textContent = `${w.toUpperCase()} WIN — ${r}`;
+      } else {
+        banner.textContent = "Game Over";
+      }
+    }
+  }
+
+  // -----------------------------------------------------------------
+  // Rendering: chairs + tokens + shroud + storyteller marker.
+  // -----------------------------------------------------------------
   function render() {
     renderStoryteller();
     renderChairs();
-  }
-
-  function renderChairs() {
-    chairsG.innerHTML = "";
-    const ordered = [...chairs.values()].sort((a, b) => a.id - b.id);
-    for (const c of ordered) {
-      const g = document.createElementNS("http://www.w3.org/2000/svg", "g");
-      g.setAttribute("transform",
-        `translate(${c.x * BOARD_SIZE}, ${c.y * BOARD_SIZE})`);
-
-      const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
-      circle.setAttribute("class", "chair");
-      circle.setAttribute("r", CHAIR_RADIUS);
-      circle.setAttribute("fill", "var(--chair)");
-      circle.setAttribute("stroke", "var(--chair-edge)");
-      circle.setAttribute("stroke-width", "2");
-      g.appendChild(circle);
-
-      const name = (c.name || "").trim();
-      const character = (c.character || "").trim();
-      const fit = [];
-      if (name && character) {
-        const tN = svgText("chair-name", name, 0, -13);
-        const tC = svgText("chair-character", character, 0, 15);
-        g.appendChild(tN);
-        g.appendChild(tC);
-        fit.push(tN, tC);
-      } else if (name) {
-        const tN = svgText("chair-name", name, 0, 2);
-        g.appendChild(tN);
-        fit.push(tN);
-      } else if (character) {
-        const tC = svgText("chair-character", character, 0, 2);
-        g.appendChild(tC);
-        fit.push(tC);
-      }
-
-      chairsG.appendChild(g);
-      for (const t of fit) fitText(t, MAX_CHAIR_TEXT);
-    }
+    reapplyHighlight();
+    reapplyChairSelection();
   }
 
   function renderStoryteller() {
@@ -228,20 +865,18 @@
     const cx = storyteller.x * BOARD_SIZE;
     const cy = storyteller.y * BOARD_SIZE;
 
-    const g = document.createElementNS("http://www.w3.org/2000/svg", "g");
+    const g = document.createElementNS(SVG_NS, "g");
     g.setAttribute("transform", `translate(${cx}, ${cy})`);
 
-    const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+    const rect = document.createElementNS(SVG_NS, "rect");
+    rect.setAttribute("class", "storyteller-rect");
     rect.setAttribute("x", -w / 2);
     rect.setAttribute("y", -h / 2);
     rect.setAttribute("width", w);
     rect.setAttribute("height", h);
-    rect.setAttribute("fill", "var(--st-fill)");
-    rect.setAttribute("stroke", "var(--st-edge)");
-    rect.setAttribute("stroke-width", "3");
     g.appendChild(rect);
 
-    const label = document.createElementNS("http://www.w3.org/2000/svg", "text");
+    const label = document.createElementNS(SVG_NS, "text");
     label.setAttribute("class", "storyteller-label");
     label.textContent = "STORYTELLER";
     g.appendChild(label);
@@ -249,8 +884,141 @@
     storytellerG.appendChild(g);
   }
 
+  function renderChairs() {
+    chairsG.innerHTML = "";
+    const targetSet = computeTargetChairIds(_currentHighlightPlayerIds);
+    const ordered = [...chairs.values()].sort((a, b) => a.id - b.id);
+    const showPlayer = document.body.classList.contains("show-player");
+
+    for (const c of ordered) {
+      const g = document.createElementNS(SVG_NS, "g");
+      g.setAttribute("data-id", c.id);
+      if (targetSet.has(c.id)) g.classList.add("highlight-target");
+      g.setAttribute("transform",
+        `translate(${c.x * BOARD_SIZE}, ${c.y * BOARD_SIZE})`);
+
+      const circle = document.createElementNS(SVG_NS, "circle");
+      circle.setAttribute("class", "chair");
+      circle.setAttribute("r", CHAIR_RADIUS);
+      circle.setAttribute("fill", "var(--chair)");
+      circle.setAttribute("stroke", "var(--chair-edge)");
+      circle.setAttribute("stroke-width", "2");
+      g.appendChild(circle);
+
+      // Show-player mode strips the grimoire down to just the player
+      // name; everything else (number, character, tokens, shroud) is
+      // hidden via CSS, but we also skip generating the heavier nodes
+      // so the hand-off reads cleanly even with no styles.
+      const name = (c.name || "").trim();
+      const character = (c.character || "").trim();
+      const isDrunk = (character === "Drunk");
+      const characterDisplay = (isDrunk && poolState.drunk_fake_role)
+        ? poolState.drunk_fake_role
+        : character;
+
+      const textsToFit = [];
+      if (showPlayer) {
+        // Just the player name, large and centered. No character, no
+        // number, nothing that would leak grimoire state.
+        if (name) {
+          const tName = svgText("chair-name", name, 0, 2);
+          g.appendChild(tName);
+          textsToFit.push(tName);
+        }
+        chairsG.appendChild(g);
+        for (const t of textsToFit) fitText(t, MAX_CHAIR_TEXT);
+        attachChairInteractions(g, c);
+        continue;
+      }
+
+      appendChairNumber(g, c.id);
+
+      if (name) {
+        const tName = svgText("chair-name", name, 0, -5);
+        g.appendChild(tName);
+        textsToFit.push(tName);
+        if (character) {
+          const tChar = svgText("chair-character", characterDisplay, 0, 22);
+          g.appendChild(tChar);
+          textsToFit.push(tChar);
+        }
+      } else if (character) {
+        const tChar = svgText("chair-character", characterDisplay, 0, 10);
+        g.appendChild(tChar);
+        textsToFit.push(tChar);
+      }
+
+      // Status reminder tokens. Mirror desktop's angle layout exactly
+      // so a chair looks the same on both screens.
+      const cPid = (typeof c.player_id === "number") ? c.player_id : null;
+      const inList = (arr) => Array.isArray(arr)
+        && cPid !== null
+        && arr.indexOf(cPid) !== -1;
+      const isPidEq = (id) => cPid !== null && id === cPid;
+
+      const ftRedHerringRole       = poolState.ft_red_herring_role || null;
+      const wwTownsfolkRole        = poolState.washerwoman_townsfolk_role || null;
+      const wwWrongRole            = poolState.washerwoman_wrong_role || null;
+      const investigatorMinionRole = poolState.investigator_minion_role || null;
+      const investigatorWrongRole  = poolState.investigator_wrong_role || null;
+      const librarianOutsiderRole  = poolState.librarian_outsider_role || null;
+      const librarianWrongRole     = poolState.librarian_wrong_role || null;
+
+      const isRedHerring         = !!ftRedHerringRole && character === ftRedHerringRole;
+      const isWashTownsfolk      = !!wwTownsfolkRole && character === wwTownsfolkRole;
+      const isWashWrong          = !!wwWrongRole && character === wwWrongRole;
+      const isInvestigatorMinion = !!investigatorMinionRole && character === investigatorMinionRole;
+      const isInvestigatorWrong  = !!investigatorWrongRole && character === investigatorWrongRole;
+      const isLibrarianOutsider  = !!librarianOutsiderRole && character === librarianOutsiderRole;
+      const isLibrarianWrong     = !!librarianWrongRole && character === librarianWrongRole;
+      const isButlerMaster       = isPidEq(poolState.butler_master_player_id);
+      const isMonkSafe           = isPidEq(poolState.monk_safe_player_id);
+      const isPoisoned           = isPidEq(poolState.poisoned_player_id);
+      const isImpDead            = inList(poolState.imp_dead_player_ids);
+      const isUndertakerDied     = isPidEq(poolState.undertaker_died_today_player_id);
+      const swPromotedIds = Array.isArray(poolState.scarlet_woman_promoted_player_ids)
+        ? poolState.scarlet_woman_promoted_player_ids : [];
+      const isScarletWomanIsDemon = inList(swPromotedIds);
+      const isSlayerSpent        = inList(poolState.slayer_no_ability_player_ids);
+      const isVirginSpent        = inList(poolState.virgin_no_ability_player_ids);
+
+      // Same angle assignments as desktop.
+      if (isDrunk)               appendStatusToken(g, "drunk", 30);
+      if (isRedHerring)          appendStatusToken(g, "fortune_teller_red_herring", -30);
+      if (isWashTownsfolk)       appendStatusToken(g, "washerwoman_townsfolk", -60);
+      if (isWashWrong)           appendStatusToken(g, "washerwoman_wrong", -60);
+      if (isInvestigatorMinion)  appendStatusToken(g, "investigator_minion", -90);
+      if (isInvestigatorWrong)   appendStatusToken(g, "investigator_wrong", -90);
+      if (isLibrarianOutsider)   appendStatusToken(g, "librarian_outsider", -120);
+      if (isLibrarianWrong)      appendStatusToken(g, "librarian_wrong", -120);
+      if (isButlerMaster)        appendStatusToken(g, "butler_master", 60);
+      if (isMonkSafe)            appendStatusToken(g, "monk_safe", 90);
+      if (isPoisoned)            appendStatusToken(g, "poisoned", 120);
+      if (isScarletWomanIsDemon) appendStatusToken(g, "scarlet_woman_is_demon", 150);
+      if (isImpDead)             appendStatusToken(g, "imp_dead",
+                                                    isScarletWomanIsDemon ? 165 : 150);
+      if (isUndertakerDied)      appendStatusToken(g, "undertaker_died_today", 180);
+      if (isSlayerSpent)         appendStatusToken(g, "slayer_no_ability", -150);
+      if (isVirginSpent)         appendStatusToken(g, "virgin_no_ability", -150);
+
+      // Dead shroud.
+      const linkedPlayer = (typeof c.player_id === "number")
+        ? enginePlayersById.get(c.player_id) || null
+        : null;
+      const isDead = !!(linkedPlayer && linkedPlayer.alive === false);
+      if (isDead) {
+        g.classList.add("chair-dead");
+        appendChairShroud(g);
+      }
+
+      chairsG.appendChild(g);
+      for (const t of textsToFit) fitText(t, MAX_CHAIR_TEXT);
+      attachChairInteractions(g, c);
+    }
+  }
+
   function svgText(cls, text, x, y) {
-    const el = document.createElementNS("http://www.w3.org/2000/svg", "text");
+    const el = document.createElementNS(SVG_NS, "text");
     el.setAttribute("class", cls);
     el.setAttribute("x", x);
     el.setAttribute("y", y);
@@ -272,16 +1040,940 @@
     }
   }
 
-  // Swallow any accidental context menu / selection.
+  function appendChairNumber(g, num) {
+    const t = document.createElementNS(SVG_NS, "text");
+    t.setAttribute("class", "chair-num");
+    t.setAttribute("x", "0");
+    t.setAttribute("y", "-37");
+    t.setAttribute("dominant-baseline", "central");
+    t.textContent = String(num);
+    g.appendChild(t);
+  }
+
+  function appendStatusToken(g, tokenKey, angleDeg) {
+    const BADGE_RADIUS = 31;
+    const ICON_SIZE = BADGE_RADIUS * 2;
+    const url = tokenUrl(tokenKey);
+    if (!url) return;
+
+    const theta = (angleDeg - 90) * Math.PI / 180;
+    const dist = CHAIR_RADIUS + BADGE_RADIUS;
+    const cx = dist * Math.cos(theta);
+    const cy = dist * Math.sin(theta);
+
+    const wrap = document.createElementNS(SVG_NS, "g");
+    wrap.setAttribute("class", "chair-status-wrapper");
+
+    const halo = document.createElementNS(SVG_NS, "circle");
+    halo.setAttribute("class", "chair-status-halo");
+    halo.setAttribute("cx", cx);
+    halo.setAttribute("cy", cy);
+    halo.setAttribute("r", BADGE_RADIUS + 1);
+    halo.setAttribute("fill", "#fff");
+    halo.setAttribute("stroke", "var(--chair-edge)");
+    halo.setAttribute("stroke-width", "1.5");
+    halo.setAttribute("pointer-events", "none");
+    wrap.appendChild(halo);
+
+    const img = document.createElementNS(SVG_NS, "image");
+    img.setAttribute("href", url);
+    img.setAttributeNS(XLINK_NS, "xlink:href", url);
+    img.setAttribute("width", ICON_SIZE);
+    img.setAttribute("height", ICON_SIZE);
+    img.setAttribute("x", cx - ICON_SIZE / 2);
+    img.setAttribute("y", cy - ICON_SIZE / 2);
+    img.setAttribute("class", "chair-status-token chair-status-" + tokenKey);
+    img.setAttribute("pointer-events", "none");
+    wrap.appendChild(img);
+
+    g.appendChild(wrap);
+  }
+
+  function appendChairShroud(g) {
+    const sh = document.createElementNS(SVG_NS, "g");
+    sh.setAttribute("class", "chair-shroud");
+    const r = CHAIR_RADIUS + 1;
+    const dipDx = (2 * r) / 3;
+    const dipCy = r / 2;
+    const cloth = document.createElementNS(SVG_NS, "path");
+    cloth.setAttribute("class", "shroud-cloth");
+    cloth.setAttribute(
+      "d",
+      `M ${-r} 0 ` +
+      `A ${r} ${r} 0 0 1 ${r} 0 ` +
+      `q ${-dipDx / 2} ${dipCy}, ${-dipDx} 0 ` +
+      `q ${-dipDx / 2} ${dipCy}, ${-dipDx} 0 ` +
+      `q ${-dipDx / 2} ${dipCy}, ${-dipDx} 0 ` +
+      `Z`
+    );
+    sh.appendChild(cloth);
+    const fold = document.createElementNS(SVG_NS, "path");
+    fold.setAttribute("class", "shroud-fold");
+    fold.setAttribute("d", `M 0 ${-r * 0.6} L 0 ${r * 0.6}`);
+    sh.appendChild(fold);
+    const mark = document.createElementNS(SVG_NS, "text");
+    mark.setAttribute("class", "shroud-mark");
+    mark.setAttribute("x", "0");
+    mark.setAttribute("y", `${-r * 0.55}`);
+    mark.textContent = "\u271D";
+    sh.appendChild(mark);
+    g.appendChild(sh);
+  }
+
+  // -----------------------------------------------------------------
+  // Chair interaction.
+  //
+  // - Setup phase: read-only on the phone (banner reminds the ST that
+  //   editing happens on the computer). Taps do nothing.
+  // - Show-player mode: taps are inert. The grimoire is being shown
+  //   to a player; we never want the side panel to pop open.
+  // - In-game (night/day/finished): tap opens the per-player side
+  //   panel UNLESS a SELECT_PLAYER prompt is active, in which case the
+  //   tap is consumed as a selection toggle.
+  // -----------------------------------------------------------------
+  function attachChairInteractions(g, chair) {
+    g.addEventListener("click", (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      if (document.body.classList.contains("show-player")) return;
+
+      // SELECT_PLAYER / SELECT_PLAYERS: tap is a pick.
+      const p = _currentPrompt;
+      if (p && (p.type === "select_player" || p.type === "select_players")) {
+        handlePromptChairClick(chair);
+        return;
+      }
+      // In-game: open side panel. Setup: do nothing (ST edits on
+      // computer); a tap on the chair instead just nudges focus.
+      if (engineState.phase === "setup") return;
+      openSeatPanel(chair);
+    });
+  }
+
+  function handlePromptChairClick(chair) {
+    const p = _currentPrompt;
+    if (!p) return;
+    if (!(p.type === "select_player" || p.type === "select_players")) return;
+    const pid = (typeof chair.player_id === "number") ? chair.player_id : chair.id;
+    const eligible = p.eligible_player_ids || [];
+    if (!eligible.includes(pid)) return;
+    const count = p.count || 1;
+    if (count === 1) {
+      _selectedPlayerIds = [pid];
+    } else {
+      const idx = _selectedPlayerIds.indexOf(pid);
+      if (idx >= 0) _selectedPlayerIds.splice(idx, 1);
+      else if (_selectedPlayerIds.length < count) _selectedPlayerIds.push(pid);
+      else {
+        _selectedPlayerIds.shift();
+        _selectedPlayerIds.push(pid);
+      }
+    }
+    renderSelectionState();
+  }
+
+  // -----------------------------------------------------------------
+  // Highlights / picked markers.
+  // -----------------------------------------------------------------
+  function applyHighlight(playerIds) {
+    _currentHighlightPlayerIds = Array.isArray(playerIds) ? playerIds.slice() : [];
+    reapplyHighlight();
+  }
+
+  function computeTargetChairIds(playerIds) {
+    const playerToChair = new Map();
+    for (const ch of chairs.values()) {
+      if (ch.player_id != null) playerToChair.set(ch.player_id, ch);
+    }
+    const set = new Set();
+    for (const pid of playerIds || []) {
+      const ch = playerToChair.get(pid);
+      if (ch) set.add(ch.id);
+    }
+    return set;
+  }
+
+  function reapplyHighlight() {
+    const target = computeTargetChairIds(_currentHighlightPlayerIds);
+    if (target.size === 0) {
+      chairsG.classList.remove("highlight-active");
+      chairsG.querySelectorAll("g[data-id]").forEach(g => {
+        g.classList.remove("highlight-target");
+      });
+      return;
+    }
+    chairsG.classList.add("highlight-active");
+    chairsG.querySelectorAll("g[data-id]").forEach(g => {
+      const id = parseInt(g.getAttribute("data-id"), 10);
+      g.classList.toggle("highlight-target", target.has(id));
+    });
+  }
+
+  function reapplyChairSelection() {
+    const pickedChairIds = new Set();
+    if (_currentPrompt
+        && (_currentPrompt.type === "select_player"
+            || _currentPrompt.type === "select_players")) {
+      const playerToChair = new Map();
+      for (const ch of chairs.values()) {
+        if (ch.player_id != null) playerToChair.set(ch.player_id, ch);
+        else playerToChair.set(ch.id, ch);
+      }
+      for (const pid of _selectedPlayerIds) {
+        const ch = playerToChair.get(pid);
+        if (ch) pickedChairIds.add(ch.id);
+      }
+    }
+    chairsG.querySelectorAll("g[data-id]").forEach(g => {
+      const id = parseInt(g.getAttribute("data-id"), 10);
+      g.classList.toggle("chair-picked", pickedChairIds.has(id));
+    });
+    _currentChairPickedIds = [...pickedChairIds];
+  }
+
+  function collectHighlightIds(p) {
+    const ids = new Set();
+    const explicit = Array.isArray(p.highlight_player_ids)
+      && p.highlight_player_ids.length > 0;
+    const isPlayerSelect =
+      (p.type === "select_player" || p.type === "select_players");
+    if (isPlayerSelect) {
+      for (const id of (p.eligible_player_ids || [])) ids.add(Number(id));
+      return [...ids].filter(n => Number.isFinite(n));
+    }
+    if (explicit) {
+      for (const id of p.highlight_player_ids) ids.add(Number(id));
+    }
+    const isInfoExplicit = (p.type === "information") && explicit;
+    if (p.target_player_id && !isInfoExplicit) {
+      ids.add(Number(p.target_player_id));
+    }
+    return [...ids].filter(n => Number.isFinite(n));
+  }
+
+  // -----------------------------------------------------------------
+  // Side panel (in-game; per-player view + actions).
+  // -----------------------------------------------------------------
+  const seatPanel  = document.getElementById("seatPanel");
+  const seatClose  = document.getElementById("seatClose");
+  const seatName   = document.getElementById("seatName");
+  const seatSub    = document.getElementById("seatSub");
+  const seatStates = document.getElementById("seatStates");
+  const seatMsg    = document.getElementById("seatMsg");
+  const seatActUseAbility = document.getElementById("seatAct_useAbility");
+  const seatActNominate   = document.getElementById("seatAct_nominate");
+  const seatActVoted      = document.getElementById("seatAct_voted");
+  const seatActExecute    = document.getElementById("seatAct_execute");
+
+  function openSeatPanel(chair) {
+    seatPanelChair = chair;
+    seatPanelTokensExpanded = false;
+    seatMsg.textContent = "";
+    seatMsg.classList.remove("ok");
+    renderSeatPanel();
+    seatPanel.classList.add("open");
+    seatPanel.setAttribute("aria-hidden", "false");
+  }
+  function closeSeatPanel() {
+    seatPanelChair = null;
+    seatPanelTokensExpanded = false;
+    seatPanel.classList.remove("open");
+    seatPanel.setAttribute("aria-hidden", "true");
+  }
+  seatClose.addEventListener("click", closeSeatPanel);
+
+  function reflectSeatPanel() {
+    if (!seatPanelChair) return;
+    // The chair record on the server may have updated; re-read it
+    // from our chairs map by id.
+    const fresh = chairs.get(seatPanelChair.id);
+    if (!fresh) {
+      closeSeatPanel();
+      return;
+    }
+    seatPanelChair = fresh;
+    renderSeatPanel();
+  }
+
+  function seatPlayer() {
+    if (!seatPanelChair) return null;
+    const pid = seatPanelChair.player_id;
+    if (typeof pid !== "number") return null;
+    return enginePlayersById.get(pid) || null;
+  }
+
+  function seatRow(label, value, valueClass) {
+    const cls = valueClass ? ` class="value ${valueClass}"` : ` class="value"`;
+    return `<div class="row"><span class="label">${escapeHtml(label)}</span>`
+      + `<span${cls}>${escapeHtml(String(value))}</span></div>`;
+  }
+
+  function renderSeatPanel() {
+    const p = seatPlayer();
+    if (!p) {
+      seatName.textContent = seatPanelChair
+        ? (seatPanelChair.name || `Player #${seatPanelChair.id}`)
+        : "—";
+      seatSub.textContent = "(not yet seated in the engine)";
+      seatStates.innerHTML = "";
+      [seatActUseAbility, seatActNominate, seatActVoted, seatActExecute]
+        .forEach(b => b.disabled = true);
+      return;
+    }
+    seatName.textContent = p.name || `Player #${p.id}`;
+    const subParts = [];
+    if (p.character) subParts.push(p.character);
+    if (p.char_type) subParts.push(p.char_type);
+    if (p.alignment) subParts.push(p.alignment);
+    seatSub.textContent = subParts.join(" · ");
+
+    const rows = [];
+    rows.push(`<div class="section-title">Identity</div>`);
+    rows.push(seatRow("Character", p.character || "—"));
+    if (p.perceived_character && p.perceived_character !== p.character) {
+      rows.push(seatRow("Perceives self as", p.perceived_character));
+    }
+    rows.push(seatRow("Type", p.char_type || "—"));
+    rows.push(seatRow(
+      "Alignment",
+      p.alignment || "—",
+      p.alignment === "evil" ? "evil" : p.alignment === "good" ? "good" : ""
+    ));
+
+    rows.push(`<div class="section-title">Life</div>`);
+    rows.push(seatRow(
+      "Status",
+      p.alive ? "Alive" : `Dead (${p.death_cause || "?"})`,
+      p.alive ? "alive" : "dead"
+    ));
+    rows.push(seatRow(
+      "Dead vote",
+      p.has_dead_vote ? "available" : "spent",
+      p.has_dead_vote ? "flag-on" : "flag-off"
+    ));
+
+    rows.push(`<div class="section-title">Conditions</div>`);
+    rows.push(seatRow(
+      "Drunk", p.drunk ? "yes" : "no",
+      p.drunk ? "flag-on" : "flag-off"
+    ));
+    rows.push(seatRow(
+      "Poisoned", p.poisoned ? "yes" : "no",
+      p.poisoned ? "flag-on" : "flag-off"
+    ));
+    if (p.once_per_game) {
+      rows.push(seatRow(
+        "Once-per-game",
+        p.once_per_game_used ? "spent" : "available",
+        p.once_per_game_used ? "flag-off" : "flag-on"
+      ));
+    }
+    if (Array.isArray(p.mad_about) && p.mad_about.length) {
+      rows.push(seatRow("Mad about", p.mad_about.join(", ")));
+    }
+
+    rows.push(`<div class="section-title">Today</div>`);
+    rows.push(seatRow(
+      "Nominated today",
+      p.has_nominated_today ? "yes" : "no",
+      p.has_nominated_today ? "flag-on" : "flag-off"
+    ));
+    rows.push(seatRow(
+      "Been nominated",
+      p.has_been_nominated_today ? "yes" : "no",
+      p.has_been_nominated_today ? "flag-on" : "flag-off"
+    ));
+    seatStates.innerHTML = rows.join("");
+
+    // Wire action buttons (re-resolve on every render).
+    const phase = engineState.phase;
+    const inGame = (phase === "night" || phase === "day" || phase === "finished");
+    seatActUseAbility.disabled = !inGame || !p.alive;
+    seatActNominate.disabled   = !(phase === "day") || !p.alive || p.has_nominated_today;
+    seatActVoted.disabled      = !(phase === "day");
+    seatActExecute.disabled    = !inGame || !p.alive;
+  }
+
+  async function postEngine(path, payload) {
+    try {
+      const r = await fetch("/api/engine/" + path, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload || {}),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        seatMsg.classList.remove("ok");
+        seatMsg.textContent = (data && data.error) || ("Failed: " + r.status);
+        return false;
+      }
+      seatMsg.classList.add("ok");
+      seatMsg.textContent = "OK.";
+      setTimeout(() => { seatMsg.textContent = ""; }, 2500);
+      await refresh();
+      return true;
+    } catch (e) {
+      seatMsg.classList.remove("ok");
+      seatMsg.textContent = "Network error.";
+      return false;
+    }
+  }
+
+  seatActUseAbility.addEventListener("click", () => {
+    const p = seatPlayer();
+    if (!p) return;
+    postEngine("use_ability", { player_id: p.id });
+  });
+  seatActNominate.addEventListener("click", () => {
+    // Nominate requires a target. For simplicity on phone we just
+    // bring up a quick picker: turn this into a SELECT_PLAYER-style
+    // tap on a target chair would be richer; for now we ask via
+    // prompt(). The desktop UI shows a dedicated picker.
+    const p = seatPlayer();
+    if (!p) return;
+    const targetName = window.prompt("Nominate which player (name or seat #)?", "");
+    if (!targetName) return;
+    let pid = null;
+    const tnum = parseInt(targetName, 10);
+    if (Number.isFinite(tnum)) {
+      const ch = chairs.get(tnum);
+      if (ch && typeof ch.player_id === "number") pid = ch.player_id;
+    }
+    if (pid === null) {
+      const lc = targetName.trim().toLowerCase();
+      for (const ch of chairs.values()) {
+        if ((ch.name || "").trim().toLowerCase() === lc
+            && typeof ch.player_id === "number") {
+          pid = ch.player_id;
+          break;
+        }
+      }
+    }
+    if (pid === null) {
+      seatMsg.classList.remove("ok");
+      seatMsg.textContent = "Couldn't resolve that player.";
+      return;
+    }
+    postEngine("nominate", { nominator_id: p.id, nominee_id: pid });
+  });
+  seatActVoted.addEventListener("click", () => {
+    const p = seatPlayer();
+    if (!p) return;
+    postEngine("vote", { player_id: p.id });
+  });
+  seatActExecute.addEventListener("click", () => {
+    const p = seatPlayer();
+    if (!p) return;
+    if (!confirm(`Execute ${p.name || ("Player " + p.id)}?`)) return;
+    postEngine("execute_player", { player_id: p.id });
+  });
+
+  // -----------------------------------------------------------------
+  // Prompt rendering. Mirrors the desktop renderPrompt() but with a
+  // mobile layout. Show-player mode (info prompts where the engine
+  // has set ``shown_to_player``) hides this card and shows
+  // #showCard instead, with the grimoire collapsed to names-only.
+  // -----------------------------------------------------------------
+  const promptCard = document.getElementById("promptCard");
+  const promptTitle = document.getElementById("promptTitle");
+  const promptDescription = document.getElementById("promptDescription");
+  const promptStages = document.getElementById("promptStages");
+  const promptOptions = document.getElementById("promptOptions");
+  const promptHint = document.getElementById("promptHint");
+  const btnNext = document.getElementById("btnNext");
+  const btnBack = document.getElementById("btnBack");
+
+  const showCard = document.getElementById("showCard");
+  const showTarget = document.getElementById("showTarget");
+  const showTokens = document.getElementById("showTokens");
+  const showNext = document.getElementById("showNext");
+
+  function panelKey(p) {
+    const meta = p.meta || {};
+    const character = meta.character || "";
+    const tpid = (p.target_player_id == null) ? "" : String(p.target_player_id);
+    return character + "|" + tpid;
+  }
+
+  function lookupPlayerName(pid) {
+    if (pid == null) return null;
+    for (const ch of chairs.values()) {
+      const cpid = (typeof ch.player_id === "number") ? ch.player_id : ch.id;
+      if (cpid === pid) return ch.name || ("Seat " + ch.id);
+    }
+    return null;
+  }
+
+  function renderPrompt() {
+    const p = _currentPrompt;
+    if (!p) {
+      document.body.classList.remove("has-prompt", "show-player");
+      applyHighlight([]);
+      reapplyChairSelection();
+      // Re-render so chairs revert from show-player layout.
+      render();
+      return;
+    }
+
+    const meta = p.meta || {};
+    const isInfo = (p.type === "information");
+    const isPayload = isInfo && !!p.shown_to_player;
+
+    // Manage panel session — same heuristic as desktop, lighter.
+    const newKey = panelKey(p);
+    if (!_panelSession || _panelSession.key !== newKey) {
+      const stepName = meta.step_name || meta.character || "Storyteller";
+      const description = meta.description || p.text || "";
+      const wakeupName = meta.target_player_name
+        || lookupPlayerName(p.target_player_id);
+      _panelSession = {
+        key: newKey,
+        character: meta.character || null,
+        target_pid: p.target_player_id ?? null,
+        title: stepName,
+        description: description,
+        wakeupName: (meta.character && wakeupName) ? wakeupName : null,
+        stages: [],
+        drunkPoisonState: meta.drunk_poison_state || null,
+      };
+    }
+
+    // Compute highlight ids first — they apply to BOTH normal prompt
+    // mode and show-player mode (the highlights point out which
+    // players the message is about).
+    const highlightIds = collectHighlightIds(p);
+    applyHighlight(highlightIds);
+
+    document.body.classList.add("has-prompt");
+    document.body.classList.toggle("show-player", isPayload);
+
+    if (isPayload) {
+      // Show-player mode. Re-render chairs to strip them down to
+      // names-only, hide the prompt card, and populate #showCard with
+      // the message the player will read off.
+      render();
+
+      const namesById = new Map();
+      for (const ch of chairs.values()) {
+        const pid = (typeof ch.player_id === "number") ? ch.player_id : ch.id;
+        namesById.set(pid, ch.name || ("seat " + ch.id));
+      }
+      const targetName = (p.target_player_id != null && namesById.has(p.target_player_id))
+        ? namesById.get(p.target_player_id)
+        : (meta.target_player_name || "the player");
+      showTarget.textContent = targetName;
+
+      const description = (_panelSession && _panelSession.description) || "";
+      const tokens = buildInfoTokens(p, meta, namesById, description);
+      showTokens.innerHTML = "";
+      for (const t of tokens) {
+        const row = document.createElement("div");
+        row.className = "token-row";
+        if (t.label) {
+          const labelEl = document.createElement("div");
+          labelEl.className = "token-label";
+          labelEl.textContent = t.label;
+          row.appendChild(labelEl);
+        }
+        if (t.body) {
+          const bodyEl = document.createElement("div");
+          bodyEl.className = "token-body";
+          bodyEl.textContent = t.body;
+          row.appendChild(bodyEl);
+        }
+        showTokens.appendChild(row);
+      }
+      return;
+    }
+
+    // Normal prompt-card path.
+    render(); // re-render so chairs leave show-player mode if needed
+
+    // Title.
+    if (_panelSession.drunkPoisonState) {
+      promptTitle.innerHTML =
+        `${escapeHtml(_panelSession.title)} `
+        + `<em class="impaired-label">`
+        + `(${escapeHtml(_panelSession.drunkPoisonState)})`
+        + `</em>`;
+    } else {
+      promptTitle.textContent = _panelSession.title;
+    }
+
+    // Description.
+    promptDescription.textContent = _panelSession.description || "";
+
+    // Stages (simple — we don't track history as elaborately as the
+    // desktop does on phone, but we surface the active question).
+    promptStages.innerHTML = "";
+    const stage = document.createElement("div");
+    stage.className = "stage active";
+    const q = document.createElement("span");
+    q.className = "q";
+    q.textContent = stageQuestionLabel(p);
+    stage.appendChild(q);
+    promptStages.appendChild(stage);
+
+    // Options.
+    promptOptions.innerHTML = "";
+    promptHint.textContent = "";
+
+    if (p.type === "yes_no") {
+      const def = meta.default;
+      const correct = meta.correct;
+      _selectedYesNo = (def === true || def === false) ? def : null;
+      [["Yes", true], ["No", false]].forEach(([label, val]) => {
+        const opt = document.createElement("button");
+        opt.type = "button";
+        opt.className = "option";
+        opt.textContent = label;
+        opt.dataset.yesno = String(val);
+        if (def === val) opt.classList.add("default-hint");
+        if (correct === val) opt.classList.add("correct-hint");
+        opt.addEventListener("click", () => {
+          _selectedYesNo = val;
+          renderSelectionState();
+        });
+        promptOptions.appendChild(opt);
+      });
+      promptHint.textContent = (def === true) ? "Default: Yes"
+        : (def === false ? "Default: No" : "");
+      renderSelectionState();
+    } else if (p.type === "select_player" || p.type === "select_players") {
+      const eligible = p.eligible_player_ids || [];
+      const count = p.count || 1;
+      promptHint.textContent = `Pick ${count} player${count > 1 ? "s" : ""} (tap chair).`;
+      const namesById = new Map();
+      for (const ch of chairs.values()) {
+        const pid = (typeof ch.player_id === "number") ? ch.player_id : ch.id;
+        namesById.set(pid, ch.name || ("seat " + ch.id));
+      }
+      const defPids = meta.default;
+      if (Array.isArray(defPids)) _selectedPlayerIds = defPids.slice(0, count);
+      else if (typeof defPids === "number") _selectedPlayerIds = [defPids];
+
+      const correctRaw = meta.correct;
+      const correctIds = Array.isArray(correctRaw)
+        ? correctRaw.map(Number)
+        : (typeof correctRaw === "number" ? [correctRaw] : []);
+      eligible.forEach(pid => {
+        const opt = document.createElement("button");
+        opt.type = "button";
+        opt.className = "option";
+        opt.textContent = (namesById.get(pid) || ("Player " + pid)) + " (#" + pid + ")";
+        if (_selectedPlayerIds.includes(pid)) opt.classList.add("default-hint");
+        if (correctIds.includes(pid)) opt.classList.add("correct-hint");
+        opt.dataset.pid = String(pid);
+        opt.addEventListener("click", () => {
+          if (count === 1) {
+            _selectedPlayerIds = [pid];
+          } else {
+            const idx = _selectedPlayerIds.indexOf(pid);
+            if (idx >= 0) _selectedPlayerIds.splice(idx, 1);
+            else if (_selectedPlayerIds.length < count) _selectedPlayerIds.push(pid);
+          }
+          renderSelectionState();
+        });
+        promptOptions.appendChild(opt);
+      });
+      renderSelectionState();
+    } else if (p.type === "select_character") {
+      const eligible = p.eligible_characters || [];
+      const count = p.count || 1;
+      const def = meta.default;
+      const correct = meta.correct;
+      const isMulti = count > 1;
+      const defSet = new Set(
+        Array.isArray(def) ? def : (typeof def === "string" && def ? [def] : [])
+      );
+      const correctSet = new Set(
+        Array.isArray(correct) ? correct
+          : (typeof correct === "string" && correct ? [correct] : [])
+      );
+      if (isMulti) {
+        promptHint.textContent = `Pick ${count} characters`
+          + (defSet.size ? ` (default: ${Array.from(defSet).join(", ")})` : "");
+        _selectedCharacters = Array.from(defSet).slice(0, count);
+        _selectedCharacter = null;
+      } else {
+        promptHint.textContent = "Pick a character" + (def ? ` (default: ${def})` : "");
+        if (def) _selectedCharacter = def;
+      }
+      eligible.forEach(name => {
+        const opt = document.createElement("button");
+        opt.type = "button";
+        opt.className = "option";
+        opt.textContent = name;
+        opt.dataset.name = name;
+        if (defSet.has(name)) opt.classList.add("default-hint");
+        if (correctSet.has(name)) opt.classList.add("correct-hint");
+        opt.addEventListener("click", () => {
+          if (isMulti) {
+            const idx = _selectedCharacters.indexOf(name);
+            if (idx >= 0) _selectedCharacters.splice(idx, 1);
+            else if (_selectedCharacters.length < count) _selectedCharacters.push(name);
+            else { _selectedCharacters.shift(); _selectedCharacters.push(name); }
+          } else {
+            _selectedCharacter = name;
+          }
+          renderSelectionState();
+        });
+        promptOptions.appendChild(opt);
+      });
+      renderSelectionState();
+    }
+  }
+
+  function stageQuestionLabel(p) {
+    if (!p) return "";
+    if (p.type === "yes_no") return p.text || "Yes / No?";
+    if (p.type === "select_player" || p.type === "select_players") {
+      const count = p.count || 1;
+      return `${p.text || "Pick"} (${count})`;
+    }
+    if (p.type === "select_character") {
+      const count = p.count || 1;
+      return `${p.text || "Pick character"} (${count})`;
+    }
+    if (p.type === "information") return p.text || "Information.";
+    return p.text || "";
+  }
+
+  function renderSelectionState() {
+    // Reflect picks in the option buttons.
+    promptOptions.querySelectorAll(".option").forEach(opt => {
+      opt.classList.remove("picked");
+      if (opt.dataset.yesno !== undefined) {
+        const val = opt.dataset.yesno === "true";
+        if (_selectedYesNo === val) opt.classList.add("picked");
+      } else if (opt.dataset.pid !== undefined) {
+        const pid = parseInt(opt.dataset.pid, 10);
+        if (_selectedPlayerIds.includes(pid)) opt.classList.add("picked");
+      } else if (opt.dataset.name !== undefined) {
+        const name = opt.dataset.name;
+        if (_selectedCharacter === name
+            || _selectedCharacters.includes(name)) {
+          opt.classList.add("picked");
+        }
+      }
+    });
+    reapplyChairSelection();
+  }
+
+  // The buildInfoTokens function from desktop, ported.
+  function buildInfoTokens(p, meta, namesById, description) {
+    const tokens = [];
+    const namesFor = (ids) => (ids || [])
+      .map(id => namesById.get(id) || ("Player " + id));
+    const stepKind = meta.step_kind;
+    const step = meta.step;
+    const character = meta.character;
+
+    if (stepKind === "minion_info") {
+      const demonNames = (meta.demon_player_names || []).join(", ");
+      if (demonNames) tokens.push({label: "THIS IS THE DEMON", body: demonNames});
+      return tokens;
+    }
+    if (stepKind === "demon_info") {
+      const minionNames = (meta.minion_player_names || []).join(", ");
+      const bluffs = (meta.bluff_characters || []).join(", ");
+      if (minionNames) tokens.push({label: "THESE ARE YOUR MINIONS", body: minionNames});
+      if (bluffs) tokens.push({label: "THESE CHARACTERS ARE NOT IN PLAY", body: bluffs});
+      return tokens;
+    }
+    if (stepKind === "grimoire" || step === "grimoire" || character === "Spy") {
+      tokens.push({
+        label: "GRIMOIRE",
+        body: "Study the grimoire on the Storyteller's screen.",
+      });
+      return tokens;
+    }
+
+    const chars = p.highlight_characters || [];
+    const playerNames = namesFor(p.highlight_player_ids).join(", ");
+
+    if (character === "Librarian" && chars.length === 0
+        && (!p.highlight_player_ids || p.highlight_player_ids.length === 0)) {
+      tokens.push({label: "0", body: "There are no Outsiders in play."});
+      return tokens;
+    }
+    if (character === "Fortune Teller") {
+      const yes = /^\s*Yes/i.test(p.text || "");
+      tokens.push({label: yes ? "YES" : "NO", body: playerNames});
+      return tokens;
+    }
+    if (character === "Chef" || character === "Empath") {
+      tokens.push({label: "", body: p.text || ""});
+      return tokens;
+    }
+    if (chars.length > 0
+        && (character === "Washerwoman" || character === "Librarian"
+            || character === "Investigator")) {
+      const charName = chars.map(c => String(c).toUpperCase()).join(" / ");
+      tokens.push({
+        label: "ONE OF THESE IS THE " + charName,
+        body: playerNames || "",
+      });
+      return tokens;
+    }
+    if (meta.reveal === "demon_role") {
+      const demonName = String(meta.demon_character || "Imp").toUpperCase();
+      tokens.push({label: "YOU ARE", body: "THE " + demonName});
+      return tokens;
+    }
+    if (chars.length > 0) {
+      const charLabel = chars.map(c => String(c).toUpperCase()).join(" / ");
+      tokens.push({label: charLabel, body: playerNames || ""});
+      return tokens;
+    }
+    let bodyText = p.text || "";
+    if (bodyText === description) bodyText = "";
+    tokens.push({label: (character || "INFO").toUpperCase(), body: bodyText});
+    return tokens;
+  }
+
+  // -----------------------------------------------------------------
+  // Send the storyteller's response back to the engine.
+  // -----------------------------------------------------------------
+  async function respondPrompt(value) {
+    const p = _currentPrompt;
+    if (!p) return;
+    promptHint.textContent = "Sending…";
+    try {
+      await fetch("/api/engine/respond", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt_id: p.id, response: value }),
+      });
+    } catch (e) { /* ignore */ }
+    _currentPrompt = null;
+    _selectedYesNo = null;
+    _selectedPlayerIds = [];
+    _selectedCharacter = null;
+    _selectedCharacters = [];
+    promptOptions.innerHTML = "";
+    promptHint.textContent = "";
+    document.body.classList.remove("has-prompt", "show-player");
+    applyHighlight([]);
+    reapplyChairSelection();
+    refresh();
+    setTimeout(pollPrompt, 80);
+  }
+
+  btnNext.addEventListener("click", () => {
+    const p = _currentPrompt;
+    if (!p) return;
+    if (p.type === "yes_no") {
+      if (_selectedYesNo !== true && _selectedYesNo !== false) {
+        promptHint.textContent = "Pick Yes or No first.";
+        return;
+      }
+      respondPrompt(_selectedYesNo);
+    } else if (p.type === "select_player" || p.type === "select_players") {
+      const count = p.count || 1;
+      if (_selectedPlayerIds.length === 0) {
+        promptHint.textContent = "Pick at least one player first.";
+        return;
+      }
+      const value = (count === 1) ? _selectedPlayerIds[0] : _selectedPlayerIds;
+      respondPrompt(value);
+    } else if (p.type === "select_character") {
+      const count = p.count || 1;
+      if (count > 1) {
+        if (_selectedCharacters.length < count) {
+          promptHint.textContent =
+            `Pick ${count} characters first (currently ${_selectedCharacters.length}).`;
+          return;
+        }
+        respondPrompt(_selectedCharacters.slice());
+      } else {
+        if (!_selectedCharacter) {
+          promptHint.textContent = "Pick a character first.";
+          return;
+        }
+        respondPrompt(_selectedCharacter);
+      }
+    } else {
+      respondPrompt(null);
+    }
+  });
+
+  btnBack.addEventListener("click", async () => {
+    btnBack.disabled = true;
+    try {
+      await fetch("/api/engine/back", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
+    } catch (e) { /* ignore */ }
+    setTimeout(() => { btnBack.disabled = false; }, 250);
+    await refresh();
+    pollPrompt();
+  });
+
+  // The "show-player" Done button — same as Next on a normal info
+  // prompt.
+  showNext.addEventListener("click", () => respondPrompt(null));
+
+  // -----------------------------------------------------------------
+  // Phase FAB (Start Game / Start Night).
+  // -----------------------------------------------------------------
+  const phaseFab = document.getElementById("phaseFab");
+  function syncPhaseFab() {
+    phaseFab.classList.remove("start-game", "start-night");
+    if (engineState.phase === "setup") {
+      phaseFab.classList.add("start-game");
+      phaseFab.textContent = "▶ Start Game";
+    } else if (engineState.phase === "day") {
+      phaseFab.classList.add("start-night");
+      phaseFab.textContent = "🌙 Start Night";
+    }
+  }
+  phaseFab.addEventListener("click", async () => {
+    if (engineState.phase === "setup") {
+      await postEngine("start_game", {});
+    } else if (engineState.phase === "day") {
+      await postEngine("start_night", {});
+    }
+    pollPrompt();
+  });
+
+  // -----------------------------------------------------------------
+  // Helpers.
+  // -----------------------------------------------------------------
+  function escapeHtml(s) {
+    return String(s || "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  }
+
   document.addEventListener("contextmenu", (ev) => ev.preventDefault());
 
-  // Initial load + steady polling.
-  refresh();
-  setInterval(refresh, POLL_MS);
+  // After every refresh, sync the phase FAB.
+  const _origReflectPhase = reflectPhaseClass;
+  reflectPhaseClass = function () {
+    _origReflectPhase();
+    syncPhaseFab();
+  };
 
-  // Refresh immediately when the phone comes back from lock/background.
+  // -----------------------------------------------------------------
+  // Init: kick off polling loops.
+  // -----------------------------------------------------------------
+  refresh();
+  pollPrompt();
+  setInterval(refresh, POLL_STATE_MS);
+  setInterval(pollPrompt, POLL_PROMPT_MS);
+
+  // Refresh when phone returns from background.
   document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "visible") refresh();
+    if (document.visibilityState === "visible") {
+      refresh();
+      pollPrompt();
+    }
   });
 })();
 </script>

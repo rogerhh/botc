@@ -11,8 +11,13 @@ The "alive count just before the death" is reconstructable: at the
 time the reaction fires the Demon is already dead, so we add 1 to
 the current alive count. Travelers do not count toward the threshold.
 
-If the Demon kills themself at night (Imp self-kill), the Scarlet
-Woman *must* take over as the new Imp.
+The trigger is uniform: **any** Demon death qualifies — execution,
+Slayer, Imp self-kill, Storyteller-attributed kill, etc. The Scarlet
+Woman's reaction does not special-case how the Demon died. For an
+Imp self-kill specifically, the Imp's own ability runs a deferred
+post-DEATH handler that observes whether this reaction has already
+promoted a new Demon and adapts accordingly (no double-promotion,
+inline same-night reveal instead of next-night queue).
 
 Implementation
 --------------
@@ -28,6 +33,16 @@ Caveat: change_character has to happen *before* the engine's
 the DEATH event is dispatched). Since reactions are executed as part
 of the dispatch loop *before* control returns to ``Engine.kill``, we
 satisfy that ordering.
+
+The "YOU ARE the <Demon>" reveal does NOT happen synchronously here.
+The promoted player is enqueued onto
+``engine._sw_pending_demon_reveal``; the next night's "Scarlet
+Woman" preset step (``_run_scarlet_woman_step``) drains the queue
+and runs the wakeup + InformationPrompt then. Per the rules, no
+DEMON INFO is given. The Imp self-kill flow is the one exception —
+the reveal happens inline that same night, and the Imp's
+post-DEATH handler removes the promoted seat from the queue so the
+preset step doesn't re-reveal next night.
 
 Drunkenness / poisoning: a drunk or poisoned Scarlet Woman does NOT
 take over.
@@ -97,17 +112,47 @@ class ScarletWoman(Character):
         # The just-killed Demon would have been counted before death.
         alive_before = len(alive_now) + 1
         if alive_before < 5:
-            engine.log(
-                f"Demon died with only {alive_before} players alive — "
-                f"Scarlet Woman does not become the Demon."
+            engine.log_reaction(
+                "Scarlet Woman",
+                (
+                    f"Demon died with only {alive_before} players alive — "
+                    f"{self.player.name} does not become the Demon."
+                ),
+                target=self.player,
+                trigger="demon_death",
+                effect="no_promote_below_5",
+                alive_before=alive_before,
             )
             return super().reaction(event, engine)
 
-        # Promote: become the same Demon that just died.
+        # Promote: become the same Demon that just died (NOT necessarily
+        # Imp — on a non-trouble-brewing script the dying demon could be
+        # Pukka, Vortox, …; we instantiate a fresh instance of *that*
+        # demon's class via ``change_character``, which builds the
+        # character via ``script_data.build_character`` and resets
+        # ``once_per_game_used`` so any once-per-game / first-night
+        # ability the new Demon has is available to the new holder).
         new_demon = target.character.name if target.character else "Imp"
-        engine.log(
-            f"Scarlet Woman {self.player.name} becomes the {new_demon}."
+        engine.log_reaction(
+            "Scarlet Woman",
+            f"{self.player.name} becomes the {new_demon}.",
+            target=self.player,
+            trigger="demon_death",
+            effect="promote_to_demon",
+            new_demon=new_demon,
         )
-        engine.change_character(self.player.id, new_demon)
+        promoted_pid = self.player.id
+        engine.change_character(promoted_pid, new_demon)
         # Persist evil alignment — change_character preserves alignment.
+
+        # Bookkeeping: record the promotion so the UI grimoire can render
+        # the "Scarlet Woman IS THE DEMON" reminder token on this seat
+        # for the rest of the game, and queue the seat for the
+        # night-time "YOU ARE the <Demon>" reveal at the preset's
+        # "Scarlet Woman" step. We do NOT run DEMON INFO — the rules
+        # only call for showing the new demon role.
+        if promoted_pid not in engine._sw_promoted_player_ids:
+            engine._sw_promoted_player_ids.append(promoted_pid)
+        if promoted_pid not in engine._sw_pending_demon_reveal:
+            engine._sw_pending_demon_reveal.append(promoted_pid)
         return super().reaction(event, engine)

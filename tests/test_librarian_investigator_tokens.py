@@ -253,6 +253,58 @@ def test_apply_setup_data_with_wrong_skips_st_prompts() -> None:
     e.advance_to_day()
 
 
+def test_lib_inv_token_slots_cleared_after_ability() -> None:
+    """Once the Librarian / Investigator first-night abilities
+    resolve, their pool slots are cleared. Token display always
+    matches state, so the UI naturally stops rendering the OUTSIDER /
+    MINION / WRONG tokens — there is no separate phase-based
+    "first-night only" gate.
+    """
+    e, ids = _make_engine()
+    # Mirror the real ST flow: pool tracks the seated roles + the
+    # Librarian / Investigator picks the storyteller dragged on at
+    # setup. The engine clears these slots when each ability resolves.
+    e.pool.set_many([
+        "Librarian", "Investigator", "Drunk", "Poisoner", "Imp"
+    ])
+    e.pool.set_librarian_outsider("Drunk")
+    e.pool.set_librarian_wrong("Investigator")
+    e.pool.set_investigator_minion("Poisoner")
+    e.pool.set_investigator_wrong("Librarian")
+    e.apply_setup_data({
+        "librarian_outsider": "Drunk",
+        "librarian_wrong": "Investigator",
+        "investigator_minion": "Poisoner",
+        "investigator_wrong": "Librarian",
+        "drunk_fake": "Empath",
+    })
+    # Pool slots populated during setup.
+    assert e.pool.librarian_outsider() == "Drunk"
+    assert e.pool.librarian_wrong() == "Investigator"
+    assert e.pool.investigator_minion() == "Poisoner"
+    assert e.pool.investigator_wrong() == "Librarian"
+
+    e.start_game()
+    e.start_night()
+    drain(e, [
+        ({"character": "Poisoner",     "step": "select_player"}, ids["d"]),
+        ({"character": "Librarian",    "step": "information"},   None),
+        ({"character": "Investigator", "step": "information"},   None),
+        ({"character": "Empath",       "step": "select_count",
+          "due_to_drunk_poison": True}, "0"),
+        ({"character": "Empath",       "step": "information"},   None),
+    ])
+
+    # Both abilities have fired — pool slots are cleared and the
+    # grimoire stops showing the tokens automatically.
+    assert e.pool.librarian_outsider() is None
+    assert e.pool.librarian_wrong() is None
+    assert e.pool.investigator_minion() is None
+    assert e.pool.investigator_wrong() is None
+
+    e.advance_to_day()
+
+
 def test_pool_autofills_lib_wrong_and_inv_wrong() -> None:
     """Adding the Librarian / Investigator to a pool with valid
     seen-role + at least one other role auto-fills the WRONG slot

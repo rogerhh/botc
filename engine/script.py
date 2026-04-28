@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, Dict, List, Optional, Tuple, Type
 
 from engine.character import Character, StubCharacter
 from engine.characters import CHARACTER_REGISTRY
-from engine.characters.none_character import NoneCharacter
+from engine.characters.stubs import STUB_BY_NAME
 from engine.enums import CharType
 
 if TYPE_CHECKING:
@@ -165,14 +165,12 @@ def build_character(name: str) -> Character:
     :mod:`engine.characters`, use it. Otherwise, fall back to a stub
     that still carries the right metadata so the engine can sequence it.
 
-    The ``None`` placeholder character (a no-op slot-filler used when
-    a setup pick has no real effect — see
-    :class:`engine.characters.none_character.NoneCharacter`) is
-    handled specially: it lives outside any script and returns a
-    fresh :class:`NoneCharacter` instance.
+    The five anonymous stubs (TownsfolkStub, OutsiderStub, MinionStub,
+    GoodStub, EvilStub) are handled specially: they live outside any
+    script and are returned as fresh instances.
     """
-    if name == NoneCharacter.name:
-        return NoneCharacter()
+    if name in STUB_BY_NAME:
+        return STUB_BY_NAME[name]()
 
     if name not in SCRIPT_BY_NAME:
         raise KeyError(f"Unknown character {name!r}")

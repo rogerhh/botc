@@ -271,13 +271,19 @@ def test_chef_spy_registers_evil_full_count() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Investigator: NEVER prompts for Spy registration.
+# Investigator: with seen token on Spy, prompts for Spy's registration.
+# Picking a Minion → standard 1-of-2 reading; non-Minion → "0 Minions"
+# reading similar to Librarian's "0 Outsiders".
 # ---------------------------------------------------------------------------
 
 
-def test_investigator_sees_spy_correctly_no_prompt() -> None:
-    """Investigator's seen-Minion can be the Spy with no
-    misregistration prompt."""
+def test_investigator_seen_on_spy_fires_registration_prompt() -> None:
+    """Investigator's seen-token on the Spy fires a Spy registration
+    prompt, even though the Spy is itself a Minion. The check is a
+    name-attribute Check with passes=("Spy",); since "Spy" is in the
+    Spy's eligible-name list (TF + Outsider + "Spy"), the override
+    fires so the ST may opt to have the Spy register as a good role
+    (in which case the Investigator's check fails for that seat)."""
     e = Engine()
     a = e.add_seat("Alice")    # 1 — Investigator
     b = e.add_seat("Bob")      # 2 — Mayor
@@ -300,8 +306,9 @@ def test_investigator_sees_spy_correctly_no_prompt() -> None:
     e.start_game()
     e.start_night()
     drain_prompts(e, [
-        # No Poisoner in play. Investigator runs first.
-        # Sober + healthy + both presets → straight to information.
+        # ST is asked what the Spy registers as — pick "Spy" itself
+        # so the Investigator's name-check passes.
+        ({"character": "Investigator", "step": "spy_registers_as"}, "Spy"),
         ({"character": "Investigator", "step": "information"}, None),
         ({"character": "Spy",          "step": "grimoire"}, None),
     ])
@@ -347,6 +354,8 @@ def test_undertaker_on_spy_shows_spy_registered_character() -> None:
     e.advance_to_night()
     e.start_night()
     drain_prompts(e, [
+        # Imp goes first on night 2; pick Soldier (immune; nobody dies).
+        ({"character": "Imp",          "step": "select_target"}, c.id),
         # Undertaker on the Spy: ST picks what character to show.
         ({"character": "Undertaker",   "step": "spy_registers_as"},
          "Slayer"),
@@ -410,9 +419,10 @@ def test_ravenkeeper_on_spy_shows_spy_registered_character() -> None:
 
 
 def test_washerwoman_with_spy_seen_no_actual_holder() -> None:
-    """When the chosen Townsfolk has no actual holder and a Spy is in
-    play, the Spy automatically becomes the seen player. The chosen
-    Townsfolk *is* the character the Spy registers as for the WW."""
+    """When the chosen Townsfolk has no actual holder, the engine asks
+    each non-self player's ``registers_as``. The Spy override fires
+    (categories=(TOWNSFOLK,) includes a good type) and the ST picks
+    "Slayer" — the Spy becomes the seen player."""
     e = Engine()
     a = e.add_seat("Alice")    # 1 — Washerwoman
     b = e.add_seat("Bob")      # 2 — Mayor
@@ -429,11 +439,15 @@ def test_washerwoman_with_spy_seen_no_actual_holder() -> None:
     e.start_game()
     e.start_night()
     drain_prompts(e, [
-        # Storyteller picks "Slayer" (not in play) — only the Spy can be
-        # the seen player. No Yes/No prompt; Spy is auto-selected.
+        # Storyteller picks "Slayer" (not in play). Pass 1 finds no
+        # actual holder; pass 2 calls registers_as on each player.
         ({"character": "Washerwoman",  "step": "select_character"},
          "Slayer"),
-        # Now ST picks a WRONG player (any non-self, non-Spy player).
+        # Spy is the only player who can register as Slayer (Recluse
+        # not in play; the Spy override fires on TOWNSFOLK category).
+        ({"character": "Washerwoman",  "step": "spy_registers_as"},
+         "Slayer"),
+        # ST picks the WRONG player.
         ({"character": "Washerwoman",  "step": "select_wrong_player",
           "shown_character": "Slayer"}, b.id),
         ({"character": "Washerwoman",  "step": "information"}, None),
@@ -444,8 +458,8 @@ def test_washerwoman_with_spy_seen_no_actual_holder() -> None:
 
 def test_washerwoman_with_spy_in_play_and_actual_holder() -> None:
     """When both the chosen Townsfolk's actual holder AND the Spy are
-    in play, the Storyteller is asked Yes/No to use the Spy. Default
-    No → use the actual holder."""
+    in play, the actual holder always wins (pass 1 finds them) — no
+    Spy registration prompt fires."""
     e = Engine()
     a = e.add_seat("Alice")    # 1 — Washerwoman
     b = e.add_seat("Bob")      # 2 — Mayor (actual holder of Mayor)
@@ -462,10 +476,9 @@ def test_washerwoman_with_spy_in_play_and_actual_holder() -> None:
     e.start_game()
     e.start_night()
     drain_prompts(e, [
-        # ST picks Mayor (in play).
+        # ST picks Mayor (in play). Pass 1 finds Bob (true Mayor) →
+        # no Spy prompt. Straight to select_wrong_player.
         ({"character": "Washerwoman",  "step": "select_character"}, "Mayor"),
-        # Yes/No: use Spy as seen? Answer No → use actual Mayor.
-        ({"character": "Washerwoman",  "step": "use_spy_as_seen"}, False),
         # Wrong player: not Bob (actual Mayor) and not Alice (self).
         ({"character": "Washerwoman",  "step": "select_wrong_player",
           "shown_character": "Mayor"}, c.id),
@@ -475,12 +488,14 @@ def test_washerwoman_with_spy_in_play_and_actual_holder() -> None:
     e.advance_to_day()
 
 
-def test_washerwoman_choose_spy_when_actual_in_play() -> None:
-    """When both the actual holder AND the Spy exist, the ST can opt
-    to use the Spy (Yes on the override prompt)."""
+def test_washerwoman_to_use_spy_pick_unmatched_townsfolk() -> None:
+    """To make the Spy the seen player when an actual Townsfolk holder
+    is in play for some role, the ST simply picks a different
+    Townsfolk role that no actual player holds. The Spy then registers
+    as that role."""
     e = Engine()
     a = e.add_seat("Alice")    # 1 — Washerwoman
-    b = e.add_seat("Bob")      # 2 — Mayor
+    b = e.add_seat("Bob")      # 2 — Mayor (actual Mayor)
     c = e.add_seat("Cara")     # 3 — Soldier
     d = e.add_seat("Dan")      # 4 — Spy
     f = e.add_seat("Eve")      # 5 — Imp
@@ -494,13 +509,15 @@ def test_washerwoman_choose_spy_when_actual_in_play() -> None:
     e.start_game()
     e.start_night()
     drain_prompts(e, [
-        ({"character": "Washerwoman",  "step": "select_character"}, "Mayor"),
-        # Yes → use Spy as seen.
-        ({"character": "Washerwoman",  "step": "use_spy_as_seen"}, True),
-        # WRONG player can be Bob (actual Mayor), Cara, or Eve. Not the
-        # Spy (already the seen) or Alice (self).
+        # ST picks Slayer (not in play). Pass 1 finds nothing; pass 2
+        # asks the Spy. The Spy registers as Slayer → seen player.
+        ({"character": "Washerwoman",  "step": "select_character"}, "Slayer"),
+        ({"character": "Washerwoman",  "step": "spy_registers_as"},
+         "Slayer"),
+        # WRONG player can be Bob, Cara, or Eve. Not the Spy
+        # (seen) or Alice (self).
         ({"character": "Washerwoman",  "step": "select_wrong_player",
-          "shown_character": "Mayor"}, b.id),
+          "shown_character": "Slayer"}, b.id),
         ({"character": "Washerwoman",  "step": "information"}, None),
         ({"character": "Spy",          "step": "grimoire"}, None),
     ])
@@ -532,12 +549,254 @@ def test_librarian_with_spy_no_actual_outsiders() -> None:
     e.start_game()
     e.start_night()
     drain_prompts(e, [
-        # ST picks "Saint" (not in play) — Spy is the seen player.
+        # ST picks "Saint" (not in play). Pass 1 finds no holder; pass
+        # 2 asks Spy.registers_as → Spy registers as Saint → seen.
         ({"character": "Librarian",    "step": "select_character"}, "Saint"),
+        ({"character": "Librarian",    "step": "spy_registers_as"}, "Saint"),
         ({"character": "Librarian",    "step": "select_wrong_player",
           "shown_character": "Saint"}, b.id),
         ({"character": "Librarian",    "step": "information"}, None),
         ({"character": "Spy",          "step": "grimoire"}, None),
+    ])
+    e.advance_to_day()
+
+
+def test_librarian_seen_token_on_spy_forces_outsider_pick() -> None:
+    """When the Librarian's seen-Outsider token is dropped on the Spy
+    chair (via ``apply_setup_data``), the night ability bypasses the
+    ``select_character`` step entirely — instead the Spy's
+    ``registers_as`` is prompted with the eligible list restricted to
+    Outsider names. The ST must pick an Outsider; whichever they pick
+    is what the Librarian is shown.
+
+    Project rule: ``Librarian interaction with spy, if outsider seen
+    token on spy, ST must register spy as some outsider character.``"""
+    e = Engine()
+    a = e.add_seat("Alice")    # 1 — Librarian
+    b = e.add_seat("Bob")      # 2 — Mayor
+    c = e.add_seat("Cara")     # 3 — Soldier
+    d = e.add_seat("Dan")      # 4 — Spy
+    f = e.add_seat("Eve")      # 5 — Imp
+
+    e.assign_character(a.id, "Librarian")
+    e.assign_character(b.id, "Mayor")
+    e.assign_character(c.id, "Soldier")
+    e.assign_character(d.id, "Spy")
+    e.assign_character(f.id, "Imp")
+
+    e.apply_setup_data({
+        "librarian_outsider": "Spy",
+        "librarian_wrong": "Mayor",
+    })
+
+    pending = []
+
+    def collect(engine, scripted):
+        deadline = time.time() + 5.0
+        answered = 0
+        last_id = -1
+        while engine._night_thread and engine._night_thread.is_alive():
+            if time.time() > deadline:
+                raise TimeoutError("timed out")
+            p = engine.pending_prompt()
+            if p is None or p.id == last_id:
+                time.sleep(0.01)
+                continue
+            if answered >= len(scripted):
+                raise AssertionError(f"unexpected prompt {p.text!r}: {p.meta}")
+            matcher, response = scripted[answered]
+            for k, v in matcher.items():
+                if p.meta.get(k) != v:
+                    raise AssertionError(
+                        f"Prompt #{answered+1} did not match: "
+                        f"meta[{k!r}]={p.meta.get(k)!r} (expected {v!r})"
+                    )
+            # Record the eligible list of the spy_registers_as prompt
+            # so the test can assert it was restricted to the right
+            # category.
+            if p.meta.get("step") == "spy_registers_as":
+                pending.append(list(p.eligible_characters))
+            last_id = p.id
+            engine.respond(p.id, response)
+            answered += 1
+            time.sleep(0.01)
+
+    e.start_game()
+    e.start_night()
+    collect(e, [
+        # No select_character — seen token already on the Spy.
+        # The Spy's registers_as prompt is the only ST interaction
+        # before the wrong-player wireup.
+        ({"character": "Librarian", "step": "spy_registers_as"}, "Saint"),
+        # Wrong player is preset (Mayor), so no select_wrong_player.
+        ({"character": "Librarian", "step": "information"}, None),
+        ({"character": "Spy",       "step": "grimoire"}, None),
+    ])
+    e.advance_to_day()
+
+    # The ``spy_registers_as`` eligible list should only contain
+    # Outsider names — no Townsfolk, no "Spy" itself.
+    assert len(pending) == 1, f"expected 1 spy_registers_as prompt, got {len(pending)}"
+    eligible = pending[0]
+    outsiders = set(e.all_character_names_by_type(CharType.OUTSIDER))
+    townsfolk = set(e.all_character_names_by_type(CharType.TOWNSFOLK))
+    assert set(eligible).issubset(outsiders), (
+        f"Lib+Spy eligible should be restricted to Outsiders; got {eligible}"
+    )
+    assert "Spy" not in eligible
+    assert not (set(eligible) & townsfolk)
+
+
+def test_washerwoman_seen_token_on_spy_forces_townsfolk_pick() -> None:
+    """When the Washerwoman's seen-Townsfolk token is on the Spy
+    chair, the ST is prompted with eligible names restricted to
+    Townsfolk roles only — no Outsider, no ``Spy``.
+
+    Project rule: ``WW interaction with spy. If TF seen token on spy,
+    ST must register spy as some TF character.``"""
+    e = Engine()
+    a = e.add_seat("Alice")    # 1 — Washerwoman
+    b = e.add_seat("Bob")      # 2 — Mayor
+    c = e.add_seat("Cara")     # 3 — Soldier
+    d = e.add_seat("Dan")      # 4 — Spy
+    f = e.add_seat("Eve")      # 5 — Imp
+
+    e.assign_character(a.id, "Washerwoman")
+    e.assign_character(b.id, "Mayor")
+    e.assign_character(c.id, "Soldier")
+    e.assign_character(d.id, "Spy")
+    e.assign_character(f.id, "Imp")
+
+    e.apply_setup_data({
+        "washerwoman_townsfolk": "Spy",
+        "washerwoman_wrong": "Mayor",
+    })
+
+    pending = []
+
+    def collect(engine, scripted):
+        deadline = time.time() + 5.0
+        answered = 0
+        last_id = -1
+        while engine._night_thread and engine._night_thread.is_alive():
+            if time.time() > deadline:
+                raise TimeoutError("timed out")
+            p = engine.pending_prompt()
+            if p is None or p.id == last_id:
+                time.sleep(0.01)
+                continue
+            if answered >= len(scripted):
+                raise AssertionError(f"unexpected prompt {p.text!r}: {p.meta}")
+            matcher, response = scripted[answered]
+            for k, v in matcher.items():
+                if p.meta.get(k) != v:
+                    raise AssertionError(
+                        f"Prompt #{answered+1} did not match: "
+                        f"meta[{k!r}]={p.meta.get(k)!r} (expected {v!r})"
+                    )
+            if p.meta.get("step") == "spy_registers_as":
+                pending.append(list(p.eligible_characters))
+            last_id = p.id
+            engine.respond(p.id, response)
+            answered += 1
+            time.sleep(0.01)
+
+    e.start_game()
+    e.start_night()
+    collect(e, [
+        ({"character": "Washerwoman", "step": "spy_registers_as"}, "Slayer"),
+        ({"character": "Washerwoman", "step": "information"}, None),
+        ({"character": "Spy",         "step": "grimoire"}, None),
+    ])
+    e.advance_to_day()
+
+    assert len(pending) == 1
+    eligible = pending[0]
+    townsfolk = set(e.all_character_names_by_type(CharType.TOWNSFOLK))
+    outsiders = set(e.all_character_names_by_type(CharType.OUTSIDER))
+    assert set(eligible).issubset(townsfolk), (
+        f"WW+Spy eligible should be restricted to Townsfolk; got {eligible}"
+    )
+    assert "Spy" not in eligible
+    assert not (set(eligible) & outsiders)
+
+
+def test_investigator_seen_on_spy_opt_out_shows_zero() -> None:
+    """Spy seated on the Investigator's seen-Minion token may opt out
+    of registering as a Minion (picking a TF or Outsider name in the
+    ``spy_registers_as`` prompt). The Investigator's check then fails
+    and a ``0 Minions`` reading is shown.
+
+    Project rule: ``investigator interaction with spy, ST can decide
+    that spy does not register as minion, then investigator learns a
+    '0'``."""
+    e = Engine()
+    a = e.add_seat("Alice")    # 1 — Investigator
+    b = e.add_seat("Bob")      # 2 — Mayor
+    c = e.add_seat("Cara")     # 3 — Soldier
+    d = e.add_seat("Dan")      # 4 — Spy
+    f = e.add_seat("Eve")      # 5 — Imp
+
+    e.assign_character(a.id, "Investigator")
+    e.assign_character(b.id, "Mayor")
+    e.assign_character(c.id, "Soldier")
+    e.assign_character(d.id, "Spy")
+    e.assign_character(f.id, "Imp")
+
+    e.apply_setup_data({
+        "investigator_minion": "Spy",
+        "investigator_wrong": "Mayor",
+    })
+
+    e.start_game()
+    e.start_night()
+    drain_prompts(e, [
+        # ST registers Spy as a Townsfolk → name=Spy check fails.
+        ({"character": "Investigator", "step": "spy_registers_as"},
+         "Slayer"),
+        # Investigator then sees the 0-Minions reading.
+        ({"character": "Investigator", "step": "information",
+          "shown_count": 0}, None),
+        ({"character": "Spy",          "step": "grimoire"}, None),
+    ])
+    e.advance_to_day()
+
+
+def test_seen_token_only_checks_seen_chair_no_spy_prompt() -> None:
+    """Regression for the project rule ``Lib/WW/Inv ability only
+    checks the character with the seen token at ability time``.
+
+    With a Spy in play but the Librarian's seen-Outsider token
+    pinned to a real Outsider (the Recluse here), the Librarian's
+    night must not surface a ``spy_registers_as`` prompt. Previously
+    the engine iterated every player and Spy.registers_as fired even
+    though the Spy wasn't tagged."""
+    e = Engine()
+    a = e.add_seat("Alice")    # 1 — Librarian
+    b = e.add_seat("Bob")      # 2 — Mayor
+    c = e.add_seat("Cara")     # 3 — Recluse
+    d = e.add_seat("Dan")      # 4 — Spy
+    f = e.add_seat("Eve")      # 5 — Imp
+
+    e.assign_character(a.id, "Librarian")
+    e.assign_character(b.id, "Mayor")
+    e.assign_character(c.id, "Recluse")
+    e.assign_character(d.id, "Spy")
+    e.assign_character(f.id, "Imp")
+
+    e.apply_setup_data({
+        "librarian_outsider": "Recluse",
+        "librarian_wrong": "Mayor",
+    })
+
+    e.start_game()
+    e.start_night()
+    drain_prompts(e, [
+        # Only the Recluse is checked — name attribute, passes=("Recluse",).
+        ({"character": "Librarian", "step": "recluse_registers_as",
+          "attribute": "name"}, "Recluse"),
+        ({"character": "Librarian", "step": "information"}, None),
+        ({"character": "Spy",       "step": "grimoire"}, None),
     ])
     e.advance_to_day()
 
@@ -555,7 +814,7 @@ if __name__ == "__main__":
     print("test 5 passed.")
     test_chef_spy_registers_evil_full_count()
     print("test 6 passed.")
-    test_investigator_sees_spy_correctly_no_prompt()
+    test_investigator_seen_on_spy_fires_registration_prompt()
     print("test 7 passed.")
     test_undertaker_on_spy_shows_spy_registered_character()
     print("test 8 passed.")
@@ -565,8 +824,16 @@ if __name__ == "__main__":
     print("test 10 passed.")
     test_washerwoman_with_spy_in_play_and_actual_holder()
     print("test 11 passed.")
-    test_washerwoman_choose_spy_when_actual_in_play()
+    test_washerwoman_to_use_spy_pick_unmatched_townsfolk()
     print("test 12 passed.")
     test_librarian_with_spy_no_actual_outsiders()
     print("test 13 passed.")
+    test_librarian_seen_token_on_spy_forces_outsider_pick()
+    print("test 14 passed.")
+    test_washerwoman_seen_token_on_spy_forces_townsfolk_pick()
+    print("test 15 passed.")
+    test_investigator_seen_on_spy_opt_out_shows_zero()
+    print("test 16 passed.")
+    test_seen_token_only_checks_seen_chair_no_spy_prompt()
+    print("test 17 passed.")
     print("All Spy misregistration tests passed.")

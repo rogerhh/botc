@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Player View</title>
+<!-- Player-facing phone UI. This is the view a player sees when
+     they scan their personal QR (per-player code, set up later) — not
+     the storyteller's mobile UI (that lives at /phone). For now this
+     is a placeholder while the storyteller UI is being finalized. -->
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="theme-color" content="#1a1410" />
+<style>
+  :root {
+    --bg: #1a1410;
+    --panel: #221c17;
+    --text: #ece3d3;
+    --muted: #a99880aa;
+    --accent: #f0c27a;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    overflow: hidden;
+    -webkit-tap-highlight-color: transparent;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+  .wrap {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    text-align: center;
+  }
+  h1 {
+    margin: 0 0 12px;
+    font-size: 22px;
+    font-weight: 700;
+    color: var(--accent);
+    letter-spacing: 0.04em;
+  }
+  p {
+    margin: 6px 0;
+    font-size: 14px;
+    line-height: 1.5;
+    color: var(--text);
+    max-width: 360px;
+  }
+  .hint {
+    margin-top: 20px;
+    font-size: 12px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Player view</h1>
+  <p>Your personal player view will live here. The storyteller will
+    set this up at the start of the game.</p>
+  <p>If you scanned the storyteller's QR by accident, this is the
+    wrong page — the storyteller can show you their own phone
+    directly.</p>
+  <div class="hint">Coming soon</div>
+</div>
+</body>
+</html>

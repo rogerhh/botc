@@ -294,40 +294,14 @@ def _pick_default_red_herring(names: List[str]) -> Optional[str]:
 # ---------------------------------------------------------------------------
 
 
-# Token-drag helpers now live on the engine (see
-# ``Engine.move_drunk_token`` etc.). These thin shims preserve the
-# existing call sites in the HTTP handlers.
+def _apply_token(kind: str, dest_chair_id: int) -> Optional[str]:
+    """Single entry point used by the grimoire's drag-drop handler.
 
-def _move_drunk_token(dest_chair_id: int) -> Optional[str]:
-    return ENGINE.move_drunk_token(dest_chair_id)
-
-
-def _move_ft_red_herring(dest_chair_id: int) -> Optional[str]:
-    return ENGINE.move_ft_red_herring_token(dest_chair_id)
-
-
-def _move_washerwoman_token(dest_chair_id: int) -> Optional[str]:
-    return ENGINE.move_washerwoman_townsfolk_token(dest_chair_id)
-
-
-def _move_washerwoman_wrong_token(dest_chair_id: int) -> Optional[str]:
-    return ENGINE.move_washerwoman_wrong_token(dest_chair_id)
-
-
-def _move_librarian_outsider_token(dest_chair_id: int) -> Optional[str]:
-    return ENGINE.move_librarian_outsider_token(dest_chair_id)
-
-
-def _move_librarian_wrong_token(dest_chair_id: int) -> Optional[str]:
-    return ENGINE.move_librarian_wrong_token(dest_chair_id)
-
-
-def _move_investigator_minion_token(dest_chair_id: int) -> Optional[str]:
-    return ENGINE.move_investigator_minion_token(dest_chair_id)
-
-
-def _move_investigator_wrong_token(dest_chair_id: int) -> Optional[str]:
-    return ENGINE.move_investigator_wrong_token(dest_chair_id)
+    Wraps ``Engine.apply_token``, which owns the swap-vs-overwrite
+    decision for mutex pairs (WW TOWNSFOLK ↔ WW WRONG, etc.). Drunk /
+    FT tokens just fall through to their underlying ``move_*`` method.
+    """
+    return ENGINE.apply_token(kind, dest_chair_id)
 
 
 # ---------------------------------------------------------------------------
@@ -499,10 +473,12 @@ def spawn_engine_runner_subprocess() -> Optional[subprocess.Popen]:
             except subprocess.TimeoutExpired:
                 ENGINE_PROCESS.kill()
 
-        # Build the seat list from the current chairs in clockwise order
-        # — same source of truth as ``_sync_chairs_to_engine``.
+        # Build the seat list from the current chairs in chair-id order
+        # — same source of truth as ``_sync_chairs_to_engine`` so the
+        # subprocess engine assigns the same ``player.id == chair.id``
+        # mapping the in-process engine sees.
         seats: List[Dict[str, Any]] = []
-        for chair in STORE.chairs_in_clockwise_order():
+        for chair in sorted(STORE.list(), key=lambda c: c["id"]):
             name = (chair.get("name") or "").strip()
             character = (chair.get("character") or "").strip()
             if not name:
@@ -792,13 +768,27 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if path in ("/phone", "/phone/", "/phone.html"):
+            # Storyteller mobile UI. The QR shown on the local UI
+            # points here, so a phone scan gives the storyteller a
+            # mobile-friendly grimoire (chairs + tokens + side panel +
+            # prompts). Player-facing views live at /player below.
             self._send_file(os.path.join(STATIC_DIR, "phone.html"),
+                            "text/html; charset=utf-8")
+            return
+
+        if path in ("/player", "/player/", "/player.html"):
+            # Per-player phone UI. Placeholder for now — once player
+            # codes / personal QR routing is set up this will be the
+            # view a single player gets on their own device. Kept
+            # separate from /phone (storyteller mobile) so the two
+            # UIs can evolve independently.
+            self._send_file(os.path.join(STATIC_DIR, "player.html"),
                             "text/html; charset=utf-8")
             return
 
         if path == "/api/state":
             self._send_json(HTTPStatus.OK, {
-                "chairs": STORE.list(),
+                "chairs": ENGINE.chair_views(),
                 "storyteller": STORE.get_storyteller(),
                 "engine": ENGINE.snapshot(),
                 "character_pool": _character_pool_snapshot(),
@@ -865,16 +855,17 @@ class Handler(BaseHTTPRequestHandler):
             })
             return
 
-        if path == "/api/engine/game_report":
-            # End-of-game report: structured "interesting events" plus
-            # win info plus a player roster (so the frontend can render
-            # names / characters / alignments alongside event ids).
+        if path == "/api/engine/console":
+            # Live console feed (also replayed verbatim as the
+            # end-of-game report). Same payload powers both the small
+            # console panel that updates throughout the game and the
+            # "View Report" overlay that opens when the game ends.
             snap = ENGINE.snapshot()
             self._send_json(HTTPStatus.OK, {
                 "winner": snap.get("winner"),
                 "win_reason": snap.get("win_reason"),
                 "phase": snap.get("phase"),
-                "events": ENGINE.game_events,
+                "entries": ENGINE.console,
                 "players": [
                     {
                         "id": p.get("id"),
@@ -1027,143 +1018,32 @@ class Handler(BaseHTTPRequestHandler):
         # the relevant pool / chair state. See the docstrings on each
         # branch for the precise transformation.
 
-        if path == "/api/character_pool/move_drunk_token":
+        # Unified token-apply endpoint. The grimoire's drag-drop handler
+        # POSTs ``{kind, chair_id}`` and the engine handles routing —
+        # mutex swap (e.g. WW TOWNSFOLK ↔ WW WRONG) or plain move. The
+        # legacy per-kind ``/move_*_token`` endpoints have been removed.
+        if path == "/api/character_pool/apply_token":
             ok, data = self._read_json()
-            if not ok or "chair_id" not in data:
-                self._send_json(HTTPStatus.BAD_REQUEST, {"error": "need chair_id"})
+            if not ok or "chair_id" not in data or "kind" not in data:
+                self._send_json(HTTPStatus.BAD_REQUEST,
+                                {"error": "need kind and chair_id"})
                 return
             try:
-                err = _move_drunk_token(int(data["chair_id"]))
+                kind = str(data["kind"])
+                chair_id = int(data["chair_id"])
             except (TypeError, ValueError):
                 self._send_json(HTTPStatus.BAD_REQUEST,
-                                {"error": "chair_id must be an int"})
+                                {"error": "kind must be a string and chair_id "
+                                          "must be an int"})
                 return
+            err = _apply_token(kind, chair_id)
             if err is not None:
                 self._send_json(HTTPStatus.BAD_REQUEST, {"error": err})
                 return
             self._send_json(HTTPStatus.OK, {
-                "chairs": STORE.list(),
+                "chairs": ENGINE.chair_views(),
                 **_character_pool_snapshot(),
             })
-            return
-
-        if path == "/api/character_pool/move_ft_red_herring":
-            ok, data = self._read_json()
-            if not ok or "chair_id" not in data:
-                self._send_json(HTTPStatus.BAD_REQUEST, {"error": "need chair_id"})
-                return
-            try:
-                err = _move_ft_red_herring(int(data["chair_id"]))
-            except (TypeError, ValueError):
-                self._send_json(HTTPStatus.BAD_REQUEST,
-                                {"error": "chair_id must be an int"})
-                return
-            if err is not None:
-                self._send_json(HTTPStatus.BAD_REQUEST, {"error": err})
-                return
-            self._send_json(HTTPStatus.OK, _character_pool_snapshot())
-            return
-
-        if path == "/api/character_pool/move_washerwoman_token":
-            ok, data = self._read_json()
-            if not ok or "chair_id" not in data:
-                self._send_json(HTTPStatus.BAD_REQUEST, {"error": "need chair_id"})
-                return
-            try:
-                err = _move_washerwoman_token(int(data["chair_id"]))
-            except (TypeError, ValueError):
-                self._send_json(HTTPStatus.BAD_REQUEST,
-                                {"error": "chair_id must be an int"})
-                return
-            if err is not None:
-                self._send_json(HTTPStatus.BAD_REQUEST, {"error": err})
-                return
-            self._send_json(HTTPStatus.OK, _character_pool_snapshot())
-            return
-
-        if path == "/api/character_pool/move_washerwoman_wrong_token":
-            ok, data = self._read_json()
-            if not ok or "chair_id" not in data:
-                self._send_json(HTTPStatus.BAD_REQUEST, {"error": "need chair_id"})
-                return
-            try:
-                err = _move_washerwoman_wrong_token(int(data["chair_id"]))
-            except (TypeError, ValueError):
-                self._send_json(HTTPStatus.BAD_REQUEST,
-                                {"error": "chair_id must be an int"})
-                return
-            if err is not None:
-                self._send_json(HTTPStatus.BAD_REQUEST, {"error": err})
-                return
-            self._send_json(HTTPStatus.OK, _character_pool_snapshot())
-            return
-
-        if path == "/api/character_pool/move_librarian_token":
-            ok, data = self._read_json()
-            if not ok or "chair_id" not in data:
-                self._send_json(HTTPStatus.BAD_REQUEST, {"error": "need chair_id"})
-                return
-            try:
-                err = _move_librarian_outsider_token(int(data["chair_id"]))
-            except (TypeError, ValueError):
-                self._send_json(HTTPStatus.BAD_REQUEST,
-                                {"error": "chair_id must be an int"})
-                return
-            if err is not None:
-                self._send_json(HTTPStatus.BAD_REQUEST, {"error": err})
-                return
-            self._send_json(HTTPStatus.OK, _character_pool_snapshot())
-            return
-
-        if path == "/api/character_pool/move_investigator_token":
-            ok, data = self._read_json()
-            if not ok or "chair_id" not in data:
-                self._send_json(HTTPStatus.BAD_REQUEST, {"error": "need chair_id"})
-                return
-            try:
-                err = _move_investigator_minion_token(int(data["chair_id"]))
-            except (TypeError, ValueError):
-                self._send_json(HTTPStatus.BAD_REQUEST,
-                                {"error": "chair_id must be an int"})
-                return
-            if err is not None:
-                self._send_json(HTTPStatus.BAD_REQUEST, {"error": err})
-                return
-            self._send_json(HTTPStatus.OK, _character_pool_snapshot())
-            return
-
-        if path == "/api/character_pool/move_librarian_wrong_token":
-            ok, data = self._read_json()
-            if not ok or "chair_id" not in data:
-                self._send_json(HTTPStatus.BAD_REQUEST, {"error": "need chair_id"})
-                return
-            try:
-                err = _move_librarian_wrong_token(int(data["chair_id"]))
-            except (TypeError, ValueError):
-                self._send_json(HTTPStatus.BAD_REQUEST,
-                                {"error": "chair_id must be an int"})
-                return
-            if err is not None:
-                self._send_json(HTTPStatus.BAD_REQUEST, {"error": err})
-                return
-            self._send_json(HTTPStatus.OK, _character_pool_snapshot())
-            return
-
-        if path == "/api/character_pool/move_investigator_wrong_token":
-            ok, data = self._read_json()
-            if not ok or "chair_id" not in data:
-                self._send_json(HTTPStatus.BAD_REQUEST, {"error": "need chair_id"})
-                return
-            try:
-                err = _move_investigator_wrong_token(int(data["chair_id"]))
-            except (TypeError, ValueError):
-                self._send_json(HTTPStatus.BAD_REQUEST,
-                                {"error": "chair_id must be an int"})
-                return
-            if err is not None:
-                self._send_json(HTTPStatus.BAD_REQUEST, {"error": err})
-                return
-            self._send_json(HTTPStatus.OK, _character_pool_snapshot())
             return
 
         # ---- engine control endpoints ----
@@ -1312,6 +1192,44 @@ class Handler(BaseHTTPRequestHandler):
                 "accepted": accepted,
                 "engine": ENGINE.snapshot(),
             })
+            return
+
+        if path == "/api/engine/back":
+            # Pop the most recent post-ability checkpoint and restore
+            # it. If a night thread is running, it is interrupted and
+            # re-launched at the same step so the Storyteller can redo
+            # whichever ability they were on.
+            try:
+                restored = ENGINE.back()
+                self._send_json(HTTPStatus.OK, {
+                    "restored": bool(restored),
+                    "engine": ENGINE.snapshot(),
+                })
+            except Exception as exc:  # pragma: no cover (defensive)
+                self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+            return
+
+        if path == "/api/engine/save_state":
+            # Return the engine's current state as an opaque blob the
+            # caller can later POST to /api/engine/load_state.
+            try:
+                blob = ENGINE.save_state()
+                self._send_json(HTTPStatus.OK, {"state": blob})
+            except Exception as exc:  # pragma: no cover (defensive)
+                self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+            return
+
+        if path == "/api/engine/load_state":
+            ok, data = self._read_json()
+            if not ok or "state" not in data:
+                self._send_json(HTTPStatus.BAD_REQUEST,
+                                {"error": "need state blob"})
+                return
+            try:
+                ENGINE.load_state(str(data["state"]))
+                self._send_json(HTTPStatus.OK, {"engine": ENGINE.snapshot()})
+            except Exception as exc:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
             return
 
         if path == "/api/engine/kill":
@@ -1568,14 +1486,17 @@ class Handler(BaseHTTPRequestHandler):
         """Materialize the chair layout into engine players.
 
         Called when the storyteller clicks "Start Game". Iterates the
-        chairs in clockwise order, creating one engine Player per
-        non-empty-named chair, and assigning the typed character if the
-        ``character`` field on the chair matches a known role.
+        chairs in chair-id order (which the chair store keeps compacted
+        to 1..N through every add/remove), creating one engine Player
+        per non-empty-named chair. Engine players are assigned ids in
+        the same chair-id order so ``player.id == chair.id`` — there is
+        a single numbering system shared between the chair store, the
+        UI, and the engine.
         """
         # Only valid before start_game; otherwise just bail (engine
         # rejects setup mutations anyway).
-        clockwise = STORE.chairs_in_clockwise_order()
-        for chair in clockwise:
+        ordered = sorted(STORE.list(), key=lambda c: c["id"])
+        for chair in ordered:
             name = (chair.get("name") or "").strip()
             character_name = (chair.get("character") or "").strip()
             if not name:
@@ -1680,8 +1601,22 @@ def _character_pool_snapshot() -> dict:
     # later dies or becomes drunk/poisoned: the snapshot recomputes
     # on every poll, so the badge disappears as soon as the Player
     # state changes.
-    poisoned_role = None
-    butler_master_role = None
+    # All grimoire reminder tokens are tracked PER-SEAT (player id),
+    # not per-role-name. Keying by role name is wrong as soon as a
+    # player's role changes mid-game (Scarlet Woman -> Imp via
+    # change_character): the new role's chair would otherwise
+    # accidentally match a token that referred to the *old* role name
+    # — e.g. the dead old-Imp leaving DEAD on imp_dead_roles=["Imp"]
+    # and the new-Imp's chair (chair.character == "Imp" after
+    # change_character) inheriting that DEAD token. Per-seat keying
+    # makes the token follow the player, so role swaps don't leak
+    # tokens onto the wrong chair.
+    poisoned_player_id: Optional[int] = None
+    butler_master_player_id: Optional[int] = None
+    monk_safe_player_id: Optional[int] = None
+    undertaker_died_today_player_id: Optional[int] = None
+    slayer_no_ability_player_ids: list = []
+    virgin_no_ability_player_ids: list = []
     try:
         engine_players = ENGINE.players
     except Exception:
@@ -1690,10 +1625,12 @@ def _character_pool_snapshot() -> dict:
         char = getattr(p, "character", None)
         if char is None:
             continue
-        # Gate on the source player's state. ``has_ability`` is
-        # ``alive and not drunk and not poisoned`` — exactly the
-        # condition under which the rulebook says the ability has
-        # an effect on the table.
+        # Gate sourced-by-the-source-player tokens on the source's
+        # ``has_ability`` (== alive AND sober AND healthy). Tokens
+        # whose presence is *spent / persistent* (NO ABILITY tokens
+        # for once-per-game roles, Undertaker's DIED TODAY which
+        # tracks the executed seat regardless of Undertaker state)
+        # are derived below outside this gate.
         if not p.has_ability:
             continue
         if char.name == "Poisoner":
@@ -1701,31 +1638,77 @@ def _character_pool_snapshot() -> dict:
             if (target is not None
                     and getattr(target, "character", None) is not None
                     and target.poisoned):
-                poisoned_role = target.character.name
+                poisoned_player_id = target.id
         elif char.name == "Butler":
             master = getattr(char, "_master", None)
             if (master is not None
                     and getattr(master, "character", None) is not None):
-                butler_master_role = master.character.name
+                butler_master_player_id = master.id
+        elif char.name == "Monk":
+            # The Monk's chosen target is the player whose
+            # ``protected_from_demon`` flag is set. The Monk's ability
+            # only sets the flag when the Monk has ability, so a
+            # drunk/poisoned Monk never has a real SAFE chair (the
+            # outer ``if not p.has_ability`` gate already filters that
+            # case out, but be defensive).
+            target = getattr(char, "_target", None)
+            if (target is not None
+                    and target.alive
+                    and getattr(target, "protected_from_demon", False)
+                    and getattr(target, "character", None) is not None):
+                monk_safe_player_id = target.id
 
-    # Imp's DEAD reminder tokens. Per the rulebook, the DEAD reminder is
-    # placed on every player the Imp's nightly ability actually killed.
-    # We derive the set from the engine's ``Player.death_cause`` rather
-    # than tracking it on the Imp character — that way Mayor-redirected
-    # kills (which still land with cause=DEMON_KILL on the new target)
-    # show up automatically, and a Soldier/Monk-protected pick that
-    # never landed correctly does NOT.
-    imp_dead_roles: list = []
+    # Once-per-game / spent-ability tokens. These persist regardless of
+    # the source player's current state (a dead Slayer who already
+    # slew still needs the NO ABILITY token to remind the storyteller
+    # they can't slay again on revive). Walk every seated player and
+    # check the per-character "spent" flag.
     for p in engine_players:
-        if not p.dead:
-            continue
-        if p.death_cause is not DeathCause.DEMON_KILL:
-            continue
         char = getattr(p, "character", None)
         if char is None:
             continue
-        if char.name not in imp_dead_roles:
-            imp_dead_roles.append(char.name)
+        if char.name == "Slayer" and getattr(char, "_used", False):
+            slayer_no_ability_player_ids.append(p.id)
+        elif char.name == "Virgin" and getattr(char, "_triggered", False):
+            virgin_no_ability_player_ids.append(p.id)
+        elif char.name == "Undertaker":
+            # Undertaker's "DIED TODAY" reminder marks the seat of the
+            # player executed today. The Undertaker character resets
+            # ``_last_executed`` on DAY_START, so this naturally
+            # disappears the next morning.
+            executed = getattr(char, "_last_executed", None)
+            if (executed is not None
+                    and getattr(executed, "character", None) is not None):
+                undertaker_died_today_player_id = executed.id
+
+    # Imp's DEAD reminder tokens. Per the rulebook, the DEAD reminder
+    # is placed on every player the Imp's nightly ability actually
+    # killed AND is removed at the end of the night. We read the
+    # transient ``Engine._demon_killed_player_ids`` list — populated
+    # by ``Engine.kill`` when a DEMON_KILL lands and cleared by
+    # ``advance_to_day`` / ``_auto_dawn``. (Mayor-redirected kills
+    # still land with cause=DEMON_KILL on the new target so they
+    # show up automatically; a Soldier/Monk-protected pick that
+    # never killed anyone does NOT.) Tracked by player id so a *new*
+    # demon (Scarlet Woman promoted to Imp; chair.character now
+    # equals "Imp") doesn't spuriously inherit the dead old demon's
+    # DEAD token.
+    imp_dead_player_ids: list = list(
+        getattr(ENGINE, "_demon_killed_player_ids", []) or []
+    )
+
+    # Scarlet Woman -> Demon promotion: the engine appends to
+    # ``_sw_promoted_player_ids`` from inside the SW reaction. The
+    # grimoire shows the "Scarlet Woman IS THE DEMON" reminder token
+    # on each promoted seat. After promotion, ``Engine.change_character``
+    # also rewrites ``chair.character`` to the new demon class (so
+    # the player circle shows "Imp" rather than the stale "Scarlet
+    # Woman" — single source of truth between engine and chair). The
+    # reminder token is therefore gated on the per-seat list, NOT on
+    # ``chair.character == "Scarlet Woman"``: that string is no
+    # longer there once the swap has happened.
+    sw_promoted_ids: list = list(getattr(ENGINE, "_sw_promoted_player_ids", []) or [])
+    scarlet_woman_is_demon_flag = bool(sw_promoted_ids)
 
     return {
         "names": names,
@@ -1818,14 +1801,29 @@ def _character_pool_snapshot() -> dict:
             and investigator_minion is not None
             and investigator_wrong is None
         ),
-        "butler_master_role": butler_master_role,
-        "monk_safe_role": None,
-        "poisoned_role": poisoned_role,
-        "imp_dead_roles": imp_dead_roles,
-        "undertaker_died_today_role": None,
-        "scarlet_woman_is_demon": False,
-        "slayer_no_ability": False,
-        "virgin_no_ability": False,
+        # Per-seat reminder tokens (player-id keyed). Every grimoire
+        # reminder that says "this seat is currently the something"
+        # is now a player_id (or list of player ids) so the JS can
+        # render the badge against ``chair.player_id`` instead of
+        # ``chair.character``. This keeps the token attached to the
+        # *seat* even when ``change_character`` rewrites the chair's
+        # role mid-game (Scarlet Woman -> Imp): the new role can't
+        # accidentally inherit a token that referred to the old role.
+        "butler_master_player_id": butler_master_player_id,
+        "monk_safe_player_id": monk_safe_player_id,
+        "poisoned_player_id": poisoned_player_id,
+        "imp_dead_player_ids": imp_dead_player_ids,
+        "undertaker_died_today_player_id": undertaker_died_today_player_id,
+        "scarlet_woman_is_demon": scarlet_woman_is_demon_flag,
+        # Per-seat list of player ids whose seat originated as the
+        # Scarlet Woman and has since been promoted to the Demon. The
+        # JS keys the "Scarlet Woman IS THE DEMON" reminder token off
+        # this list (matched against ``chair.player_id``) rather than
+        # against ``chair.character``, since the chair character is
+        # rewritten to the new demon class on promotion.
+        "scarlet_woman_promoted_player_ids": list(sw_promoted_ids),
+        "slayer_no_ability_player_ids": slayer_no_ability_player_ids,
+        "virgin_no_ability_player_ids": virgin_no_ability_player_ids,
     }
 
 

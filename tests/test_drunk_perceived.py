@@ -118,12 +118,12 @@ def test_drunk_as_empath_runs_drunk_empath_ability() -> None:
 
 
 def test_drunk_as_fortune_teller_picks_red_herring_at_setup() -> None:
-    """Drunk-as-FT fills the red-herring slot with the None placeholder.
+    """Drunk-as-FT fills the red-herring slot with a GoodStub placeholder.
 
     Per :doc:`CLAUDE.md` and project rules: when the Drunk impersonates
     a Townsfolk that needs a setup-time character pick (e.g. the
-    Fortune Teller's red herring), the engine fills the slot with the
-    no-op :class:`NoneCharacter` placeholder rather than prompting the
+    Fortune Teller's red herring), the engine fills the slot with a
+    :class:`GoodStub` placeholder rather than prompting the
     storyteller. The reminder token is not placed since the Drunk has
     no real ability — this just spares the ST an unneeded input.
     """
@@ -169,15 +169,16 @@ def test_drunk_as_fortune_teller_picks_red_herring_at_setup() -> None:
           "step": "information"}, None),
     ])
 
-    # The perceived FT carries the None placeholder as its red-herring
-    # role. No seated player has character.name == "None", so the
-    # resolved red-herring player is None — which is exactly what we
-    # want for a Drunk-as-FT (the FT's nightly read collapses to
-    # "demon-only" before the drunk/poison flip kicks in).
+    # The perceived FT carries a GoodStub placeholder as its
+    # red-herring role. No seated player has character.name == "Good"
+    # (the stub's display label), so the resolved red-herring player
+    # is None — which is exactly what we want for a Drunk-as-FT (the
+    # FT's nightly read collapses to "demon-only" before the
+    # drunk/poison flip kicks in).
     perceived_ft = e.get_player(a.id).character.members[0]
     assert perceived_ft.name == "Fortune Teller"
     assert perceived_ft.red_herring_role is not None
-    assert perceived_ft.red_herring_role.name == "None"
+    assert perceived_ft.red_herring_role.name == "Good"
     assert perceived_ft._red_herring is None
 
 

@@ -16,13 +16,14 @@ adjudicated by the Storyteller:
 
   * **Night-kill redirect.** When the Mayor would die at night — for
     *any* cause, not just ``DEMON_KILL`` — the Storyteller is offered
-    a redirect. We surface this as a single ``YesNoPrompt`` (offer the
-    redirect) and, on yes, a ``SelectPlayerPrompt`` (pick the new
-    victim). The actual death has already been queued via
-    ``Engine.kill`` by the time the reaction fires; if the Storyteller
-    picks a different victim, the Mayor's death is rolled back
-    (``Player.revive``) and the new target is killed instead with the
-    *same* cause.
+    a redirect. We hook the engine's ``PRE_DEATH`` event so the
+    decision is made *before* the Mayor's death lands: the Mayor
+    never transiently appears dead, no DEATH event fires for the
+    Mayor, and no ``revive`` is needed. We surface this as a
+    ``YesNoPrompt`` (offer the redirect) and, on yes, a
+    ``SelectPlayerPrompt`` (pick the new victim). On a yes, we kill
+    the new target with the *same* cause and cancel the original
+    kill via ``event.data["cancelled"] = True``.
 
 Drunkenness / poisoning: a drunk or poisoned Mayor's redirect does
 nothing. We gate the reaction on the Mayor not being drunk/poisoned.
@@ -64,17 +65,18 @@ class Mayor(Character):
         if self.player is None:
             return super().reaction(event, engine)
 
-        # Night-kill redirect.
-        # NOTE: by the time this DEATH event fires, the engine has
-        # already flipped ``alive`` to False, so we explicitly check
-        # ``drunk`` / ``poisoned`` instead of ``has_ability`` (which
-        # also requires alive). Trigger condition is "killed at night"
-        # regardless of cause (Demon, ability, poison, Storyteller).
+        # Night-kill redirect — listen on PRE_DEATH so the Mayor never
+        # transiently appears dead. The engine has already cleared
+        # Soldier/Monk demon protection by the time PRE_DEATH fires;
+        # at this point the death is *about to* land and any reaction
+        # that sets ``event.data["cancelled"] = True`` aborts it.
+        # Trigger condition is "killed at night" regardless of cause
+        # (Demon, ability, poison, Storyteller). The Mayor must still
+        # be alive (``has_ability`` includes alive + sober + healthy).
         if (
-            event.type is EventType.DEATH
+            event.type is EventType.PRE_DEATH
             and not self._redirect_in_flight
-            and not self.player.drunk
-            and not self.player.poisoned
+            and self.player.has_ability
             and any(t.id == self.player.id for t in event.targets)
             and engine.phase.is_night
         ):
@@ -91,18 +93,42 @@ class Mayor(Character):
     ) -> None:
         """Ask the Storyteller whether to redirect the Mayor's death.
 
-        The Mayor is already dead by the time we get here (the engine
-        has just dispatched the DEATH event). On a YES, we revive the
-        Mayor and kill the storyteller-picked target with the same
-        cause as the original death.
+        Called from a ``PRE_DEATH`` reaction *before* the kill lands.
+        On a YES, we kill the storyteller-picked target with the same
+        cause and cancel the original kill on the Mayor by setting
+        ``event.data["cancelled"] = True``. The Mayor never enters a
+        transient "dead" state — no ``Player.kill`` / ``revive`` round
+        trip, no ``DEATH`` event fired for the Mayor, no
+        ``_pending_night_deaths`` cleanup needed.
+
+        The Mayor never wakes at night — the redirect is a pure
+        Storyteller decision. We deliberately leave
+        ``target_player_id`` *and* ``target_player_name`` off these
+        prompts so the UI does **not** render a "Wake up Mayor (...)"
+        banner: that banner is keyed on ``meta.character`` AND a
+        resolvable player name, so withholding the name keeps the
+        prompts as a Storyteller-only decision panel grouped under
+        ``meta.character``. The Mayor's name is included in the
+        prompt text so the Storyteller still knows whose death is
+        being adjudicated.
         """
         self._redirect_in_flight = True
         try:
             cause = event.data.get("cause") if event.data else None
+            # Preserve the original kill's source character so that a
+            # redirect back to the originator (e.g. Imp picks Mayor →
+            # Mayor redirects to Imp) still reads as a self-attributed
+            # demon kill at the engine level. The Imp's self-kill
+            # ability triggers off the DEATH event's ``source`` —
+            # neither the Mayor nor the Imp needs to know about each
+            # other for this to work.
+            kill_source = event.source
             ask = YesNoPrompt(
-                text="Redirect Mayor's death?",
-                target_player_id=self.player.id,
-                meta={"character": self.name, "step": "redirect_yes_no"},
+                text=f"Redirect {self.player.name}'s death (Mayor)?",
+                meta={
+                    "character": self.name,
+                    "step": "redirect_yes_no",
+                },
             )
             do_redirect = engine.send_prompt(ask)
             if not isinstance(do_redirect, bool) or not do_redirect:
@@ -117,12 +143,14 @@ class Mayor(Character):
             if not eligible:
                 return
             sel = SelectPlayerPrompt(
-                text="Player who dies instead",
+                text=f"Player who dies instead of {self.player.name}",
                 count=1,
                 eligible_player_ids=eligible,
                 allow_self=False,
-                target_player_id=self.player.id,
-                meta={"character": self.name, "step": "redirect_select"},
+                meta={
+                    "character": self.name,
+                    "step": "redirect_select",
+                },
             )
             target_id = engine.send_prompt(sel)
             if isinstance(target_id, list):
@@ -133,22 +161,29 @@ class Mayor(Character):
                 target = engine.get_player(int(target_id))
             except (KeyError, ValueError, TypeError):
                 return
-            # Roll back the Mayor's death and kill the new target with
-            # the same cause as the original kill.
-            engine.revive(self.player.id)
-            # Engine.revive doesn't pop pending_night_deaths; do that
-            # by hand so dawn doesn't announce the Mayor.
-            try:
-                engine._pending_night_deaths.remove(self.player)
-            except ValueError:
-                pass
-            engine.log(
-                f"Mayor death redirected from {self.player.name} to "
-                f"{target.name}."
+            # Cancel the Mayor's pending death and kill the new target
+            # with the same cause AND the same source. Order matters:
+            # cancel BEFORE the re-entrant kill so any reactions that
+            # fire on the redirected target's death see the Mayor as
+            # alive (matters for win-condition checks — e.g. if the
+            # redirected target is the last evil player, good wins
+            # without ever counting the Mayor as dead).
+            event.data["cancelled"] = True
+            engine.log_reaction(
+                "Mayor",
+                (
+                    f"Mayor death redirected from {self.player.name} to "
+                    f"{target.name}."
+                ),
+                target=self.player,
+                trigger="pre_death",
+                effect="redirect_death",
+                redirected_to_id=target.id,
+                redirected_to_name=target.name,
             )
             if cause is None:
-                engine.kill(target.id)
+                engine.kill(target.id, source=kill_source)
             else:
-                engine.kill(target.id, cause)
+                engine.kill(target.id, cause, source=kill_source)
         finally:
             self._redirect_in_flight = False

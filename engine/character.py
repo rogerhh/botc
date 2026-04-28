@@ -23,7 +23,7 @@ act on this night". The engine uses these to walk action_order.
 from __future__ import annotations
 
 import random as _rand
-from typing import TYPE_CHECKING, List, Optional
+from typing import TYPE_CHECKING, List, Optional, Sequence
 
 from engine.enums import CharType, SetupMode
 from engine.event import Event, EventType
@@ -32,6 +32,7 @@ from engine.prompt import InformationPrompt, SelectCharacterPrompt
 if TYPE_CHECKING:
     from engine.engine import Engine
     from engine.player import Player
+    from engine.check import Check
 
 
 class Character:
@@ -68,19 +69,58 @@ class Character:
     # Washerwoman -> TOWNSFOLK / WRONG, Fortune Teller -> RED HERRING,
     # ...). Override on subclasses; default is no reminder tokens.
     #
-    # Optional keys per token entry:
-    #
-    #   * ``"first_night_only": True`` — UI-only display flag. Marks
-    #     a token that exists purely to help the Storyteller run a
-    #     first-night-only "you start knowing" ability (Washerwoman
-    #     TOWNSFOLK / WRONG, Librarian OUTSIDER, Investigator MINION,
-    #     ...). Per the rulebook, the ST removes these tokens "when
-    #     convenient" once the night-1 ability has fired — they have
-    #     no effect on player state, only on the grimoire's clutter.
-    #     The UI may use this flag to hide / dim / offer a one-click
-    #     remove for these tokens after the first night ends. Game
-    #     state is unaffected.
+    # Token visibility is *purely* a function of state. The UI renders
+    # a reminder token whenever the engine has a slot pointing at the
+    # carrying chair (e.g. ``pool.washerwoman_townsfolk()`` is set);
+    # the engine clears the slot when the ability that owns the token
+    # resolves, so transient tokens (Washerwoman / Librarian /
+    # Investigator "you start knowing") disappear automatically once
+    # the ability ends. There are no "first-night-only" or other
+    # phase-gated display flags — display always matches state.
     reminder_tokens: list = []
+
+    # Setup-time token kinds a chair holding this character can host.
+    # Defaults are derived from :meth:`registration_categories` via
+    # :meth:`accepts_tokens`; subclasses with self-exclusion rules
+    # (Washerwoman / Librarian / Investigator can't host their own
+    # WRONG token) override that classmethod.
+    _SETUP_TOKENS_BY_REGISTRATION = {
+        CharType.TOWNSFOLK: frozenset({
+            "washerwoman_townsfolk", "ft_red_herring",
+            "washerwoman_wrong", "librarian_wrong", "investigator_wrong",
+        }),
+        CharType.OUTSIDER: frozenset({
+            "ft_red_herring", "librarian_outsider",
+            "washerwoman_wrong", "librarian_wrong", "investigator_wrong",
+        }),
+        CharType.MINION: frozenset({
+            "investigator_minion",
+            "washerwoman_wrong", "librarian_wrong", "investigator_wrong",
+        }),
+        CharType.DEMON: frozenset({
+            "washerwoman_wrong", "librarian_wrong", "investigator_wrong",
+        }),
+    }
+
+    @classmethod
+    def accepts_tokens(cls) -> "frozenset[str]":
+        """Setup-time reminder-token kinds this character's chair can host.
+
+        Most kinds use :meth:`registration_categories` so misregistering
+        roles (Spy as Townsfolk/Outsider, Recluse as Minion/Demon) get
+        the union of every category they could register as. The Drunk's
+        IS-THE-DRUNK token is the exception: it requires a *true*
+        Townsfolk (no Spy), so it gates on ``char_type`` directly.
+
+        Subclasses with self-exclusion rules (e.g. the Washerwoman
+        can't host her own WRONG token) override.
+        """
+        out: set = set()
+        for cat in cls.registration_categories():
+            out |= cls._SETUP_TOKENS_BY_REGISTRATION.get(cat, frozenset())
+        if cls.char_type is CharType.TOWNSFOLK:
+            out.add("drunk")
+        return frozenset(out)
 
     def __init__(self, player: Optional["Player"] = None) -> None:
         # The Character holds a back-pointer to its Player so it can
@@ -196,6 +236,106 @@ class Character:
         return None
 
     # ------------------------------------------------------------------
+    # Registration.
+    # ------------------------------------------------------------------
+
+    # Class-level signal: which character types could this character's
+    # ``registers_as`` override plausibly fake at run time? The default
+    # implementation returns ``self.name`` (the true role) so a default
+    # character can fake exactly its own char_type. Override classes
+    # (Spy, Recluse) declare the broader sets they can fake — used by
+    # :class:`engine.check.Check.could_register_as_pass` for
+    # setup-time eligibility checks (no Storyteller prompts).
+    @classmethod
+    def registration_categories(cls) -> "tuple[CharType, ...]":
+        """The set of char_types this class' ``registers_as`` may emit.
+
+        For a non-misregistering character this is just its own
+        ``char_type``. Spy / Recluse override to widen the set.
+        """
+        return (cls.char_type,)
+
+    def registers_as(
+        self,
+        engine: "Engine",
+        the_check: "Check",
+    ) -> str:
+        """Return the character name this player registers as for a check.
+
+        Detection-style abilities (Washerwoman, Librarian, Investigator,
+        Chef, Empath, Fortune Teller, Undertaker, Ravenkeeper, Slayer,
+        Virgin) never call this directly — they use
+        :meth:`Character.check`, which dispatches into ``registers_as``
+        with the right :class:`Check` context.
+
+        Default behaviour: returns ``self.name`` (the player's true
+        role) without prompting. Override on any character whose
+        registration may differ from their true role (Spy, Recluse).
+        Overrides may return a stub name (e.g. ``"Townsfolk"``,
+        ``"Good"``) when the check only inspects ``alignment`` /
+        ``char_type`` — keeping the ST prompt minimal.
+
+        See ``engine/README.md`` "Registering As" for the full
+        description of when each detector calls ``check()``, what
+        attributes it declares, and how Spy / Recluse handle the
+        override.
+        """
+        return self.name
+
+    @classmethod
+    def could_pass_check(cls, the_check: "Check") -> bool:
+        """Setup-time eligibility test, without prompting.
+
+        Returns True iff this class' :meth:`registration_categories`
+        overlap with the categories the ``the_check`` accepts. Used by
+        the setup UI to decide whether a token (e.g. the Washerwoman's
+        TOWNSFOLK seen-token) can be applied to a given chair: any
+        chair whose character class *could* register in a way that
+        passes the check is an eligible drop target.
+
+        This is a STATIC test based purely on class-level metadata —
+        it does NOT call :meth:`registers_as` and never prompts the
+        Storyteller. The actual registration choice happens later, at
+        ability time during the game.
+        """
+        return the_check.could_register_as_pass(cls.registration_categories())
+
+    def check(
+        self,
+        engine: "Engine",
+        target: "Player",
+        the_check: "Check",
+    ) -> bool:
+        """Run a :class:`Check` against ``target`` and return pass/fail.
+
+        Calls ``target.character.registers_as(engine, the_check)`` —
+        the registration override on the target's class may prompt
+        the Storyteller for a misregistration choice. The returned
+        registered character name is then resolved to the check's
+        ``attribute`` (``name`` / ``char_type`` / ``alignment``) and
+        compared against ``the_check.passes``.
+
+        Targets without an assigned character return ``False``
+        (the check vacuously fails — there is nothing to register).
+        """
+        if target is None or target.character is None:
+            return False
+        # Lazy import to avoid a circular: engine.check imports
+        # CharType from engine.enums; engine.character imports CharType
+        # too. The Check dataclass itself only reaches into engine in
+        # the helper, not at module load.
+        from engine.check import attribute_value
+
+        registered = target.character.registers_as(engine, the_check)
+        try:
+            value = attribute_value(engine, registered, the_check.attribute)
+        except (KeyError, ValueError):
+            # Defensive: a malformed registers_as response shouldn't
+            # crash the engine. Treat as a fail.
+            return False
+        return value in the_check.passes
+
+    # ------------------------------------------------------------------
     # Setup helpers.
     # ------------------------------------------------------------------
 
@@ -241,17 +381,18 @@ class Character:
         storyteller is *not* prompted: the impersonated role's setup
         pick has no real effect (the player has no ability), and the
         physical reminder token does not need to be placed. We fill
-        the slot with a :class:`NoneCharacter` placeholder and return
-        it, still appended to ``self.members`` so any downstream
-        logic on the perceived role keeps working. The
-        ``eligible_characters`` argument is ignored in this case — the
-        pick is purely a slot-filler.
+        the slot with a :class:`GoodStub` placeholder (the canonical
+        "some good player" stand-in) and return it, still appended to
+        ``self.members`` so any downstream logic on the perceived
+        role keeps working. The ``eligible_characters`` argument is
+        ignored in this case — the pick is purely a slot-filler.
         """
         # Detect impersonation: the seated player's actual character
         # is not this Character instance. The canonical case is the
         # Drunk: ``self`` is the perceived TF, ``self.player.character``
-        # is the Drunk. In that case fill the slot with the None
-        # placeholder and skip the storyteller prompt.
+        # is the Drunk. In that case fill the slot with a GoodStub
+        # placeholder (a "some good player" stand-in) and skip the
+        # storyteller prompt.
         is_impersonation = (
             self.player is not None
             and self.player.character is not None
@@ -261,17 +402,17 @@ class Character:
         if is_impersonation:
             # Lazy import to avoid a circular import at module load
             # time (engine.characters.* import from engine.character).
-            from engine.characters.none_character import NoneCharacter
+            from engine.characters.stubs import GoodStub
 
-            chosen: Character = NoneCharacter()
+            chosen: Character = GoodStub()
             self.members.append(chosen)
             impersonator_name = (
                 self.player.character.name if self.player.character else "?"
             )
             engine.log(
                 f"{self.name} (impersonated by {impersonator_name} on "
-                f"{self.player.name}): filled setup pick with the None "
-                f"character (no ST prompt; reminder token not placed)."
+                f"{self.player.name}): filled setup pick with GoodStub "
+                f"(no ST prompt; reminder token not placed)."
             )
             engine.dispatch(
                 Event(

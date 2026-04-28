@@ -5,41 +5,25 @@
 
 First-night-only information ability. Two flavours:
 
-  * **No Outsiders in play (sober):** the Librarian is shown
-    "There are no Outsiders in play." with no storyteller prompts.
-  * **At least one Outsider in play (sober):** ST picks the Outsider →
-    engine finds the player who is that Outsider → ST picks a "wrong"
-    player → Librarian sees both players highlighted with the Outsider
-    token.
+  * **No players register as any Outsider:** Librarian is shown
+    "There are no Outsiders in play." with no further player picks.
+    Drunk/poisoned mode lets the ST opt into / out of this reading.
 
-Drunkenness / poisoning (per CLAUDE.md)
----------------------------------------
-The drunk/poisoned Librarian has *two* possible fake readings: a "0
-Outsiders" reading or a "1 of 2 players is the {Outsider}" reading. We
-let the storyteller choose which one to feed the player, because both
-are interesting bluffs depending on the table state.
+  * **At least one player registers as an Outsider:** ST picks the
+    Outsider role to show, the engine identifies which player(s)
+    register as that role, the ST picks a "wrong" player → Librarian
+    sees both players highlighted with the Outsider token.
 
-The flow is:
+Setup picks (the seen-Outsider and WRONG slots) are *defaults*, not
+authoritative. They tell the engine which Outsider to test for and
+which player to point at as the WRONG; the actual "right" player is
+discovered at ability time via ``registers_as`` (so a Spy can register
+as the chosen Outsider, and the Recluse always registers as itself —
+an Outsider — to a Librarian check).
 
-1. **Choose 0 vs 1-of-2.** A YesNo-style prompt asks the storyteller
-   whether to show the "0 Outsiders" line. The default is **No** —
-   the 1-of-2 path is more interesting (it points at specific players)
-   so we lean toward it ("there is at least an Outsider").
-
-2. **If 0:** show "There are no Outsiders in play." straight away.
-
-3. **If 1-of-2:** ST picks an Outsider on the script (default: a
-   *correct* in-play Outsider — the wrongness comes from the player
-   picks below, not the named role; if no Outsiders are in play, fall
-   back to any Outsider on the script) and then picks **two players**
-   to point at (default: two non-self players whose true roles are NOT
-   the chosen Outsider, so the info is actually wrong). Any two
-   non-self players are eligible — the ST can change either pick.
-
-Every storyteller prompt that exists *because* the Librarian is
-drunk/poisoned carries ``meta["due_to_drunk_poison"] = True`` so the
-UI can flag the prompt accordingly. The only control on these prompts
-is **Next**; the default is pre-filled.
+Drunkenness / poisoning (per CLAUDE.md): two possible fake readings —
+"0 Outsiders" or "1 of 2 players is the {Outsider}". The Storyteller
+picks which to feed the player.
 """
 
 from __future__ import annotations
@@ -61,6 +45,7 @@ if TYPE_CHECKING:
     from engine.engine import Engine
     from engine.player import Player
 
+
 class Librarian(Character):
     name = "Librarian"
     char_type = CharType.TOWNSFOLK
@@ -71,31 +56,26 @@ class Librarian(Character):
     first_night_order = 31
     other_night_order = 0
     reminder_tokens: list = [
-        # First-night-only: the OUTSIDER token exists to help the ST
-        # run the night-1 "you start knowing" ability and may be
-        # removed from the grimoire display once night 1 ends. It
-        # affects no game state. See ``Character.reminder_tokens`` for
-        # the flag.
+        # OUTSIDER is placed by the engine to help the ST run the
+        # first-night "you start knowing" ability. The slot is cleared
+        # once the ability resolves, so the grimoire stops rendering
+        # it automatically (no separate "first night only" gate).
         {
             "name": 'OUTSIDER',
             "icon": 'librarian_outsider.png',
-            "first_night_only": True,
         },
     ]
 
+    @classmethod
+    def accepts_tokens(cls) -> "frozenset[str]":
+        # The Librarian herself can't host the Librarian WRONG token.
+        return super().accepts_tokens() - {"librarian_wrong"}
+
+    DETECTION_CATEGORIES = (CharType.OUTSIDER,)
+
     def __init__(self, player: Optional["Player"] = None) -> None:
         super().__init__(player)
-        # Pre-set during setup (Engine.apply_setup_data). When non-None
-        # (and the Librarian is sober + healthy), the ability uses this
-        # Outsider role and skips the SelectCharacterPrompt — the
-        # storyteller only picks the WRONG player.
         self._chosen_outsider: Optional[str] = None
-        # Pre-set during setup. Names the *role* of the WRONG player
-        # the Librarian will be pointed at. Resolved to a player at
-        # ability time. When both ``_chosen_outsider`` and
-        # ``_chosen_wrong`` are set (and the Librarian is sober +
-        # healthy), the first-night ability skips every storyteller
-        # prompt — both tokens were placed during setup.
         self._chosen_wrong: Optional[str] = None
 
     def on_setup_ability(
@@ -103,17 +83,6 @@ class Librarian(Character):
         engine: "Engine",
         mode: SetupMode = SetupMode.IN_GAME,
     ) -> None:
-        """Mode-aware on-setup ability.
-
-        ``SETUP_PHASE``: absorb the pool's seen-Outsider and WRONG
-        slots into ``self._chosen_outsider`` / ``self._chosen_wrong``
-        so the first-night ability can skip prompts. Pure
-        read-and-copy; no Storyteller prompts.
-
-        ``IN_GAME``: legacy delegation. The Librarian's prompt-emitting
-        work happens inside its first-night ability(), so this is a
-        no-op for the legacy path too.
-        """
         if self.player is None:
             return
         if mode is SetupMode.SETUP_PHASE:
@@ -160,10 +129,186 @@ class Librarian(Character):
         engine.dispatch(
             Event(EventType.RESOLUTION, source=self, targets=[])
         )
+        # Ability has ended (the "0 Outsiders" reading). Clear pool
+        # slots so the grimoire stops rendering the OUTSIDER / WRONG
+        # tokens — display always matches state.
+        engine.pool.clear_librarian_token_slots()
+
+    def _find_player_with_role(
+        self,
+        engine: "Engine",
+        role_name: str,
+    ) -> Optional["Player"]:
+        """Return the first non-self player whose true character is
+        ``role_name``, without calling ``registers_as``.
+
+        Used to locate the chair carrying a setup-time pool slot — the
+        slot stores a literal role name on a chair (Drunk, Recluse,
+        Spy, …), not a target of misregistration. No ST prompts.
+        """
+        if self.player is None:
+            return None
+        for p in engine.players:
+            if p.id == self.player.id or p.character is None:
+                continue
+            if p.character.name == role_name:
+                return p
+        return None
+
+    def _find_player_registering_as(
+        self,
+        engine: "Engine",
+        role_name: str,
+    ) -> Optional["Player"]:
+        """Legacy fallback: find a player who registers as ``role_name``.
+
+        Used when ``_chosen_outsider`` is unset (no setup-time seen
+        token), e.g. in the drunk/poisoned ST-pick flow or in
+        stripped-down test setups that bypass the pool. Two phases:
+
+          1. True-name match — no ``registers_as`` calls, no prompts.
+          2. Override-bearing classes only (Spy / Recluse). Skipping
+             non-overriding classes here is the fix for the bug
+             described in the project notes: previously every player
+             was iterated, so a Spy seated unrelated to the Librarian
+             still surfaced a registration prompt.
+        """
+        from engine.character import Character as _BaseCharacter
+        from engine.check import Check
+
+        if self.player is None:
+            return None
+        # Phase 1: literal role match.
+        match = self._find_player_with_role(engine, role_name)
+        if match is not None:
+            return match
+        # Phase 2: misregistering classes only.
+        the_check = Check(
+            attribute="name",
+            passes=(role_name,),
+            detector_name=self.name,
+            detector_player_id=self.player.id,
+            extra_meta={
+                "step_for": "librarian_seen",
+                "shown_character": role_name,
+            },
+        )
+        for p in engine.players:
+            if p.id == self.player.id or p.character is None:
+                continue
+            cls = type(p.character)
+            if cls.registers_as is _BaseCharacter.registers_as:
+                # Class doesn't override registers_as — phase 1 already
+                # ruled this player out. Skip the no-op check call so
+                # we don't fire a spurious Storyteller prompt.
+                continue
+            if self.check(engine, p, the_check):
+                return p
+        return None
+
+    def _could_register_as_outsider(self, engine: "Engine") -> bool:
+        """Could any non-self player register as some Outsider?
+
+        Used for the sober "0 Outsiders" shortcut: when this returns
+        False, no player can possibly register as an Outsider, so we
+        skip the role-picking flow and show 0 directly.
+
+        We answer cheaply *without* calling ``registers_as`` (which
+        would surface a premature Storyteller prompt to the Spy /
+        Recluse). A player can register as an Outsider iff
+        ``registration_categories()`` on their class includes Outsider.
+        """
+        if self.player is None:
+            return False
+        for p in engine.players:
+            if p.id == self.player.id or p.character is None:
+                continue
+            cls = type(p.character)
+            if CharType.OUTSIDER in cls.registration_categories():
+                return True
+        return False
 
     # ------------------------------------------------------------------
     # Nightly ability.
     # ------------------------------------------------------------------
+
+    def _resolve_seen_player(
+        self,
+        engine: "Engine",
+        seen_role: str,
+        seen_player: "Player",
+    ) -> Optional[str]:
+        """Resolve the seen-token chair to the role to show on the
+        Librarian's phone.
+
+        Returns the Outsider name to show, or ``None`` if the chair's
+        registration ends up not being an Outsider (the Recluse case
+        where the ST opts the Recluse out — the Librarian then learns
+        ``0 Outsiders``).
+
+        Three branches keyed by the chair's literal role:
+
+          * **True Outsider** (Saint, Drunk, Butler, …): no
+            ``registers_as`` prompt — the chair already registers as
+            its own role. Returns ``seen_role``.
+
+          * **Spy**: ``registers_as`` fires with
+            ``extra_meta["restrict_categories"] = (OUTSIDER,)`` so the
+            ST sees only Outsider names in the eligible list (no Spy,
+            no Townsfolk). The Librarian shows whichever Outsider the
+            ST picked — no opt-out at this seat.
+
+          * **Recluse**: ``registers_as`` fires with the standard
+            Minion / Demon / Recluse eligible list. The default
+            (``"Recluse"``) makes the Librarian see the Recluse; if
+            the ST opts the Recluse into a Minion / Demon
+            registration, the Librarian's check fails and the engine
+            shows ``0 Outsiders``.
+        """
+        from engine.check import Check
+
+        all_outsiders = engine.all_character_names_by_type(CharType.OUTSIDER)
+
+        if seen_role == "Spy":
+            the_check = Check(
+                attribute="name",
+                passes=tuple(all_outsiders),
+                detector_name=self.name,
+                detector_player_id=self.player.id if self.player else -1,
+                extra_meta={
+                    "step_for": "librarian_seen",
+                    "restrict_categories": (CharType.OUTSIDER,),
+                },
+            )
+            registered = seen_player.character.registers_as(engine, the_check)
+            if registered in all_outsiders:
+                return registered
+            # Spy's restricted prompt should only return an Outsider
+            # name; defensive fallback to the first eligible Outsider.
+            engine.log(
+                f"Librarian {self.player.name}: Spy registered as "
+                f"{registered!r} — falling back to first eligible "
+                f"Outsider."
+            )
+            return all_outsiders[0] if all_outsiders else None
+
+        if seen_role == "Recluse":
+            the_check = Check(
+                attribute="name",
+                passes=("Recluse",),
+                detector_name=self.name,
+                detector_player_id=self.player.id if self.player else -1,
+                extra_meta={
+                    "step_for": "librarian_seen",
+                    "shown_character": "Recluse",
+                },
+            )
+            if self.check(engine, seen_player, the_check):
+                return "Recluse"
+            return None
+
+        # True Outsider on the seen chair — no prompt.
+        return seen_role
 
     def ability(self, engine: "Engine", night_number: int) -> None:
         if night_number != 1 or self.player is None or self.player.dead:
@@ -173,6 +318,7 @@ class Librarian(Character):
         )
 
         is_drunk_or_poisoned = self.player.drunk or self.player.poisoned
+        dp_label = self.player.drunk_poison_label()
 
         in_play_outsiders: List[str] = engine.in_play_character_names_by_type(
             CharType.OUTSIDER
@@ -181,30 +327,21 @@ class Librarian(Character):
             CharType.OUTSIDER
         )
 
-        # Spy support: when a Spy is in play, the Spy can register as
-        # any Outsider — even if no real Outsider is in play. So the
-        # canonical "0 Outsiders" sober shortcut doesn't fire when a
-        # Spy is in play; the Storyteller still gets a chance to point
-        # the Librarian at the Spy registering as some Outsider.
-        from engine.characters.spy import find_spy_player as _find_spy_player
-        spy_player = _find_spy_player(engine)
-
-        # Sober + no Outsiders in play AND no Spy: canonical "0"
-        # reading, no ST picks needed. With a Spy in play the
-        # Storyteller still gets the choice of pointing at the Spy.
+        # Sober "0 Outsiders" shortcut: only if no player could
+        # register as any Outsider (no true Outsider, no Spy who could
+        # fake one). When a Spy is in play, we skip the shortcut so
+        # the ST can still point the Librarian at a Spy registering as
+        # some Outsider.
         if (
-            not in_play_outsiders
-            and not is_drunk_or_poisoned
-            and spy_player is None
+            not is_drunk_or_poisoned
+            and not self._could_register_as_outsider(engine)
         ):
             self._show_zero(engine)
             return
 
-        # Drunk/poisoned: ST first decides whether to give the "0
-        # Outsiders" fake reading or the "1 of 2 players" fake reading.
-        # Default = 1 of 2 (more interesting — points at specific
-        # players). The only control is Next.
-        dp_label = self.player.drunk_poison_label()
+        # Drunk/poisoned: ST first decides whether to show "0
+        # Outsiders" or "1 of 2 players". Default = 1 of 2 (more
+        # interesting). The only control is Next.
         if is_drunk_or_poisoned:
             zero_prompt = YesNoPrompt(
                 text="Show 0 to Librarian?",
@@ -223,46 +360,66 @@ class Librarian(Character):
             if isinstance(show_zero, bool) and show_zero:
                 self._show_zero(engine)
                 return
-            # Otherwise fall through to the "1 of 2" path with fake
-            # data.
 
-        # SELECT (character): pick the Outsider character to show. If
-        # the storyteller pre-picked the Outsider in the UI (and the
-        # Librarian is sober + healthy) we skip the
-        # SelectCharacterPrompt entirely. When drunk/poisoned, the
-        # engine pre-picks a *correct* default (a real in-play
-        # Outsider) — the wrongness comes from the WRONG-two-players
-        # default below, not from the named role. If no Outsider is in
-        # play, fall back to any Outsider on the script.
-        chosen_char_name: str
-        if self._chosen_outsider and not is_drunk_or_poisoned:
-            chosen_char_name = self._chosen_outsider
-            engine.log(
-                f"Librarian {self.player.name}: pre-set seen role = "
-                f"{chosen_char_name}."
-            )
-        else:
-            eligible_chars = (
-                sorted(set(all_outsiders))
-                if (is_drunk_or_poisoned or spy_player is not None)
-                else sorted(set(in_play_outsiders))
-                or sorted(set(all_outsiders))
-            )
+        # ------------------------------------------------------------------
+        # Sober resolution. Two paths:
+        #
+        #   * Setup-time seen token placed (``_chosen_outsider`` is set).
+        #     The token sits on a specific chair — we look up that chair
+        #     and resolve via :meth:`_resolve_seen_player`. The
+        #     misregistration prompt (if any) fires only on that chair,
+        #     not on every player. This is the fix for the project
+        #     note "ability only checks the character with the seen
+        #     token at ability time".
+        #
+        #   * No setup-time token (legacy / stripped-down setups). The
+        #     ST is asked which Outsider to show, and we use the
+        #     two-phase fallback in
+        #     :meth:`_find_player_registering_as` (true holder first,
+        #     then any Spy / Recluse misregistering classes).
+        #
+        # The drunk/poisoned branch always uses the legacy ST-pick
+        # path because the seen pair is fabricated.
+        # ------------------------------------------------------------------
+        chosen_char_name: Optional[str] = None
+        right_player: Optional["Player"] = None
+
+        if not is_drunk_or_poisoned and self._chosen_outsider:
+            seen_role = self._chosen_outsider
+            seen_player = self._find_player_with_role(engine, seen_role)
+            if seen_player is None:
+                engine.log(
+                    f"Librarian {self.player.name}: pre-set seen role "
+                    f"{seen_role!r} has no seated player; falling back "
+                    f"to ST pick."
+                )
+            else:
+                chosen_char_name = self._resolve_seen_player(
+                    engine, seen_role, seen_player
+                )
+                if chosen_char_name is None:
+                    # Recluse opted out / Spy fell through — show 0.
+                    self._show_zero(engine)
+                    return
+                right_player = seen_player
+                engine.log(
+                    f"Librarian {self.player.name}: seen-token on "
+                    f"{seen_player.name} ({seen_role}) shown as "
+                    f"{chosen_char_name}."
+                )
+
+        if chosen_char_name is None:
+            # No setup-time token (or pre-set role has no seated
+            # player). Fall back to the legacy "ST picks character"
+            # flow.
+            eligible_chars = sorted(set(all_outsiders))
             default_char = None
             if is_drunk_or_poisoned and eligible_chars:
                 in_play_set = set(in_play_outsiders)
                 in_play_pool = [c for c in eligible_chars if c in in_play_set]
-                # Prefer a *correct* in-play Outsider; fall back to any
-                # Outsider on the script if none are in play.
                 pool = in_play_pool or list(eligible_chars)
                 default_char = _rand.choice(pool)
             elif eligible_chars:
-                # Sober + eligible candidates available: pre-fill a
-                # random non-self default. (The Librarian is a
-                # Townsfolk and can never literally be an Outsider, so
-                # ``self.name`` is never in ``eligible_chars`` — but
-                # the self-avoidance filter is harmless and keeps the
-                # pattern consistent with the WW / FT.)
                 non_self = [c for c in eligible_chars if c != self.name]
                 pool = non_self or list(eligible_chars)
                 default_char = _rand.choice(pool)
@@ -275,11 +432,6 @@ class Librarian(Character):
             if is_drunk_or_poisoned:
                 char_meta["due_to_drunk_poison"] = True
                 char_meta["drunk_poison_state"] = dp_label
-                # Highlight the *correct* options (in-play Outsiders) so
-                # the ST can see at a glance which characters would be
-                # truthful. The prefilled default is one of these — the
-                # wrongness for the drunk/poisoned read comes from the
-                # two-players pick below, not from the named role.
                 correct_chars = [
                     c for c in eligible_chars if c in set(in_play_outsiders)
                 ]
@@ -292,76 +444,17 @@ class Librarian(Character):
                 meta=char_meta,
             )
             chosen_char_name = engine.send_prompt(char_prompt)
+            right_player = (
+                None if is_drunk_or_poisoned
+                else self._find_player_registering_as(engine, chosen_char_name)
+            )
 
-        # Identify the seated player who *holds* the chosen Outsider
-        # role (when one exists). For the legitimate flow this is the
-        # "right" player; for the drunk/poisoned flow there may be no
-        # such player and we leave it None.
-        right_player: Optional["Player"] = None
-        for p in engine.players:
-            if p.character is not None and p.character.name == chosen_char_name:
-                if p.id != self.player.id:
-                    right_player = p
-                    break
-
-        # Spy-as-seen-player: same logic as the Washerwoman. If the
-        # chosen Outsider has no actual holder and the Spy is in play,
-        # the Spy IS the seen player (registering as the chosen
-        # Outsider). With both an actual holder and a Spy, ask the
-        # Storyteller — default to the actual holder.
-        if (
-            spy_player is not None
-            and not is_drunk_or_poisoned
-            and spy_player.id != self.player.id
-        ):
-            if right_player is None:
-                right_player = spy_player
-                engine.log(
-                    f"Librarian {self.player.name}: Spy "
-                    f"({spy_player.name}) is the seen player, "
-                    f"registering as {chosen_char_name}."
-                )
-            else:
-                use_spy_prompt = YesNoPrompt(
-                    text="Use Spy as seen Librarian target?",
-                    target_player_id=self.player.id,
-                    meta={
-                        "character": self.name,
-                        "step": "use_spy_as_seen",
-                        "stage": "st_pre",
-                        "default": False,
-                        "shown_character": chosen_char_name,
-                        "actual_holder_id": right_player.id,
-                        "actual_holder_name": right_player.name,
-                        "spy_player_id": spy_player.id,
-                        "spy_player_name": spy_player.name,
-                    },
-                )
-                use_spy = engine.send_prompt(use_spy_prompt)
-                if isinstance(use_spy, bool) and use_spy:
-                    right_player = spy_player
-                    engine.log(
-                        f"Librarian {self.player.name}: Spy "
-                        f"({spy_player.name}) overrides actual holder; "
-                        f"Spy registers as {chosen_char_name}."
-                    )
-
-        # SELECT (players to point at): if we know the right player,
-        # only ask the storyteller for the *wrong* player; otherwise
-        # (drunk/poisoned, or no actual holder) fall back to picking
-        # two players.
+        # SELECT (players to point at).
         if right_player is not None and not is_drunk_or_poisoned:
             wrong_eligible = [
                 p.id for p in engine.players
                 if p.id != self.player.id and p.id != right_player.id
             ]
-            # Pre-resolve the wrong player from ``_chosen_wrong`` if
-            # it was set during setup. Same shape as the WW: the
-            # setup pick is a *role name* — we look up the seated
-            # player who currently holds that role, and only fall
-            # through to the SelectPlayerPrompt if no such player
-            # exists (defensive — the UI should have validated
-            # already).
             preset_wrong_player: Optional["Player"] = None
             if self._chosen_wrong:
                 for p in engine.players:
@@ -409,7 +502,6 @@ class Librarian(Character):
                 except (KeyError, ValueError, TypeError):
                     wrong_player = None
                 if wrong_player is None:
-                    # Defensive fallback: any other eligible player.
                     if wrong_eligible:
                         wrong_player = engine.get_player(wrong_eligible[0])
             chosen_players = (
@@ -417,16 +509,11 @@ class Librarian(Character):
                 if wrong_player is not None
                 else [right_player]
             )
-            # Randomise the visible order so the Librarian can't tell
-            # which is which.
             _rand.shuffle(chosen_players)
         else:
             other_player_ids = [
                 p.id for p in engine.players if p.id != self.player.id
             ]
-            # Drunk/poisoned default: 2 random non-self players whose
-            # true roles are NOT the chosen Outsider (so the info is
-            # actually wrong). The ST may change the picks.
             default_pids = None
             if is_drunk_or_poisoned:
                 wrong_pool = [
@@ -448,9 +535,6 @@ class Librarian(Character):
             if is_drunk_or_poisoned:
                 player_meta["due_to_drunk_poison"] = True
                 player_meta["drunk_poison_state"] = dp_label
-                # Highlight the player(s) whose true role matches the
-                # chosen Outsider — these are the picks that would make
-                # the info actually true.
                 correct_pids = [
                     pid for pid in other_player_ids
                     if (engine.get_player(pid).character is not None
@@ -481,14 +565,10 @@ class Librarian(Character):
             )
         )
 
-        # WAKEUP — pre-wake picks complete; physically wake the
-        # Librarian now.
         engine.dispatch(
             Event(EventType.WAKEUP, source=self, targets=[self.player])
         )
 
-        # INFORMATION: show on the Librarian's phone — both player
-        # tokens highlighted alongside the Outsider character token.
         names = [p.name for p in chosen_players]
         info_text = (
             f"One of {names[0]} and {names[1]} is the {chosen_char_name}."
@@ -523,3 +603,11 @@ class Librarian(Character):
         engine.dispatch(
             Event(EventType.RESOLUTION, source=self, targets=chosen_players)
         )
+
+        # Ability has ended. The OUTSIDER / WRONG token slots exist
+        # purely to let the storyteller see who the ability would
+        # point at while it was running; now that it has resolved,
+        # the slots are dead state. Clear them so the grimoire stops
+        # rendering the reminder tokens — display always matches
+        # state, with no separate "first-night only" flag.
+        engine.pool.clear_librarian_token_slots()

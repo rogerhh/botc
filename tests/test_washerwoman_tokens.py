@@ -121,6 +121,49 @@ def test_both_tokens_preset_skips_ww_prompts() -> None:
     assert e.phase is Phase.DAY
 
 
+def test_ww_token_slots_cleared_after_ability() -> None:
+    """Once the Washerwoman's first-night ability resolves, the pool's
+    seen-TF and WRONG slots are cleared. Token display always matches
+    state, so the UI naturally stops rendering the TOWNSFOLK / WRONG
+    tokens — there is no separate phase-based "first-night only" gate.
+    """
+    e, ids = _make_engine_with_ww()
+    # Mirror the real ST flow: pool tracks the seated roles + the WW
+    # picks the storyteller dragged on at setup. The engine clears
+    # these slots when the ability resolves.
+    e.pool.set_many(["Washerwoman", "Empath", "Soldier", "Poisoner", "Imp"])
+    e.pool.set_washerwoman_townsfolk("Empath")
+    e.pool.set_washerwoman_wrong("Soldier")
+    e.apply_setup_data({
+        "washerwoman_townsfolk": "Empath",
+        "washerwoman_wrong": "Soldier",
+    })
+    # Pool slots populated during setup; tokens visible to the ST.
+    assert e.pool.washerwoman_townsfolk() == "Empath"
+    assert e.pool.washerwoman_wrong() == "Soldier"
+
+    e.start_game()
+    e.start_night()
+    drain(e, [
+        ({"character": "Poisoner",    "step": "select_player"}, ids["d"]),
+        ({"character": "Washerwoman", "step": "information"},   None),
+        ({"character": "Empath",      "step": "information"},   None),
+    ])
+
+    # Ability has fired; pool slots are now cleared so the grimoire
+    # stops showing the tokens automatically.
+    assert e.pool.washerwoman_townsfolk() is None
+    assert e.pool.washerwoman_wrong() is None
+
+    # Cached picks on the character itself remain — they are part of
+    # the ability's audit trail, not a display source.
+    alice = e.get_player(ids["a"])
+    assert alice.character._chosen_townsfolk == "Empath"
+    assert alice.character._chosen_wrong == "Soldier"
+
+    e.advance_to_day()
+
+
 def test_only_townsfolk_preset_still_asks_for_wrong() -> None:
     """Backwards-compatibility: if only the seen TF is pre-set (the
     UI's previous behavior), the engine still asks the storyteller for

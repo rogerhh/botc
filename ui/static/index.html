@@ -93,6 +93,10 @@
   body:not(.phase-setup) .phase-setup-only { display: none !important; }
   body:not(.phase-night) .phase-night-only { display: none !important; }
   body:not(.phase-day)   .phase-day-only   { display: none !important; }
+  /* phase-game-only: visible from the moment the game starts (night,
+     day, or finished). Used by the Back button, which should be
+     reachable any time there's history to walk through. */
+  body.phase-setup .phase-game-only { display: none !important; }
   body.phase-setup .phase-game-only        { display: none !important; }
 
   /* Start Game button — bottom-right pill during Setup. Larger than
@@ -122,6 +126,31 @@
     cursor: not-allowed;
     box-shadow: none;
   }
+
+  /* Start-game readiness banner — sits directly above the Start Game
+     pill during Setup so the storyteller sees *why* the button is
+     disabled at a glance. Hidden when empty (no blocker) and when
+     the game is past Setup. */
+  #startReadinessBanner.start-readiness {
+    position: fixed;
+    right: 20px;
+    bottom: 96px;          /* clears the Start Game pill (h ≈ 70px) */
+    z-index: 80;
+    max-width: 360px;
+    padding: 10px 14px;
+    border-radius: 8px;
+    background: #4a1f1f;
+    color: #f4cdcd;
+    border: 1px solid #6e2c2c;
+    box-shadow: 0 6px 18px #00000088;
+    font-size: 13px;
+    line-height: 1.35;
+    pointer-events: none;
+    /* Gracefully wrap long token-validation messages; we only show one
+       at a time so vertical growth is bounded. */
+    white-space: normal;
+  }
+  #startReadinessBanner.start-readiness:empty { display: none; }
 
   /* Edit Character button — sits at the bottom of the right-side
      setup dock (under arrange + pool panels). Same panel-style
@@ -188,6 +217,20 @@
      stretched height looks intentional rather than empty. */
   #phaseDock #promptPanel .actions { margin-top: auto; }
   #phaseDock.no-prompt #promptPanel { opacity: 0; pointer-events: none; }
+  /* The Next button lives at the bottom of the dock during the night
+     and during *daytime* abilities (Slayer slayshot, Virgin reaction,
+     etc.). Hidden by default; re-enabled in two cases:
+       1. Night phase (always — between prompts as well as during).
+       2. Day phase WITH an active prompt (the Slayer-shot case the
+          storyteller has to dispatch with Next).
+     During day with no active prompt the Start Night button takes its
+     place; with an active prompt the Start Night button steps aside so
+     the storyteller doesn't accidentally jump to night while a daytime
+     ability is mid-resolution. */
+  #promptNext { display: none !important; }
+  body.phase-night #promptNext { display: block !important; }
+  body.phase-day #phaseDock:not(.no-prompt) #promptNext { display: block !important; }
+  body.phase-day #phaseDock:not(.no-prompt) #btnStartNight { display: none !important; }
 
   #phaseDock .dock-button {
     width: 100%;
@@ -216,30 +259,16 @@
     opacity: 0.9;
   }
 
-  /* --- Debug-mode buttons ---
-     The Debug toggle is always visible (so a developer can switch
-     debug mode on without hunting for it). The actions it gates
-     (.debug-action) are hidden until <body> carries the
-     "debug-mode" class. */
-  button.debug-toggle {
-    background: #2a1f1a;
-    color: #e3b97a;
-    border: 1px solid #f0c27a55;
-  }
-  button.debug-toggle:hover { background: #3a2c24; }
-  body.debug-mode button.debug-toggle {
-    background: #f0c27a;
-    color: #1a1411;
-    border-color: #f0c27a;
-  }
-  button.debug-action {
+  /* --- Setup-only action buttons ---
+     Auto-fill and Quick Setup are convenience buttons shown during
+     setup only; they're hidden once the game starts via the
+     ``phase-setup-only`` class. */
+  button.setup-action {
     background: #2a1f1a;
     color: #e3b97a;
     border: 1px dashed #f0c27a55;
-    display: none;          /* hidden unless debug-mode is on */
   }
-  body.debug-mode button.debug-action { display: inline-block; }
-  button.debug-action:hover { background: #3a2c24; }
+  button.setup-action:hover { background: #3a2c24; }
 
   /* --- Prompt panel ---
      Bottom-of-screen drawer that surfaces the engine's current prompt
@@ -554,6 +583,32 @@
     filter: drop-shadow(0 0 12px #f0c27aaa);
   }
 
+  /* Prompt-driven *selection* marker. While a SELECT_PLAYER /
+     SELECT_PLAYERS prompt is active, eligible chairs (already lit by
+     ``highlight-target``) become click-to-pick targets. Clicking one
+     adds ``.chair-picked`` so the storyteller can see which chairs
+     they have currently picked for the prompt. The chair circle gets
+     a teal ring + glow that's visually distinct from the warm amber
+     eligibility halo so "eligible" vs "picked" stay readable at a
+     glance. The ring is layered on the inner circle (which already
+     hosts other state-driven fills) so the chair stroke override
+     doesn't fight the existing chair-edge color. */
+  g[data-id].chair-picked .chair {
+    stroke: #6fd4d2;
+    stroke-width: 5;
+    filter: drop-shadow(0 0 14px #6fd4d2cc);
+  }
+  /* In selection mode the eligible chairs get a subtle pointer/hover
+     cue so the storyteller knows the click does something different
+     from the usual side-panel open. Non-eligible chairs in this mode
+     keep the default cursor — clicks on them are ignored. */
+  body.prompt-pick-mode #chairs g[data-id].highlight-target {
+    cursor: pointer;
+  }
+  body.prompt-pick-mode #chairs g[data-id].highlight-target:hover .chair {
+    fill: var(--chair-hover);
+  }
+
   /* Highlight chairs that are valid drop targets while a status token
      is being dragged. The amber pulse uses the same warm palette as
      existing reminder UI; the inner chair circle gets a brighter fill
@@ -794,6 +849,26 @@
     letter-spacing: 0.08em;
     color: #aa9a72;
   }
+  /* "Show all" toggle inside the Conditions section. Borderless so it
+     reads as an inline disclosure control rather than a primary button,
+     and aligned left so it lines up under the always-visible
+     drunk/poisoned rows. */
+  .seat-panel-states .token-toggle-row {
+    border-bottom: none;
+    padding: 4px 0 2px;
+  }
+  .seat-panel-states .token-toggle {
+    background: transparent;
+    border: none;
+    color: #aa9a72;
+    padding: 2px 0;
+    font-size: 12px;
+    cursor: pointer;
+    letter-spacing: 0.04em;
+  }
+  .seat-panel-states .token-toggle:hover {
+    color: #f0c27a;
+  }
   .seat-panel-actions {
     padding: 10px 16px 14px;
     border-top: 1px solid #00000088;
@@ -999,51 +1074,6 @@
     color: #f0c27a;
     font-size: 12px;
   }
-
-  /* --- Add-Characters floating button (bottom right) --- */
-  .fab {
-    position: fixed;
-    right: 20px;
-    bottom: 20px;
-    z-index: 80;
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 12px 18px;
-    border-radius: 999px;
-    background: #8a5a1c;
-    color: var(--text);
-    border: 1px solid #00000088;
-    box-shadow: 0 6px 18px #000000aa;
-    cursor: pointer;
-    font-size: 14px;
-    font-weight: 600;
-    letter-spacing: 0.02em;
-  }
-  .fab:hover { background: #a9731f; }
-  .fab .fab-icon {
-    font-size: 18px;
-    line-height: 1;
-    font-weight: 700;
-  }
-  .fab .badge {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    min-width: 22px;
-    height: 22px;
-    padding: 0 7px;
-    border-radius: 999px;
-    background: var(--accent);
-    color: #fff;
-    font-size: 12px;
-    font-weight: 700;
-  }
-  .fab .badge.zero {
-    background: #2f4a2c;
-    color: #c8e2c5;
-  }
-  .fab .badge.hidden { display: none; }
 
   /* --- Add-Characters modal (wider than the chair editor) --- */
   .modal.add-chars {
@@ -1483,6 +1513,253 @@
     color: #f0c27aaa;
     padding: 6px 4px 2px;
   }
+
+  /* --- Game-end prompt + report modal --- */
+  /* Backdrop covers the whole viewport with a dim overlay; the prompt
+     panel sits centered. Hidden until JS toggles ``open``. */
+  .game-end-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.72);
+    z-index: 200;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+  }
+  .game-end-overlay.open { display: flex; }
+  .game-end-card {
+    background: #1d1d1f;
+    border: 1px solid #00000088;
+    border-radius: 14px;
+    box-shadow: 0 16px 48px #000000cc;
+    width: min(560px, calc(100vw - 48px));
+    padding: 28px 32px 24px;
+    color: var(--text);
+    text-align: center;
+  }
+  .game-end-card .winner-banner {
+    font-size: 32px;
+    font-weight: 800;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    margin: 4px 0 8px;
+  }
+  .game-end-card .winner-banner.good { color: #6dd07a; }
+  .game-end-card .winner-banner.evil { color: #d96b6b; }
+  .game-end-card .winner-banner.neutral { color: #f0c27a; }
+  .game-end-card .reason {
+    font-size: 16px;
+    color: #d8d8d8;
+    margin: 4px 0 22px;
+    line-height: 1.4;
+  }
+  .game-end-card .actions {
+    display: flex;
+    gap: 12px;
+    justify-content: center;
+  }
+  .game-end-card .actions button {
+    padding: 12px 22px;
+    border-radius: 8px;
+    font-size: 15px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    border: 1px solid #00000088;
+    color: var(--text);
+    cursor: pointer;
+  }
+  .game-end-card .actions button.primary { background: #2f6b2c; }
+  .game-end-card .actions button.primary:hover { background: #3a8636; }
+  .game-end-card .actions button.secondary { background: #3a3a3a; }
+  .game-end-card .actions button.secondary:hover { background: #4a4a4a; }
+
+  /* Report panel — wider scrollable list of structured events. */
+  .report-card {
+    background: #1d1d1f;
+    border: 1px solid #00000088;
+    border-radius: 14px;
+    box-shadow: 0 16px 48px #000000cc;
+    width: min(820px, calc(100vw - 48px));
+    max-height: calc(100vh - 80px);
+    color: var(--text);
+    display: flex;
+    flex-direction: column;
+  }
+  .report-card .report-header {
+    padding: 18px 24px 12px;
+    border-bottom: 1px solid #00000077;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+  }
+  .report-card .report-header h2 {
+    margin: 0;
+    font-size: 20px;
+    letter-spacing: 0.03em;
+  }
+  .report-card .report-header .winner-line {
+    font-size: 13px;
+    color: #d8d8d8;
+  }
+  .report-card .report-header .winner-line.good { color: #6dd07a; }
+  .report-card .report-header .winner-line.evil { color: #d96b6b; }
+  .report-card .report-body {
+    padding: 8px 0;
+    overflow-y: auto;
+    flex: 1 1 auto;
+  }
+  .report-card .report-footer {
+    padding: 12px 24px;
+    border-top: 1px solid #00000077;
+    display: flex;
+    justify-content: flex-end;
+    gap: 12px;
+  }
+  .report-card .report-footer button {
+    padding: 10px 18px;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 600;
+    border: 1px solid #00000088;
+    color: var(--text);
+    background: #3a3a3a;
+    cursor: pointer;
+  }
+  .report-card .report-footer button:hover { background: #4a4a4a; }
+  .report-card .phase-group {
+    padding: 10px 24px 14px;
+    border-bottom: 1px dashed #00000055;
+  }
+  .report-card .phase-group:last-child { border-bottom: none; }
+  .report-card .phase-heading {
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: #f0c27aaa;
+    padding: 4px 0 8px;
+  }
+  .report-card .event-row {
+    display: grid;
+    grid-template-columns: 60px 110px 1fr;
+    gap: 10px;
+    padding: 6px 0;
+    align-items: baseline;
+    font-size: 14px;
+    line-height: 1.4;
+  }
+  .report-card .event-row + .event-row { border-top: 1px solid #00000044; }
+  .report-card .event-ts,
+  .console-panel .event-ts { color: #888; font-family: monospace; font-size: 12px; }
+  .report-card .event-kind,
+  .console-panel .event-kind {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    align-self: center;
+    padding: 3px 6px;
+    border-radius: 6px;
+    text-align: center;
+    background: #2a2a2a;
+    color: #d8d8d8;
+  }
+  .event-kind.kill,
+  .event-kind.execution { background: #5a2222; color: #ffb3b3; }
+  .event-kind.info { background: #1f3a5a; color: #b3d4ff; }
+  .event-kind.selection { background: #1f4a2c; color: #b8e6c4; }
+  .event-kind.ability { background: #3a3460; color: #c9c2ff; }
+  .event-kind.reaction { background: #5a3a1c; color: #ffc97a; }
+  .event-kind.revive { background: #1c4a44; color: #b8e6e0; }
+  .event-kind.nomination { background: #3a1f4a; color: #d8b3ff; }
+  .event-kind.state { background: #3a3a3a; color: #d8d8d8; }
+  .event-kind.phase { background: #4a3a1c; color: #f0d28a; }
+  .event-kind.game_end { background: #6b4a1c; color: #ffd699; }
+  .report-card .event-summary,
+  .console-panel .event-summary { color: var(--text); }
+  .report-card .empty-note,
+  .console-panel .empty-note {
+    padding: 24px 16px;
+    text-align: center;
+    color: #888;
+    font-style: italic;
+    font-size: 13px;
+  }
+
+  /* --- Live storyteller console panel ---
+     Bottom-left floating panel that shows the structured engine log
+     in real time. Hidden during setup (nothing to log yet) and
+     collapsed by default to keep the town-square uncluttered; the
+     header acts as the toggle. */
+  .console-panel {
+    position: fixed;
+    left: 20px;
+    bottom: 20px;
+    z-index: 60;
+    width: min(380px, calc(100vw - 36px));
+    max-height: min(420px, calc(100vh - 80px));
+    background: #1d1d1faa;
+    border: 1px solid #00000088;
+    border-radius: 10px;
+    box-shadow: 0 8px 24px #000000aa;
+    color: var(--text);
+    display: flex;
+    flex-direction: column;
+    backdrop-filter: blur(6px);
+  }
+  body.phase-setup .console-panel { display: none; }
+  .console-panel .console-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 8px 12px;
+    border-bottom: 1px solid #00000077;
+    cursor: pointer;
+    user-select: none;
+  }
+  .console-panel .console-title {
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: #f0c27a;
+  }
+  .console-panel .console-count {
+    font-size: 11px;
+    font-weight: 600;
+    color: #888;
+    margin-left: 6px;
+  }
+  .console-panel .console-toggle {
+    font-size: 14px;
+    color: #888;
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    padding: 0 4px;
+  }
+  .console-panel .console-body {
+    overflow-y: auto;
+    padding: 4px 0;
+    flex: 1 1 auto;
+  }
+  .console-panel.collapsed .console-body { display: none; }
+  .console-panel.collapsed { max-height: none; }
+  .console-panel .console-row {
+    display: grid;
+    grid-template-columns: 50px 80px 1fr;
+    gap: 8px;
+    padding: 5px 12px;
+    align-items: baseline;
+    font-size: 12px;
+    line-height: 1.35;
+  }
+  .console-panel .console-row + .console-row { border-top: 1px solid #00000033; }
+  .console-panel .event-kind { font-size: 10px; padding: 2px 5px; }
+  .console-panel .event-ts { font-size: 11px; }
 </style>
 </head>
 <body class="phase-setup">
@@ -1498,18 +1775,13 @@
     </button>
     <span id="startStatus" class="start-status"></span>
     <span id="count" class="count">0 players</span>
-    <!-- Debug toggle: clicking it flips a CSS class on <body> that
-         reveals the debug-only buttons (auto-fill, etc.). State is
-         persisted in localStorage so reloads keep debug mode on. -->
-    <button id="btnDebugMode" type="button" class="debug-toggle"
-            title="Toggle debug mode (extra buttons for quick test setup)">
-      🐛 Debug
-    </button>
-    <button id="btnDebugFill" type="button" class="debug-action"
+    <!-- Setup-only convenience buttons: visible during setup, hidden
+         once the game starts. -->
+    <button id="btnDebugFill" type="button" class="setup-action phase-setup-only"
             title="Assign random names + characters to every chair">
       🎲 Auto-fill
     </button>
-    <button id="btnDebugSeed" type="button" class="debug-action"
+    <button id="btnDebugSeed" type="button" class="setup-action phase-setup-only"
             title="Add chairs (up to 8) + randomize the pool + auto-fill">
       ⚡ Quick Setup
     </button>
@@ -1604,7 +1876,7 @@
 </div>
 
 <div id="rightDock" class="right-dock">
-<div id="arrangeSide" class="arrange-side phase-setup-only">
+<div class="arrange-side phase-setup-only">
   <div class="arrange-title">Arrange chairs</div>
   <div class="arrange-options">
     <button type="button" class="arrange-option" id="arrangeCircle"
@@ -1658,7 +1930,11 @@
      name and a character. Hidden during Night / Day. The Edit
      Character button (now in the right-side dock) used to live next
      to it; we kept the .fab-below class name for backwards
-     compatibility with the CSS selector. -->
+     compatibility with the CSS selector. The readiness banner above
+     it surfaces *why* the button is currently disabled (missing
+     character, mismatched pool, unplaced token, etc.) so the
+     storyteller doesn't have to hunt for the blocker. -->
+<div id="startReadinessBanner" class="phase-setup-only start-readiness"></div>
 <button id="btnStartGame" class="fab-below phase-setup-only" type="button"
         title="Lock in seating + characters and spin up the game engine.">
   ▶ Start Game
@@ -1678,7 +1954,7 @@
 
     <div id="addCharsNeeded" class="needed-banner"></div>
 
-    <div id="addCharsPending" class="pending-banner drunk-banner">
+    <div class="pending-banner drunk-banner">
       Pick a Townsfolk to be the Drunk's pretend role. Click an existing
       pretend role to swap it.
     </div>
@@ -1725,11 +2001,11 @@
       <button type="button" id="promptNo" class="danger" style="display:none">No</button>
     </div>
   </div>
-  <button type="button" id="btnBack" class="dock-button back phase-night-only"
-          title="(Not yet implemented) Step the storyteller back one event.">
+  <button type="button" id="btnBack" class="dock-button back phase-game-only"
+          title="Rewind to the previous ability (mid-ability: redo selections).">
     ◀ Back
   </button>
-  <button type="button" id="promptNext" class="dock-button next phase-night-only">
+  <button type="button" id="promptNext" class="dock-button next">
     Next ▶
   </button>
   <button type="button" id="btnStartNight" class="dock-button start-night phase-day-only">
@@ -1737,11 +2013,64 @@
   </button>
 </div>
 
+<!-- Game-end prompt overlay. Shown when the engine's phase flips to
+     "finished". Reports which team won and offers a "View Report"
+     button that opens the structured event report below. -->
+<div id="gameEndOverlay" class="game-end-overlay" role="dialog"
+     aria-modal="true" aria-labelledby="gameEndBanner">
+  <div class="game-end-card">
+    <div id="gameEndBanner" class="winner-banner neutral">Game Over</div>
+    <div id="gameEndReason" class="reason"></div>
+    <div class="actions">
+      <button type="button" id="btnViewReport" class="primary">View Report</button>
+      <button type="button" id="btnGameEndClose" class="secondary">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- Game report overlay. Replays the same console feed in a wider,
+     scrollable layout grouped by phase (Setup → First Night →
+     Day 1 → Night 2 → …) once the game is over. -->
+<div id="reportOverlay" class="game-end-overlay" role="dialog"
+     aria-modal="true" aria-labelledby="reportTitle">
+  <div class="report-card">
+    <div class="report-header">
+      <h2 id="reportTitle">Game Report</h2>
+      <div id="reportWinner" class="winner-line"></div>
+    </div>
+    <div id="reportBody" class="report-body">
+      <div class="empty-note">Loading…</div>
+    </div>
+    <div class="report-footer">
+      <button type="button" id="btnReportClose">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- Live storyteller console panel. Streams the engine's structured
+     console feed (ability fires, info shown, selections, kills,
+     revives, nominations, executions, phase transitions, game end)
+     so the storyteller can scan recent activity without reading the
+     verbose log. Header acts as the collapse toggle. -->
+<div id="consolePanel" class="console-panel collapsed">
+  <div id="consoleHeader" class="console-header">
+    <div>
+      <span class="console-title">📋 Console</span>
+      <span id="consoleCount" class="console-count">0</span>
+    </div>
+    <button type="button" id="consoleToggle" class="console-toggle"
+            aria-label="Expand console">▼</button>
+  </div>
+  <div id="consoleBody" class="console-body">
+    <div class="empty-note">No activity yet.</div>
+  </div>
+</div>
+
 <script src="/static/qrcodegen.js"></script>
 <script>
 (() => {
   const BOARD_SIZE = 1000;          // SVG viewBox units
-  const CHAIR_RADIUS = 51;          // ~50% larger than the original 34
+  const CHAIR_RADIUS = 51;
   const DRAG_SLOP = 10;             // board units the pointer must move before it's a drag
   const MAX_CHAIR_TEXT = 88;        // widest text we let a chair display (board units)
   const board = document.getElementById("board");
@@ -1762,23 +2091,14 @@
   const enginePlayersById = new Map();
 
   // Cached engine top-level state (phase + night_number + day_number)
-  // pulled from ``data.engine`` on every refresh. Used by the chair
-  // render to decide whether first-night-only reminder tokens
-  // (Washerwoman / Librarian / Investigator's TOWNSFOLK / OUTSIDER /
-  // MINION / WRONG) should still be visible. Per the rulebook, those
-  // tokens may be removed from the grimoire once the night-1 ability
-  // has fired — they affect no game state, only display.
+  // pulled from ``data.engine`` on every refresh. Reminder-token
+  // display is *not* gated off this — every reminder token (including
+  // the Washerwoman / Librarian / Investigator "you start knowing"
+  // tokens) renders strictly as a function of pool state. The engine
+  // clears the pool slots when the owning ability resolves, so those
+  // tokens disappear automatically; there is no separate "first-night
+  // only" display flag.
   let engineState = { phase: "setup", night_number: 0, day_number: 0 };
-
-  // True once the game has progressed past the first night. We treat
-  // any phase that is not setup AND not first_night as "past N1" so
-  // the moment the storyteller advances to Day 1, the first-night
-  // tokens disappear. Stays false during setup and during night 1
-  // itself so the ST can place / drag the tokens normally.
-  function isPastFirstNight() {
-    const phase = engineState.phase;
-    return phase === "day" || phase === "night" || phase === "finished";
-  }
 
   // ----- server IO -----
 
@@ -1800,8 +2120,10 @@
         }
       }
     }
-    // Cache top-level engine state so render() can gate
-    // first-night-only reminder tokens off ``phase`` / ``night_number``.
+    // Cache top-level engine state. Reminder-token display is no
+    // longer gated on phase / night_number — the engine clears the
+    // pool slots when the owning ability resolves, so display always
+    // matches state.
     if (data.engine) {
       engineState = {
         phase: data.engine.phase || "setup",
@@ -1921,16 +2243,80 @@
     virgin_no_ability:       "virgin_no_ability",
     washerwoman_townsfolk:   "washerwoman_townsfolk",
     washerwoman_wrong:       "washerwoman_wrong",
-    // Librarian and Investigator's WRONG tokens reuse the same
-    // generic WRONG asset — the token's caption is just "WRONG", so
-    // a single image serves all three info-character WRONG slots.
-    librarian_wrong:         "washerwoman_wrong",
-    investigator_wrong:      "washerwoman_wrong",
+    // Each info character has its own WRONG token so the Storyteller
+    // can tell at a glance which info character a WRONG token
+    // belongs to (the icon — laundry / book / magnifying glass —
+    // matches the role; the caption is the same "Wrong" on each).
+    librarian_wrong:         "librarian_wrong",
+    investigator_wrong:      "investigator_wrong",
   };
   function tokenUrl(key) {
     const base = TOKEN_FILES[key];
     return base ? "/assets/tokens/" + base + ".png" : null;
   }
+
+  // Presentation table for every reminder-token kind the engine
+  // emits in chair.tokens[]. The engine decides *what* tokens a chair
+  // carries; this table only governs *how* each kind is drawn (icon
+  // file, angle around the chair, hover title, drag-source kind).
+  //
+  // Angles are chair-relative (0° = up, +clockwise) and spaced 30°
+  // apart. Mutually-exclusive token pairs share an angle on purpose:
+  // a chair can only carry one half of each pair, so collapsing the
+  // pair to one slot widens the spread.
+  //   -150° : slayer_no_ability   / virgin_no_ability     (mutex)
+  //   -120° : librarian_outsider  / librarian_wrong       (mutex)
+  //    -90° : investigator_minion / investigator_wrong    (mutex)
+  //    -60° : washerwoman_townsfolk / washerwoman_wrong   (mutex)
+  //    -30° : ft_red_herring
+  //      0° : (reserved — top stays clear for visual balance)
+  //     30° : drunk
+  //     60° : butler_master
+  //     90° : monk_safe
+  //    120° : poisoned
+  //    150° : imp_dead / scarlet_woman_is_demon  (rarely co-occur;
+  //           if both, SW keeps 150° and imp_dead shifts to 165°)
+  //    180° : undertaker_died_today
+  const TOKEN_VIEW = {
+    drunk:                  { icon: "drunk",                  angle:  30, title: "Is the Drunk" },
+    ft_red_herring:         { icon: "fortune_teller_red_herring", angle: -30, title: "Fortune Teller's red herring" },
+    washerwoman_townsfolk:  { icon: "washerwoman_townsfolk",  angle: -60, title: "Washerwoman saw this Townsfolk" },
+    washerwoman_wrong:      { icon: "washerwoman_wrong",      angle: -60, title: "Washerwoman WRONG" },
+    investigator_minion:    { icon: "investigator_minion",    angle: -90, title: "Investigator saw this Minion" },
+    investigator_wrong:     { icon: "investigator_wrong",     angle: -90, title: "Investigator WRONG" },
+    librarian_outsider:     { icon: "librarian_outsider",     angle: -120, title: "Librarian saw this Outsider" },
+    librarian_wrong:        { icon: "librarian_wrong",        angle: -120, title: "Librarian WRONG" },
+    butler_master:          { icon: "butler_master",          angle:  60, title: "Butler's Master" },
+    monk_safe:              { icon: "monk_safe",              angle:  90, title: "Monk-protected tonight" },
+    poisoned:               { icon: "poisoned",               angle: 120, title: "Poisoned by the Poisoner" },
+    scarlet_woman_is_demon: { icon: "scarlet_woman_is_demon", angle: 150, title: "Scarlet Woman has become the Demon" },
+    imp_dead:               { icon: "imp_dead",               angle: 150, title: "Killed by the Demon last night" },
+    undertaker_died_today:  { icon: "undertaker_died_today",  angle: 180, title: "Died today (Undertaker will see this character tonight)" },
+    slayer_no_ability:      { icon: "slayer_no_ability",      angle: -150, title: "Slayer has used their once-per-game shot" },
+    virgin_no_ability:      { icon: "virgin_no_ability",      angle: -150, title: "Virgin's nominator-execute ability has been used" },
+  };
+
+  // Per-player side-panel labels for each token kind. Same source of
+  // truth (chair.tokens) as the badge layer above; this just maps the
+  // kind to the row text the side panel shows.
+  const TOKEN_SEATROW = {
+    drunk:                  { label: "Is the Drunk",                cls: "flag-on" },
+    ft_red_herring:         { label: "Fortune Teller red herring",  cls: "flag-on" },
+    washerwoman_townsfolk:  { label: "Washerwoman seen",            cls: "flag-on" },
+    washerwoman_wrong:      { label: "Washerwoman wrong",           cls: "flag-on" },
+    investigator_minion:    { label: "Investigator seen",           cls: "flag-on" },
+    investigator_wrong:     { label: "Investigator wrong",          cls: "flag-on" },
+    librarian_outsider:     { label: "Librarian seen",              cls: "flag-on" },
+    librarian_wrong:        { label: "Librarian wrong",             cls: "flag-on" },
+    butler_master:          { label: "Butler's master",             cls: "flag-on" },
+    monk_safe:              { label: "Monk safe",                   cls: "flag-on" },
+    poisoned:               { label: "Poisoned (target)",           cls: "flag-on" },
+    imp_dead:               { label: "Killed by Demon",             cls: "flag-on" },
+    undertaker_died_today:  { label: "Died today",                  cls: "flag-on" },
+    scarlet_woman_is_demon: { label: "Scarlet Woman is the Demon",  cls: "flag-on" },
+    slayer_no_ability:      { label: "Slayer no ability",           cls: "flag-off" },
+    virgin_no_ability:      { label: "Virgin no ability",           cls: "flag-off" },
+  };
 
   // Append a reminder-token badge to a chair group. The badge is
   // drawn *outside* the chair circle so the chair interior keeps the
@@ -2042,95 +2428,22 @@
 
   // ---- token drag-and-drop ----
   //
-  // Each draggable status token (Drunk / FT red herring / WW
-  // townsfolk) carries ``data-drag-kind`` and ``data-source-chair``
-  // attributes. While dragged we:
-  //
-  //   * highlight every chair whose current ``character`` is eligible
-  //     to receive this token (rules below);
-  //   * follow the pointer with a clone of the token so the drop
-  //     position is visually obvious;
-  //   * on pointerup, hit-test against eligible chairs and POST to
-  //     the corresponding /api/character_pool/move_* endpoint.
-  //
-  // Eligibility rules (also enforced on the server, but checked here
-  // first so the highlight matches what the server will accept):
-  //
-  //   * drunk / washerwoman_townsfolk: chair holds a Townsfolk role
-  //     that is currently in the pool. The source chair itself is
-  //     excluded (drop-on-self is a no-op).
-  //   * ft_red_herring: chair holds a Townsfolk OR Outsider role in
-  //     the pool. (The Drunk's chair is eligible — its character
-  //     field is "Drunk", an Outsider — and per the rules the FT
-  //     can land its red herring on the actual Drunk.)
-  function characterTypeFromPreset(name) {
-    if (!currentPresetData) return null;
-    if ((currentPresetData.Townsfolk || []).includes(name)) return "townsfolk";
-    if ((currentPresetData.Outsiders || []).includes(name)) return "outsider";
-    if ((currentPresetData.Minions || []).includes(name)) return "minion";
-    if ((currentPresetData.Demons || []).includes(name)) return "demon";
-    return null;
-  }
+  // Each draggable status token carries ``data-drag-kind`` and
+  // ``data-source-chair``. While dragged we highlight every chair
+  // whose snapshot ``eligible_token_kinds`` includes this kind, follow
+  // the pointer with the original element, and on drop POST to
+  // /api/character_pool/apply_token. Eligibility itself is decided by
+  // the engine (per-character via Character.accepts_tokens) and lives
+  // on chair.eligible_token_kinds — the UI does no character logic.
 
-  function isEligibleChair(kind, chair, sourceChairId) {
-    if (!chair) return false;
-    if (chair.id === sourceChairId) return false;
-    const ch = (chair.character || "").trim();
-    if (!ch) return false;
-    if (!(poolState.names || []).includes(ch)) return false;
-    const type = characterTypeFromPreset(ch);
-    if (kind === "drunk" || kind === "washerwoman_townsfolk") {
-      return type === "townsfolk";
-    }
-    if (kind === "ft_red_herring") {
-      return type === "townsfolk" || type === "outsider";
-    }
-    if (kind === "washerwoman_wrong") {
-      // The WRONG token goes by *any* other character — Townsfolk,
-      // Outsider, Minion, or Demon. The only excluded chair is the
-      // Washerwoman herself (her chair holds "Washerwoman", which is
-      // never an eligible drop because it's the WW's own seat) and
-      // the seat that already carries the seen-Townsfolk slot. Other
-      // than that, every chair holding an in-pool role is fair game.
-      if (ch === "Washerwoman") return false;
-      const seenRole = poolState.washerwoman_townsfolk_role;
-      if (seenRole && ch === seenRole) return false;
-      return true;
-    }
-    if (kind === "librarian_outsider") {
-      return type === "outsider";
-    }
-    if (kind === "librarian_wrong") {
-      // The Librarian's WRONG token can sit on any in-pool chair
-      // except the Librarian herself and the seen-Outsider slot.
-      if (ch === "Librarian") return false;
-      const seenRole = poolState.librarian_outsider_role;
-      if (seenRole && ch === seenRole) return false;
-      return true;
-    }
-    if (kind === "investigator_minion") {
-      return type === "minion";
-    }
-    if (kind === "investigator_wrong") {
-      // Same shape as the Librarian WRONG.
-      if (ch === "Investigator") return false;
-      const seenRole = poolState.investigator_minion_role;
-      if (seenRole && ch === seenRole) return false;
-      return true;
-    }
-    return false;
-  }
+  const TOKEN_APPLY_ENDPOINT = "/api/character_pool/apply_token";
 
-  const TOKEN_MOVE_ENDPOINTS = {
-    drunk:                   "/api/character_pool/move_drunk_token",
-    ft_red_herring:          "/api/character_pool/move_ft_red_herring",
-    washerwoman_townsfolk:   "/api/character_pool/move_washerwoman_token",
-    washerwoman_wrong:       "/api/character_pool/move_washerwoman_wrong_token",
-    librarian_outsider:      "/api/character_pool/move_librarian_token",
-    librarian_wrong:         "/api/character_pool/move_librarian_wrong_token",
-    investigator_minion:     "/api/character_pool/move_investigator_token",
-    investigator_wrong:      "/api/character_pool/move_investigator_wrong_token",
-  };
+  // Slack added to ``CHAIR_RADIUS`` for drop hit-testing. Lets the
+  // storyteller drop a token slightly outside the chair circle and
+  // still have it land on the chair, so a token dropped *near* a
+  // chair edge or directly on a status badge orbiting the chair is
+  // still picked up reliably.
+  const CHAIR_DROP_SLACK = 28;
 
   // Attach pointerdown → drag → pointerup handlers to a token <image>.
   //
@@ -2153,19 +2466,21 @@
       if (ev.button !== 0) return;
       const kind = target.getAttribute("data-drag-kind");
       const sourceChairId = parseInt(target.getAttribute("data-source-chair"), 10);
-      if (!kind || !TOKEN_MOVE_ENDPOINTS[kind]) return;
+      if (!kind || !TOKEN_VIEW[kind]) return;
       ev.preventDefault();
       ev.stopPropagation();
 
       try { target.setPointerCapture(ev.pointerId); } catch (e) {}
       target.style.cursor = "grabbing";
 
-      // Compute eligible chairs once at gesture start; client-side
-      // and server-side eligibility match (see isEligibleChair). The
-      // ``chair-drop-target`` class lights up valid targets.
+      // Eligible chairs come straight from the snapshot. Source chair
+      // is excluded — drop-on-self is a no-op.
       const eligibleIds = new Set();
       for (const c of chairs.values()) {
-        if (isEligibleChair(kind, c, sourceChairId)) eligibleIds.add(c.id);
+        if (c.id === sourceChairId) continue;
+        const kinds = Array.isArray(c.eligible_token_kinds)
+          ? c.eligible_token_kinds : [];
+        if (kinds.indexOf(kind) !== -1) eligibleIds.add(c.id);
       }
       const chairGroups = chairsG.querySelectorAll("g[data-id]");
       chairGroups.forEach(g => {
@@ -2214,21 +2529,50 @@
       };
 
       const onUp = (uev) => {
-        // Hit-test before cleanup so the highlight on the target
-        // chair lingers for the user's last frame.
-        const stack = document.elementsFromPoint(uev.clientX, uev.clientY);
-        let chairId = null;
-        for (const el of stack) {
-          const g = el.closest && el.closest("g[data-id]");
-          if (g) {
-            chairId = parseInt(g.getAttribute("data-id"), 10);
-            break;
+        // Hit-test geometrically against eligible chairs in board
+        // coordinates. We used to rely on ``elementsFromPoint`` here,
+        // but that caught the dragged token's own hit-circle (which is
+        // a child of the source chair's <g data-id>) and reported the
+        // *source* chair as the drop target — so dropping directly on
+        // an eligible chair circle silently no-op'd. Computing the
+        // closest eligible chair within ``CHAIR_RADIUS + slack`` is
+        // robust to that and also lets the storyteller drop slightly
+        // off the rim, which matches the visible "amber glow" target
+        // affordance (the glow extends past the chair edge).
+        const drop = clientToBoard(uev.clientX, uev.clientY);
+        let bestId = null;
+        let bestDist = Infinity;
+        const limit = CHAIR_RADIUS + CHAIR_DROP_SLACK;
+        for (const c of chairs.values()) {
+          if (!eligibleIds.has(c.id)) continue;
+          const cx = c.x * BOARD_SIZE;
+          const cy = c.y * BOARD_SIZE;
+          const dx = drop.x - cx;
+          const dy = drop.y - cy;
+          const d = Math.sqrt(dx * dx + dy * dy);
+          if (d <= limit && d < bestDist) {
+            bestDist = d;
+            bestId = c.id;
+          }
+        }
+        // Fall back to ``elementsFromPoint`` for the rare case where
+        // the geometric hit-test missed but the user clearly aimed at
+        // a chair's text/badge stack. Skip elements inside the dragged
+        // wrapper so we don't mis-attribute the drop to the source.
+        if (bestId == null) {
+          const stack = document.elementsFromPoint(uev.clientX, uev.clientY);
+          for (const el of stack) {
+            if (wrap.contains(el)) continue;
+            const g = el.closest && el.closest("g[data-id]");
+            if (!g) continue;
+            const id = parseInt(g.getAttribute("data-id"), 10);
+            if (eligibleIds.has(id)) { bestId = id; break; }
           }
         }
         cleanup();
-        if (chairId == null || !eligibleIds.has(chairId)) return;
-        if (chairId === sourceChairId) return;
-        commitMove(kind, chairId);
+        if (bestId == null) return;
+        if (bestId === sourceChairId) return;
+        commitMove(kind, bestId);
       };
 
       const onCancel = () => { cleanup(); };
@@ -2244,24 +2588,24 @@
     });
   }
 
-  // POST the move and refresh from the server. Split out so the drag
-  // handler stays focused on input plumbing.
+  // POST the move through the unified apply_token endpoint. The
+  // engine handles mutex swap (WW TOWNSFOLK ↔ WW WRONG, etc.) and
+  // plain moves alike.
   async function commitMove(kind, chairId) {
     try {
-      const r = await fetch(TOKEN_MOVE_ENDPOINTS[kind], {
+      const r = await fetch(TOKEN_APPLY_ENDPOINT, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ chair_id: chairId }),
+        body: JSON.stringify({ kind, chair_id: chairId }),
       });
       const data = await r.json().catch(() => ({}));
       if (!r.ok) {
         console.warn("token move failed", kind, data);
         return;
       }
-      // The drunk-move endpoint returns updated chairs as well; the
-      // FT/WW endpoints return only the pool snapshot. In both cases
-      // re-fetching /api/state is the simplest way to resync the
-      // local chair map and the pool state.
+      // Re-fetch /api/state to resync chairs + pool (the apply_token
+      // endpoint returns both snapshots, but a refresh keeps the
+      // engine player map in sync as well).
       await refresh();
     } catch (e) {
       console.warn("token move failed", e);
@@ -2339,24 +2683,6 @@
     g.appendChild(t);
   }
 
-  // Compute the clockwise seat position (1..N) for every chair on the
-  // board. Chair badges show this rather than the raw chair id so the
-  // numbers always read clockwise from 12 o'clock — and they line up
-  // with the engine's player_id assignment, which is also clockwise.
-  function clockwiseSeatPositions() {
-    function angle(c) {
-      const dx = c.x - 0.5, dy = c.y - 0.5;
-      // atan2 returns -pi..pi (counter-clockwise from +x). Shift so
-      // 12 o'clock is 0 and the result grows clockwise.
-      const a = Math.atan2(dy, dx);
-      return ((a + Math.PI / 2) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI);
-    }
-    const sorted = [...chairs.values()].sort((a, b) => angle(a) - angle(b));
-    const pos = new Map();
-    sorted.forEach((c, i) => pos.set(c.id, i + 1));
-    return pos;
-  }
-
   function render() {
     renderStoryteller();
 
@@ -2370,9 +2696,10 @@
       _currentHighlightPlayerIds || []
     );
     // Draw in id order so overlaps behave predictably. Badge numbers
-    // come from the clockwise position map below — they reflect the
-    // visual seating order, not the chair store's internal id.
-    const seatPos = clockwiseSeatPositions();
+    // are simply ``chair.id`` — the chair store keeps ids compacted to
+    // 1..N through every add/remove, and the engine assigns
+    // ``player.id == chair.id`` so a single number is shared across
+    // chair badge, chair store id, and engine player id.
     const ordered = [...chairs.values()].sort((a, b) => a.id - b.id);
     for (const c of ordered) {
       const g = document.createElementNS("http://www.w3.org/2000/svg", "g");
@@ -2392,20 +2719,15 @@
 
       // Seat number. Uses the chair's id, which the server keeps
       // compacted to 1..N: adding a chair appends N+1, and removing a
-      // chair renumbers the rest so there are no gaps.
-      appendChairNumber(g, seatPos.get(c.id) || c.id);
+      // chair renumbers the rest so there are no gaps. The engine's
+      // ``_sync_chairs_to_engine`` walks chairs in chair-id order so
+      // ``player.id == chair.id`` — one number system, end to end.
+      appendChairNumber(g, c.id);
 
       const name = (c.name || "").trim();
       const character = (c.character || "").trim();
-      // The Drunk thinks they are some Townsfolk: on the board we
-      // surface the fake Townsfolk role as the visible character and
-      // mark the chair with a small drunk-token glyph (rendered below).
-      // If the storyteller hasn't picked the fake yet, fall back to
-      // "Drunk" so the chair text isn't blank.
-      const isDrunk = (character === "Drunk");
-      const characterDisplay = (isDrunk && poolState.drunk_fake_role)
-        ? poolState.drunk_fake_role
-        : character;
+      // Visible role; the engine swaps the Drunk's fake role in here.
+      const characterDisplay = (c.display_character || character).trim();
       const textsToFit = [];
       // All offsets are nudged below the chair's vertical center so the
       // seat number (centered at y=-37) has clearance above the text.
@@ -2431,251 +2753,30 @@
         textsToFit.push(tChar);
       }
 
-      // Status reminder tokens — small circular tokens from
-      // /assets/tokens/ placed *outside* the chair circle so the chair
-      // interior stays reserved for the role text. Each status that
-      // applies to this seat gets its own token, fanned out around the
-      // top of the chair on a fixed angle so they don't overlap.
-      //
-      //   * Drunk (upper-right, 45°): the player thinks they're a
-      //     Townsfolk; the token reminds the storyteller they're really
-      //     the Drunk.
-      //   * Fortune Teller's red herring (upper-left, -45°): this seat
-      //     is the FT's red herring — the Fortune Teller will register
-      //     them as a Demon when checked.
-      //   * Washerwoman townsfolk (top-center, 0°): this seat holds the
-      //     Townsfolk role the WW was shown on the first night.
-      //
-      // All three tokens are draggable (see attachTokenDrag below); the
-      // ``data-drag-token`` attribute marks each draggable image and
-      // points at the move endpoint that fires on drop.
-      const ftRedHerringRole = poolState.ft_red_herring_role || null;
-      const wwTownsfolkRole = poolState.washerwoman_townsfolk_role || null;
-      const wwWrongRole = poolState.washerwoman_wrong_role || null;
-      const investigatorMinionRole = poolState.investigator_minion_role || null;
-      const investigatorWrongRole = poolState.investigator_wrong_role || null;
-      const librarianOutsiderRole = poolState.librarian_outsider_role || null;
-      const librarianWrongRole = poolState.librarian_wrong_role || null;
-      const butlerMasterRole = poolState.butler_master_role || null;
-      const monkSafeRole = poolState.monk_safe_role || null;
-      const poisonedRole = poolState.poisoned_role || null;
-      // Multiple seats can carry the DEAD reminder over the course of a
-      // game (one per Imp-killed player), so this is a list. ``isImpDead``
-      // checks membership rather than equality.
-      const impDeadRoles = Array.isArray(poolState.imp_dead_roles)
-        ? poolState.imp_dead_roles
-        : [];
-      const undertakerDiedRole = poolState.undertaker_died_today_role || null;
-      const isRedHerring = (
-        ftRedHerringRole !== null && character === ftRedHerringRole
-      );
-      const isWashTownsfolk = (
-        wwTownsfolkRole !== null && character === wwTownsfolkRole
-      );
-      const isWashWrong = (
-        wwWrongRole !== null && character === wwWrongRole
-      );
-      const isInvestigatorMinion = (
-        investigatorMinionRole !== null && character === investigatorMinionRole
-      );
-      const isInvestigatorWrong = (
-        investigatorWrongRole !== null && character === investigatorWrongRole
-      );
-      const isLibrarianOutsider = (
-        librarianOutsiderRole !== null && character === librarianOutsiderRole
-      );
-      const isLibrarianWrong = (
-        librarianWrongRole !== null && character === librarianWrongRole
-      );
-      const isButlerMaster = (
-        butlerMasterRole !== null && character === butlerMasterRole
-      );
-      const isMonkSafe = (
-        monkSafeRole !== null && character === monkSafeRole
-      );
-      const isPoisoned = (
-        poisonedRole !== null && character === poisonedRole
-      );
-      const isImpDead = (
-        !!character && impDeadRoles.indexOf(character) !== -1
-      );
-      const isUndertakerDied = (
-        undertakerDiedRole !== null && character === undertakerDiedRole
-      );
-      const isScarletWomanIsDemon = (
-        !!poolState.scarlet_woman_is_demon && character === "Scarlet Woman"
-      );
-      const isSlayerSpent = (
-        !!poolState.slayer_no_ability && character === "Slayer"
-      );
-      const isVirginSpent = (
-        !!poolState.virgin_no_ability && character === "Virgin"
-      );
-      // -----------------------------------------------------------
-      // Status-token angle layout (chair-relative; 0° = up,
-      // +clockwise).
-      //
-      // Slots are spaced 30° apart so adjacent badges never overlap.
-      // Mutually-exclusive token pairs share an angle: a chair can
-      // only ever carry one half of each pair (Washerwoman saw THIS
-      // chair as the Townsfolk OR as the WRONG, never both — the
-      // tokens go on different chairs), so collapsing them to one
-      // slot widens the spread.
-      //
-      // Left semicircle (-30° → -150°) holds the first-night-only
-      // start-knowing tokens (WW / Inv / Lib pairs). Per the rule in
-      // CLAUDE.md, those tokens are hidden once the game has
-      // progressed past the first night via the
-      // ``isPastFirstNight()`` gate below — game state is unchanged,
-      // only the badge is removed from the grimoire.
-      //
-      // Right semicircle (0° → +180°) holds persistent / nightly /
-      // end-state markers, which stay visible for the duration of
-      // the game.
-      //
-      //   -150° : Slayer NO ABILITY  /  Virgin NO ABILITY (mutually
-      //           exclusive — each lives on its own role's chair)
-      //   -120° : Librarian OUTSIDER /  Librarian WRONG (mutex pair)
-      //    -90° : Investigator MINION / Investigator WRONG (mutex)
-      //    -60° : Washerwoman TOWNSFOLK / Washerwoman WRONG (mutex)
-      //    -30° : Fortune Teller RED HERRING
-      //      0° : (reserved — top stays clear for visual balance)
-      //     30° : IS THE DRUNK
-      //     60° : Butler MASTER
-      //     90° : Monk SAFE
-      //    120° : Poisoned
-      //    150° : Imp DEAD  /  Scarlet Woman IS THE DEMON  (different
-      //           tokens but rarely co-occur; if a chair somehow ends
-      //           up with both, the SW takes 150° and Imp DEAD slides
-      //           to 165°)
-      //    180° : Undertaker DIED TODAY
-      const showFirstNightTokens = !isPastFirstNight();
-
-      if (isDrunk) {
-        appendStatusToken(g, "drunk", 30, {
-          title: "Is the Drunk"
-            + (poolState.drunk_fake_role
-                ? ` (thinks they're the ${poolState.drunk_fake_role})`
-                : ""),
-          dragKind: "drunk",
-          chairId: c.id,
-        });
-      }
-      if (isRedHerring) {
-        appendStatusToken(g, "fortune_teller_red_herring", -30, {
-          title: "Fortune Teller's red herring",
-          dragKind: "ft_red_herring",
-          chairId: c.id,
-        });
-      }
-      // Washerwoman pair — mutually exclusive on any single chair, so
-      // they share -60°. First-night-only: hidden once phase is past
-      // first_night.
-      if (showFirstNightTokens && isWashTownsfolk) {
-        appendStatusToken(g, "washerwoman_townsfolk", -60, {
-          title: "Washerwoman saw this Townsfolk",
-          dragKind: "washerwoman_townsfolk",
-          chairId: c.id,
-        });
-      }
-      if (showFirstNightTokens && isWashWrong) {
-        appendStatusToken(g, "washerwoman_wrong", -60, {
-          title: "Washerwoman WRONG",
-          dragKind: "washerwoman_wrong",
-          chairId: c.id,
-        });
-      }
-      // Investigator pair — mutex, share -90°. First-night-only.
-      if (showFirstNightTokens && isInvestigatorMinion) {
-        appendStatusToken(g, "investigator_minion", -90, {
-          title: "Investigator saw this Minion",
-          dragKind: "investigator_minion",
-          chairId: c.id,
-        });
-      }
-      if (showFirstNightTokens && isInvestigatorWrong) {
-        appendStatusToken(g, "investigator_wrong", -90, {
-          title: "Investigator WRONG",
-          dragKind: "investigator_wrong",
-          chairId: c.id,
-        });
-      }
-      // Librarian pair — mutex, share -120°. First-night-only.
-      if (showFirstNightTokens && isLibrarianOutsider) {
-        appendStatusToken(g, "librarian_outsider", -120, {
-          title: "Librarian saw this Outsider",
-          dragKind: "librarian_outsider",
-          chairId: c.id,
-        });
-      }
-      if (showFirstNightTokens && isLibrarianWrong) {
-        appendStatusToken(g, "librarian_wrong", -120, {
-          title: "Librarian WRONG",
-          dragKind: "librarian_wrong",
-          chairId: c.id,
-        });
-      }
-      if (isButlerMaster) {
-        appendStatusToken(g, "butler_master", 60, {
-          title: "Butler's Master",
-          dragKind: "butler_master",
-          chairId: c.id,
-        });
-      }
-      if (isMonkSafe) {
-        appendStatusToken(g, "monk_safe", 90, {
-          title: "Monk-protected tonight",
-          dragKind: "monk_safe",
-          chairId: c.id,
-        });
-      }
-      if (isPoisoned) {
-        appendStatusToken(g, "poisoned", 120, {
-          title: "Poisoned by the Poisoner",
-          dragKind: "poisoned",
-          chairId: c.id,
-        });
-      }
-      // 150° is shared between Imp DEAD and Scarlet Woman IS THE
-      // DEMON. The two rarely co-occur on a single chair (a Scarlet
-      // Woman who became the Demon is the live demon, not a corpse).
-      // If they ever do, Scarlet Woman keeps 150° and Imp DEAD shifts
-      // slightly to 165° to avoid a visual collision.
-      if (isScarletWomanIsDemon) {
-        appendStatusToken(g, "scarlet_woman_is_demon", 150, {
-          title: "Scarlet Woman has become the Demon",
-          dragKind: "scarlet_woman_is_demon",
-          chairId: c.id,
-        });
-      }
-      if (isImpDead) {
-        appendStatusToken(g, "imp_dead", isScarletWomanIsDemon ? 165 : 150, {
-          title: "Killed by the Demon last night",
-          dragKind: "imp_dead",
-          chairId: c.id,
-        });
-      }
-      if (isUndertakerDied) {
-        appendStatusToken(g, "undertaker_died_today", 180, {
-          title: "Died today (Undertaker will see this character tonight)",
-          dragKind: "undertaker_died_today",
-          chairId: c.id,
-        });
-      }
-      // Slayer / Virgin NO ABILITY tokens live on their respective
-      // roles' chairs (Slayer chair / Virgin chair) and are
-      // mutually exclusive on any one chair, so they share -150°.
-      if (isSlayerSpent) {
-        appendStatusToken(g, "slayer_no_ability", -150, {
-          title: "Slayer has used their once-per-game shot",
-          dragKind: "slayer_no_ability",
-          chairId: c.id,
-        });
-      }
-      if (isVirginSpent) {
-        appendStatusToken(g, "virgin_no_ability", -150, {
-          title: "Virgin's nominator-execute ability has been used",
-          dragKind: "virgin_no_ability",
+      // Status reminder tokens — the engine tells us which tokens
+      // sit on this chair via ``c.tokens``; the UI just looks up
+      // presentation in TOKEN_VIEW (icon, angle, hover title) and
+      // renders. Visibility is purely a function of state — when the
+      // engine clears a slot the token simply stops appearing.
+      const tokenKinds = (c.tokens || []).map(t => t && t.kind).filter(Boolean);
+      // Visual collision: imp_dead and scarlet_woman_is_demon share
+      // 150°; if a chair somehow carries both, nudge imp_dead to 165°.
+      const bothImpAndSw =
+        tokenKinds.indexOf("imp_dead") !== -1
+        && tokenKinds.indexOf("scarlet_woman_is_demon") !== -1;
+      for (const kind of tokenKinds) {
+        const spec = TOKEN_VIEW[kind];
+        if (!spec) continue;
+        const angle = (kind === "imp_dead" && bothImpAndSw) ? 165 : spec.angle;
+        let title = spec.title;
+        if (kind === "drunk"
+            && c.display_character
+            && c.display_character !== "Drunk") {
+          title = `Is the Drunk (thinks they're the ${c.display_character})`;
+        }
+        appendStatusToken(g, spec.icon, angle, {
+          title,
+          dragKind: kind,
           chairId: c.id,
         });
       }
@@ -2708,6 +2809,10 @@
     // re-renders and only clears when the storyteller advances the
     // prompt (respondPrompt → applyHighlight([])).
     if (typeof reapplyHighlight === "function") reapplyHighlight();
+    // Same story for the prompt-driven picked-chair markers — render()
+    // wipes per-chair classes when it rebuilds the SVG, so reapply the
+    // current selection on top of the freshly-drawn chairs.
+    if (typeof reapplyChairSelection === "function") reapplyChairSelection();
   }
 
   function svgText(cls, text, x, y) {
@@ -2755,7 +2860,6 @@
     rect.setAttribute("y", -h / 2);
     rect.setAttribute("width", w);
     rect.setAttribute("height", h);
-    // Sharp corners as requested.
     rect.setAttribute("fill", "var(--st-fill)");
     rect.setAttribute("stroke", "var(--st-edge)");
     rect.setAttribute("stroke-width", "3");
@@ -2868,7 +2972,19 @@
       if (wasDrag) {
         pushMove(chair.id, chair.x, chair.y);
       } else if (wasClick) {
-        if (isInGame()) {
+        // If a SELECT_PLAYER / SELECT_PLAYERS storyteller prompt is
+        // active, the chair click is repurposed as a pick on the
+        // town square: the side panel does NOT open, and the click
+        // toggles/replaces the selection (subject to eligibility).
+        // The storyteller still presses Next on the prompt panel to
+        // commit the picks. ``handlePromptChairClick`` returns true
+        // when it has consumed the click so we fall through to the
+        // existing side-panel / chair-editor paths only when there's
+        // no active player-selection prompt.
+        if (typeof handlePromptChairClick === "function"
+            && handlePromptChairClick(chair)) {
+          // consumed by the prompt — nothing else to do
+        } else if (isInGame()) {
           // Once the game has started, a chair click opens the per-
           // player side panel (read-only state + nominate/vote/etc.
           // buttons) instead of the setup-phase chair editor.
@@ -3166,9 +3282,14 @@
   // (the chair's player_id is stable; the seat panel re-renders from
   // the engine snapshot every refresh while open).
   let seatPanelChair = null;
+  // Whether the per-player Conditions section has its full token-list
+  // expanded. Sticky across refreshes while the panel is open; reset
+  // when the panel closes so it doesn't auto-expand for the next seat.
+  let seatPanelTokensExpanded = false;
 
   function openSeatPanel(chair) {
     seatPanelChair = chair;
+    seatPanelTokensExpanded = false;
     seatPanelMsg.textContent = "";
     seatPanelMsg.classList.remove("ok");
     hideNominatePicker();
@@ -3179,6 +3300,7 @@
 
   function closeSeatPanel() {
     seatPanelChair = null;
+    seatPanelTokensExpanded = false;
     seatPanel.classList.remove("open");
     seatPanel.setAttribute("aria-hidden", "true");
     hideNominatePicker();
@@ -3244,33 +3366,6 @@
       p.has_dead_vote ? "flag-on" : "flag-off"
     ));
 
-    rows.push(`<div class="section-title">Conditions</div>`);
-    rows.push(seatRow(
-      "Drunk",
-      p.drunk ? "yes" : "no",
-      p.drunk ? "flag-on" : "flag-off"
-    ));
-    rows.push(seatRow(
-      "Poisoned",
-      p.poisoned ? "yes" : "no",
-      p.poisoned ? "flag-on" : "flag-off"
-    ));
-    rows.push(seatRow(
-      "Demon-protected",
-      p.protected_from_demon ? "yes" : "no",
-      p.protected_from_demon ? "flag-on" : "flag-off"
-    ));
-    if (p.once_per_game) {
-      rows.push(seatRow(
-        "Once-per-game",
-        p.once_per_game_used ? "spent" : "available",
-        p.once_per_game_used ? "flag-off" : "flag-on"
-      ));
-    }
-    if (Array.isArray(p.mad_about) && p.mad_about.length) {
-      rows.push(seatRow("Mad about", p.mad_about.join(", ")));
-    }
-
     rows.push(`<div class="section-title">Today</div>`);
     rows.push(seatRow(
       "Nominated today",
@@ -3283,6 +3378,84 @@
       p.has_been_nominated_today ? "flag-on" : "flag-off"
     ));
 
+    rows.push(`<div class="section-title">Conditions</div>`);
+    // Drunk and Poisoned are always shown — they are the two
+    // condition statuses every Storyteller wants visible at a glance.
+    rows.push(seatRow(
+      "Drunk",
+      p.drunk ? "yes" : "no",
+      p.drunk ? "flag-on" : "flag-off"
+    ));
+    rows.push(seatRow(
+      "Poisoned",
+      p.poisoned ? "yes" : "no",
+      p.poisoned ? "flag-on" : "flag-off"
+    ));
+
+    // "Show all" toggle — when expanded, list every reminder-token
+    // condition that this seat is currently carrying. The token state
+    // is derived from ``poolState`` exactly the way the chair badges
+    // are (match by role name), so the panel never disagrees with the
+    // grimoire. Each row only renders if the token actually applies
+    // to this player — no clutter for tokens this seat doesn't carry.
+    rows.push(
+      `<div class="row token-toggle-row">`
+      + `<button type="button" class="token-toggle"`
+      + ` aria-expanded="${seatPanelTokensExpanded ? "true" : "false"}"`
+      + ` data-action="toggle-tokens">`
+      + (seatPanelTokensExpanded ? "▾ Hide all" : "▸ Show all")
+      + `</button>`
+      + `</div>`
+    );
+
+    if (seatPanelTokensExpanded) {
+      const charName = p.character || "";
+      const ps = poolState || {};
+      const tokenRows = [];
+
+      // Persistent / per-player condition flags from the engine
+      // snapshot (also rendered as chair tokens for the matching roles).
+      if (p.once_per_game) {
+        tokenRows.push(seatRow(
+          "Once-per-game",
+          p.once_per_game_used ? "spent" : "available",
+          p.once_per_game_used ? "flag-off" : "flag-on"
+        ));
+      }
+      if (Array.isArray(p.mad_about) && p.mad_about.length) {
+        tokenRows.push(seatRow("Mad about", p.mad_about.join(", ")));
+      }
+
+      // Tokens this seat carries — exactly the same source of truth
+      // as the chair badges (chair.tokens, set by the engine).
+      const myChair = (typeof p.id === "number")
+        ? [...chairs.values()].find(c => c.player_id === p.id) || null
+        : null;
+      const myKinds = (myChair && Array.isArray(myChair.tokens))
+        ? myChair.tokens.map(t => t && t.kind).filter(Boolean)
+        : [];
+      for (const kind of myKinds) {
+        const view = TOKEN_SEATROW[kind];
+        if (!view) continue;
+        let value = "yes";
+        if (kind === "drunk"
+            && myChair.display_character
+            && myChair.display_character !== "Drunk") {
+          value = `yes (thinks ${myChair.display_character})`;
+        }
+        tokenRows.push(seatRow(view.label, value, view.cls));
+      }
+
+      if (tokenRows.length === 0) {
+        rows.push(
+          `<div class="row"><span class="value" style="color:#6a5e44">`
+          + `(no other token conditions)</span></div>`
+        );
+      } else {
+        rows.push(...tokenRows);
+      }
+    }
+
     if (Array.isArray(p.notes) && p.notes.length) {
       rows.push(`<div class="section-title">Notes</div>`);
       for (const n of p.notes) {
@@ -3291,6 +3464,19 @@
     }
 
     seatPanelStates.innerHTML = rows.join("");
+
+    // Wire the token-toggle button (re-rendered on every state pass,
+    // so the listener has to be re-attached each time).
+    const tokenToggleBtn = seatPanelStates.querySelector(
+      ".token-toggle[data-action='toggle-tokens']"
+    );
+    if (tokenToggleBtn) {
+      tokenToggleBtn.addEventListener("click", (ev) => {
+        ev.preventDefault();
+        seatPanelTokensExpanded = !seatPanelTokensExpanded;
+        renderSeatPanel();
+      });
+    }
 
     // Action gating:
     //   * Use ability — alive, has a daytime ability, not yet spent
@@ -3331,12 +3517,6 @@
     seatActExecute.title = isDay
       ? (p.alive ? "Execute this player." : "Already dead.")
       : "Executions only happen during day.";
-  }
-
-  function escapeHtml(s) {
-    return String(s)
-      .replace(/&/g, "&amp;").replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
   }
 
   function setSeatMsg(text, ok) {
@@ -3666,19 +3846,15 @@
 
   document.getElementById("btnAdd").addEventListener("click", addChair);
 
-  // ----- Debug mode -----
+  // ----- Setup convenience buttons -----
   //
-  // A development convenience: toggling debug mode reveals extra
-  // toolbar buttons that streamline test setup. The mode itself is
-  // just a CSS class on <body>; persistence lives in localStorage so
-  // a developer who reloads the page doesn't have to re-enable it.
-  //
-  // Currently provided:
+  // Two toolbar buttons that streamline setup:
   //   * Auto-fill — assign random names + characters from the pool
   //                 to every existing chair.
   //   * Quick Setup — ensure 8 chairs exist, randomize the pool from
   //                   the current preset, then auto-fill.
-  const DEBUG_STORAGE_KEY = "botcDebugMode";
+  // Both buttons carry the ``phase-setup-only`` class so they vanish
+  // once the game starts.
   const DEBUG_NAMES = [
     "Alice", "Bob", "Charlie", "Dana", "Eve", "Frank", "Grace", "Hank",
     "Iris", "Jack", "Kira", "Liam", "Mia", "Noah", "Olive", "Pat",
@@ -3686,19 +3862,6 @@
     "Yara", "Zane",
   ];
   const DEBUG_QUICK_SETUP_TARGET = 8;  // # chairs Quick Setup will leave you with
-
-  let debugMode = false;
-  try {
-    debugMode = localStorage.getItem(DEBUG_STORAGE_KEY) === "1";
-  } catch (e) { /* private mode etc. */ }
-
-  function setDebugMode(on) {
-    debugMode = !!on;
-    document.body.classList.toggle("debug-mode", debugMode);
-    try {
-      localStorage.setItem(DEBUG_STORAGE_KEY, debugMode ? "1" : "0");
-    } catch (e) {}
-  }
 
   function shuffled(arr) {
     const a = arr.slice();
@@ -3755,13 +3918,8 @@
     await debugAutoFill();
   }
 
-  document.getElementById("btnDebugMode").addEventListener("click", () => {
-    setDebugMode(!debugMode);
-  });
   document.getElementById("btnDebugFill").addEventListener("click", debugAutoFill);
   document.getElementById("btnDebugSeed").addEventListener("click", debugQuickSetup);
-  // Apply persisted debug-mode state on first paint.
-  setDebugMode(debugMode);
 
   // ----- Start Game button -----
   //
@@ -3780,6 +3938,11 @@
   const startBtn = document.getElementById("btnStartGame");
   const resetBtn = document.getElementById("btnResetGame");
   const startStatus = document.getElementById("startStatus");
+  // Banner above the Start Game pill that surfaces the current
+  // blocker (missing character, unplaced token, mismatched pool,
+  // etc.) so the storyteller doesn't have to hover the button to
+  // see why it's disabled.
+  const startReadinessBanner = document.getElementById("startReadinessBanner");
 
   function setStartStatus(msg, kind) {
     startStatus.textContent = msg || "";
@@ -3810,28 +3973,62 @@
       // need to flip if the storyteller resets and replays).
       startBtn.textContent = "▶ Start Game";
       // Disabled-or-not is decided by maybeUpdateStartButtonReadiness().
+      // Also hide the game-end overlay if it was lingering from a
+      // previous game (the storyteller just hit Reset).
+      hideGameEndOverlay();
+      hideReportOverlay();
+      _gameEndShownFor = null;
     } else if (phase === "finished") {
       // Same toolbar layout as Night/Day; nothing else to do here.
       setStartStatus("Game finished.", "ok");
+      // Trigger the game-end prompt overlay (idempotent — it tracks
+      // which winner+reason it has already shown so re-renders don't
+      // re-open the modal after the storyteller closes it).
+      maybeShowGameEndOverlay(engineSnapshot);
     } else {
       if (!startStatus.textContent) {
         setStartStatus("Engine is in " + phase + " phase.", "ok");
       }
     }
+    // Drive the live console panel's polling off the engine phase —
+    // anything past setup means there's structured activity worth
+    // streaming; setup means we tear it down so the panel is empty
+    // when the storyteller next starts a game.
+    syncConsolePolling(engineSnapshot);
     maybeUpdateStartButtonReadiness();
+    // Sync the Back button's enabled state with the engine's history.
+    // The button is hidden during setup by CSS; here we just disable
+    // it when there is nothing to rewind to so the storyteller sees
+    // a greyed-out "◀ Back" instead of a button that no-ops on click.
+    const backBtnRef = document.getElementById("btnBack");
+    if (backBtnRef) {
+      const hist = engineSnapshot && typeof engineSnapshot.history_size === "number"
+        ? engineSnapshot.history_size : 0;
+      backBtnRef.disabled = hist <= 0;
+      backBtnRef.title = hist > 0
+        ? "Rewind to the previous ability (mid-ability: redo selections)."
+        : "Nothing to go back to yet.";
+    }
   }
 
   // Disable Start Game until every chair has both a player name and a
   // character, AND the multiset of chair characters matches the
-  // characters listed in the right-side pool panel. Called whenever
-  // chairs / characters change so the button reflects the current
-  // setup state in real time.
+  // characters listed in the right-side pool panel, AND every setup
+  // token (Drunk fake / FT red herring / WW seen+wrong / Librarian
+  // seen+wrong / Investigator seen+wrong) is set to a role that's
+  // actually in play. Called whenever chairs / characters / pool
+  // change so the button reflects the current setup state in real
+  // time. The current blocker (if any) is surfaced inline next to the
+  // button as well as on hover, so the storyteller can always see why
+  // they can't start.
   function maybeUpdateStartButtonReadiness() {
     const phase = document.body.classList.contains("phase-setup")
       ? "setup" : "other";
     if (phase !== "setup") {
-      // Let CSS hide the button entirely.
+      // Let CSS hide the button entirely; clear any setup readiness
+      // message so it doesn't linger past the start of a game.
       startBtn.disabled = true;
+      _setReadinessMessage("");
       return;
     }
     const list = [...chairs.values()];
@@ -3843,24 +4040,22 @@
       && (c.character || "").trim() !== ""
     );
     if (seatedCount < 5) {
-      startBtn.disabled = true;
-      startBtn.title = `Need at least 5 players (${seatedCount}/5).`;
+      _blockStart(`Need 5+ players (${seatedCount}/5).`);
       return;
     }
     if (!allFilled) {
       const missing = list.filter(c =>
         !(c.name || "").trim() || !(c.character || "").trim()
       ).length;
-      startBtn.disabled = true;
-      startBtn.title = `${missing} chair${missing === 1 ? "" : "s"} need a character.`;
+      _blockStart(`${missing} player${missing === 1 ? "" : "s"} unassigned.`);
       return;
     }
 
-    // Step 2: chair characters must multiset-match the pool.
-    const chairBag = new Map();
+    // Step 2: player characters must multiset-match the pool.
+    const playerBag = new Map();
     for (const c of list) {
       const ch = (c.character || "").trim();
-      if (ch) chairBag.set(ch, (chairBag.get(ch) || 0) + 1);
+      if (ch) playerBag.set(ch, (playerBag.get(ch) || 0) + 1);
     }
     const poolBag = new Map();
     for (const n of (poolState.names || [])) {
@@ -3868,32 +4063,153 @@
     }
     let mismatch = null;
     if (poolBag.size === 0) {
-      mismatch = "Add characters to the pool first.";
-    } else if (chairBag.size !== poolBag.size) {
-      mismatch = "Chair characters and the pool don't match.";
+      mismatch = "Pool is empty.";
+    } else if (playerBag.size !== poolBag.size) {
+      mismatch = "Players don't match pool.";
     } else {
-      for (const [name, count] of chairBag) {
+      for (const [name, count] of playerBag) {
         if (poolBag.get(name) !== count) {
-          mismatch = `Chair characters and the pool don't match (${name}).`;
+          mismatch = `${name} mismatch.`;
           break;
         }
       }
       if (!mismatch) {
         for (const [name, count] of poolBag) {
-          if (chairBag.get(name) !== count) {
-            mismatch = `Pool has a ${name} that no chair holds.`;
+          if (playerBag.get(name) !== count) {
+            mismatch = `${name} unassigned.`;
             break;
           }
         }
       }
     }
     if (mismatch) {
-      startBtn.disabled = true;
-      startBtn.title = mismatch;
+      _blockStart(mismatch);
       return;
     }
+
+    // Step 3: every setup token whose owner role is in play must be
+    // assigned to a valid in-pool role. The engine's autofill keeps
+    // these slots populated whenever possible, but the storyteller
+    // can drag a token onto an ineligible chair via legacy paths or
+    // a stale UI; surface that here so they don't hit "Start" and
+    // get a server-side rejection.
+    const inPool = new Set(poolState.names || []);
+    const tokenIssue = _validateSetupTokens(inPool);
+    if (tokenIssue) {
+      _blockStart(tokenIssue);
+      return;
+    }
+
     startBtn.disabled = false;
     startBtn.title = "All chairs ready — click to start the game.";
+    _setReadinessMessage("");
+  }
+
+  // Helper: mark the Start Game button as blocked with a reason,
+  // showing the reason both as the button's hover-title and as an
+  // inline message in the toolbar status span. Pulled out so the
+  // multiple early-returns above stay readable.
+  function _blockStart(reason) {
+    startBtn.disabled = true;
+    startBtn.title = reason;
+    _setReadinessMessage(reason);
+  }
+
+  // Drive the visible readiness message via the dedicated banner
+  // anchored above the Start Game pill. The banner sits in a fixed
+  // position so it's always in the storyteller's eyeline when they
+  // glance at the bottom-right corner; the toolbar ``startStatus``
+  // span used to be reused for this but its inline ellipsis-truncate
+  // styling clipped longer token-validation messages.
+  function _setReadinessMessage(msg) {
+    if (startReadinessBanner) {
+      startReadinessBanner.textContent = msg || "";
+    }
+  }
+
+  // Walk through every setup token type and return the first
+  // human-readable issue, or "" if every token is in a valid spot.
+  // Pre-condition: the pool's character multiset already matches the
+  // chairs (callers check this before invoking us).
+  function _validateSetupTokens(inPool) {
+    const ps = poolState || {};
+    // Without a loaded preset we can't classify roles into Townsfolk
+    // / Outsider / Minion buckets, so the type-conditioned checks
+    // below would all false-positive ("Drunk fake must be Townsfolk"
+    // even when Slayer is in fact a Townsfolk). The server validates
+    // these strictly at start_game time anyway, so it's safe to skip
+    // the client-side check during the brief window before the
+    // preset finishes loading.
+    if (!currentPresetData) return "";
+    const tf = currentPresetData.Townsfolk || [];
+    const out = currentPresetData.Outsiders || [];
+    const min = currentPresetData.Minions || [];
+    const isTownsfolk = (n) => tf.indexOf(n) !== -1;
+    const isOutsider = (n) => out.indexOf(n) !== -1;
+    const isMinion = (n) => min.indexOf(n) !== -1;
+    const isGood = (n) => isTownsfolk(n) || isOutsider(n);
+
+    // Drunk: if Drunk is in play, drunk_fake_role must be a Townsfolk
+    // *not* in the bag (it's the off-bag pretend role).
+    if (inPool.has("Drunk")) {
+      const fake = ps.drunk_fake_role || "";
+      if (!fake) return "Drunk fake unset.";
+      if (!isTownsfolk(fake) || inPool.has(fake)) return "Drunk fake invalid.";
+    }
+    // Fortune Teller: red-herring role must be a Townsfolk or
+    // Outsider in the bag.
+    if (inPool.has("Fortune Teller")) {
+      const rh = ps.ft_red_herring_role || "";
+      if (!rh) return "Fortune Teller red herring unset.";
+      if (!inPool.has(rh) || !isGood(rh)) return "Fortune Teller red herring invalid.";
+    }
+    // Washerwoman: seen role must be a Townsfolk in the bag (and not
+    // the Washerwoman herself); WRONG must be in the bag, not the
+    // Washerwoman, and not the seen role.
+    if (inPool.has("Washerwoman")) {
+      const seen = ps.washerwoman_townsfolk_role || "";
+      const wrong = ps.washerwoman_wrong_role || "";
+      if (!seen) return "Washerwoman seen unset.";
+      if (!inPool.has(seen) || !isTownsfolk(seen) || seen === "Washerwoman") {
+        return "Washerwoman seen invalid.";
+      }
+      if (!wrong) return "Washerwoman wrong unset.";
+      if (!inPool.has(wrong) || wrong === "Washerwoman" || wrong === seen) {
+        return "Washerwoman wrong invalid.";
+      }
+    }
+    // Librarian: seen-Outsider must be an Outsider in the bag.
+    // The "0 Outsiders" reading is allowed — slot stays empty and so
+    // does the WRONG. If seen IS set, WRONG must also be set.
+    if (inPool.has("Librarian")) {
+      const seen = ps.librarian_outsider_role || "";
+      const wrong = ps.librarian_wrong_role || "";
+      const anyOutsiderInPool = [...inPool].some(isOutsider);
+      if (!seen) {
+        if (anyOutsiderInPool) return "Librarian seen unset.";
+        // 0-outsider reading — both slots empty by design.
+      } else {
+        if (!inPool.has(seen) || !isOutsider(seen)) return "Librarian seen invalid.";
+        if (!wrong) return "Librarian wrong unset.";
+        if (!inPool.has(wrong) || wrong === "Librarian" || wrong === seen) {
+          return "Librarian wrong invalid.";
+        }
+      }
+    }
+    // Investigator: seen-Minion must be a Minion in the bag. Trouble
+    // Brewing always has at least one Minion, so unlike the Librarian
+    // we always require this slot.
+    if (inPool.has("Investigator")) {
+      const seen = ps.investigator_minion_role || "";
+      const wrong = ps.investigator_wrong_role || "";
+      if (!seen) return "Investigator seen unset.";
+      if (!inPool.has(seen) || !isMinion(seen)) return "Investigator seen invalid.";
+      if (!wrong) return "Investigator wrong unset.";
+      if (!inPool.has(wrong) || wrong === "Investigator" || wrong === seen) {
+        return "Investigator wrong invalid.";
+      }
+    }
+    return "";
   }
 
   async function startGame() {
@@ -3965,6 +4281,7 @@
       _selectedYesNo = null;
       phaseDock.classList.add("no-prompt");
       applyHighlight([]);
+      if (typeof reapplyChairSelection === "function") reapplyChairSelection();
 
       setStartStatus(
         data.subprocess_killed
@@ -4047,9 +4364,11 @@
 
   function panelKey(p) {
     const meta = p.meta || {};
-    // Group strictly by (character, recipient). Without target_pid in
-    // the key, MINION_INFO would coalesce all minions into one panel
-    // and DEMON_INFO would coalesce multiple demons (rare but legal).
+    // Group strictly by (character, recipient). Including target_pid
+    // in the key keeps DEMON_INFO from coalescing two simultaneous
+    // demons into a single panel (rare but legal). MINION_INFO is
+    // already a single consolidated prompt (target_pid=null) so all
+    // Minions share one panel by design.
     if (meta.character) {
       return `char:${meta.character}:${p.target_player_id ?? ""}`;
     }
@@ -4173,23 +4492,13 @@
 
     // ----- Minion / Demon intros ----------------------------------
     if (stepKind === "minion_info") {
+      // All Minions are presumed to wake up together (project rule),
+      // so this prompt is shared across every Minion and the only
+      // token rendered is THIS IS THE DEMON. The Minions can see each
+      // other in the room, so THESE ARE YOUR MINIONS is redundant.
       const demonNames = (meta.demon_player_names || []).join(", ");
-      // Other minions = every minion except the one receiving the
-      // info (so the recipient isn't told "you are your own minion").
-      const targetName = meta.target_player_name
-        || (p.target_player_id != null
-            ? namesById.get(p.target_player_id) : null);
-      const otherMinionNames = (meta.minion_player_names || [])
-        .filter(n => n !== targetName)
-        .join(", ");
       if (demonNames) {
         tokens.push({label: "THIS IS THE DEMON", body: demonNames});
-      }
-      if (otherMinionNames) {
-        tokens.push({
-          label: "THESE ARE YOUR MINIONS",
-          body: otherMinionNames,
-        });
       }
       return tokens;
     }
@@ -4273,6 +4582,22 @@
       tokens.push({
         label: "ONE OF THESE IS THE " + charName,
         body: playerNames || "",
+      });
+      return tokens;
+    }
+
+    // ----- Demon role reveal (SW promotion / Imp self-kill) ------
+    // Both reveal flows use ``reveal: "demon_role"`` with
+    // ``demon_character: "<DemonClass>"`` in their meta. Show the
+    // player a single, unambiguous "YOU ARE THE <DEMON>" line
+    // (label "YOU ARE", body "THE <DEMON>") so it reads as one
+    // sentence on the phone — matches the all-caps token style the
+    // storyteller hands the player physically.
+    if (meta.reveal === "demon_role") {
+      const demonName = String(meta.demon_character || "Imp").toUpperCase();
+      tokens.push({
+        label: "YOU ARE",
+        body: "THE " + demonName,
       });
       return tokens;
     }
@@ -4369,6 +4694,7 @@
       // fresh one for the new character.
       phaseDock.classList.add("no-prompt");
       applyHighlight([]);
+      if (typeof reapplyChairSelection === "function") reapplyChairSelection();
       return;
     }
     phaseDock.classList.remove("no-prompt");
@@ -4721,6 +5047,84 @@
     }
   }
 
+  // True when the active prompt asks the storyteller to pick one or
+  // more players. Used to (a) flip the body class that turns chairs
+  // into click-to-pick targets and (b) gate the chair-click handler
+  // so picks don't also open the per-player side panel.
+  function isPromptPlayerSelect(p) {
+    if (!p) return false;
+    return p.type === "select_player" || p.type === "select_players";
+  }
+
+  // Translate a chair click into a prompt-selection toggle. Returns
+  // ``true`` if the click was consumed by the prompt (so the caller
+  // should NOT also open the side panel / chair editor).
+  //
+  // Eligibility is enforced: clicks on chairs not in the prompt's
+  // ``eligible_player_ids`` are still consumed (so the side panel
+  // doesn't pop up mid-prompt) but do not change the selection.
+  // Storyteller still has to press Next to send the picks; this
+  // helper only updates the local selection state, mirroring what
+  // clicking the option button below the prompt would do.
+  function handlePromptChairClick(chair) {
+    const p = _currentPrompt;
+    if (!isPromptPlayerSelect(p)) return false;
+    // Map chair → engine player_id. ``chair.player_id`` is set by the
+    // engine's ``_sync_chairs_to_engine`` once the game starts; before
+    // that ``chair.id`` and ``player.id`` are kept aligned, so the
+    // fallback is safe.
+    const pid = (typeof chair.player_id === "number")
+      ? chair.player_id
+      : chair.id;
+    const eligible = p.eligible_player_ids || [];
+    if (!eligible.includes(pid)) {
+      // Click was on a non-eligible chair while in pick mode. Consume
+      // it (no side panel) but leave the selection alone.
+      return true;
+    }
+    const count = p.count || 1;
+    if (count === 1) {
+      _selectedPlayerIds = [pid];
+    } else {
+      const idx = _selectedPlayerIds.indexOf(pid);
+      if (idx >= 0) {
+        _selectedPlayerIds.splice(idx, 1);
+      } else if (_selectedPlayerIds.length < count) {
+        _selectedPlayerIds.push(pid);
+      } else {
+        // Already at max picks — drop the oldest, push the new one.
+        // Matches the multi-character pick UX so the ST never has to
+        // manually deselect an old pick to swap it.
+        _selectedPlayerIds.shift();
+        _selectedPlayerIds.push(pid);
+      }
+    }
+    renderSelectionState();
+    return true;
+  }
+
+  // Reapply the chair-picked class onto chair <g> elements so the
+  // selection survives a render() rebuild (which wipes per-chair
+  // classes the same way reapplyHighlight handles ``highlight-target``).
+  // Also flips the ``prompt-pick-mode`` body class so the cursor /
+  // hover affordance only shows when a player-selection prompt is
+  // active.
+  function reapplyChairSelection() {
+    const chairsRoot = document.getElementById("chairs");
+    if (!chairsRoot) return;
+    const isPickMode = isPromptPlayerSelect(_currentPrompt);
+    document.body.classList.toggle("prompt-pick-mode", isPickMode);
+    const picked = isPickMode ? new Set(_selectedPlayerIds) : new Set();
+    chairsRoot.querySelectorAll("g[data-id]").forEach(g => {
+      const id = parseInt(g.getAttribute("data-id"), 10);
+      const ch = chairs.get(id);
+      const pid = (ch && typeof ch.player_id === "number")
+        ? ch.player_id
+        : id;
+      g.classList.toggle("chair-picked", picked.has(pid));
+    });
+  }
+
   function renderSelectionState() {
     const opts = promptOptions.querySelectorAll(".option");
     opts.forEach(opt => {
@@ -4735,6 +5139,8 @@
         || ynSel;
       opt.classList.toggle("selected", !!sel);
     });
+    // Mirror the player picks onto the town-square chairs.
+    reapplyChairSelection();
   }
 
   // Collect the chair ids the engine wants to spotlight for the
@@ -4753,12 +5159,20 @@
     const ids = new Set();
     const explicit = Array.isArray(p.highlight_player_ids)
       && p.highlight_player_ids.length > 0;
+    const isPlayerSelect =
+      (p.type === "select_player" || p.type === "select_players");
+    // For SELECT_PLAYER / SELECT_PLAYERS prompts the highlight set is
+    // EXACTLY ``eligible_player_ids`` — every other chair (including
+    // the source player whose ability is firing, if they happen not
+    // to be eligible) gets dimmed. The storyteller's eye should snap
+    // to the legal picks and nothing else, and any chair the ST sees
+    // bright in pick mode is one they can click to pick.
+    if (isPlayerSelect) {
+      for (const id of (p.eligible_player_ids || [])) ids.add(Number(id));
+      return [...ids].filter(n => Number.isFinite(n));
+    }
     if (explicit) {
       for (const id of p.highlight_player_ids) ids.add(Number(id));
-    }
-    if (Array.isArray(p.eligible_player_ids)
-        && (p.type === "select_player" || p.type === "select_players")) {
-      for (const id of p.eligible_player_ids) ids.add(Number(id));
     }
     // For information prompts, an explicit highlight_player_ids list
     // means "highlight ONLY the target" — don't add the receiving
@@ -4946,21 +5360,65 @@
     promptRandomize.style.display = "none";
     promptHint.textContent = "";
     applyHighlight([]);
+    // Drop the chair-picked markers and the prompt-pick-mode body
+    // class now that the prompt has been answered — _currentPrompt
+    // is null so reapplyChairSelection() will treat the board as
+    // out of pick mode and clear every chair's selection class.
+    if (typeof reapplyChairSelection === "function") reapplyChairSelection();
     // Resync chair state alongside polling for the next prompt: the
     // ability we just answered may have flipped game state that the
-    // chair render keys off (e.g. Poisoner picks → poisoned_role,
-    // Butler picks → butler_master_role). Without this refresh, the
-    // chair badges would lag a render cycle behind the engine.
+    // chair render keys off (e.g. Poisoner picks → poisoned_player_id,
+    // Butler picks → butler_master_player_id). Without this refresh,
+    // the chair badges would lag a render cycle behind the engine.
     refresh().catch(() => {});
     setTimeout(pollPrompt, 80);
   }
 
   // ----- Back / Start Night -----
-  // Back is wired up but doesn't do anything yet — the storyteller can
-  // see the affordance in the dock; future work adds rewind support.
+  // Back: POSTs /api/engine/back. The engine pops the most recent
+  // post-ability checkpoint and restores it. While a night ability is
+  // mid-flight this aborts the running ability and re-runs it from
+  // the start of that ability, so the Storyteller can redo any
+  // selections they've made within it. With no ability in flight,
+  // each click walks one ability further back through the night.
   if (backBtn) {
-    backBtn.addEventListener("click", () => {
-      promptHint.textContent = "Back is not implemented yet.";
+    backBtn.addEventListener("click", async () => {
+      backBtn.disabled = true;
+      try {
+        const r = await fetch("/api/engine/back", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: "{}",
+        });
+        if (!r.ok) {
+          const data = await r.json().catch(() => ({}));
+          promptHint.textContent = data.error || "Could not go back.";
+          return;
+        }
+        const data = await r.json();
+        if (data.restored === false) {
+          promptHint.textContent = "Nothing to go back to.";
+        } else {
+          // Drop any locally-staged answer for the prompt that just
+          // got aborted; the next poll will pick up the re-fired
+          // prompt with a fresh id.
+          _currentPrompt = null;
+          _selectedPlayerIds = [];
+          _selectedCharacter = null;
+          _selectedCharacters = [];
+          _selectedCount = null;
+          _selectedYesNo = null;
+          promptHint.textContent = "";
+          await refresh().catch(() => {});
+          // Re-poll quickly so the redone ability's prompt shows up
+          // without waiting for the next 400ms tick.
+          setTimeout(pollPrompt, 80);
+        }
+      } catch (err) {
+        promptHint.textContent = "Network error: " + err.message;
+      } finally {
+        backBtn.disabled = false;
+      }
     });
   }
 
@@ -5174,19 +5632,19 @@
     investigator_wrong_role: null,
     librarian_outsider_role: null,
     librarian_wrong_role: null,
-    butler_master_role: null,
-    monk_safe_role: null,
-    poisoned_role: null,
-    // ``imp_dead_roles`` is a *list* of role names; the engine sets it
-    // by walking every player whose ``death_cause`` is ``DEMON_KILL`` so
-    // every Imp-killed seat gets a DEAD reminder, not just the most
-    // recent one. Each name is matched against ``chair.character`` to
-    // place the DEAD token next to the dead seat.
-    imp_dead_roles: [],
-    undertaker_died_today_role: null,
+    // Per-seat (player-id keyed) reminder tokens. Each entry names a
+    // SEAT (player id), so a role swap mid-game (Scarlet Woman -> Imp
+    // via change_character) doesn't leak the old role's tokens onto
+    // the new role's chair.
+    butler_master_player_id: null,
+    monk_safe_player_id: null,
+    poisoned_player_id: null,
+    imp_dead_player_ids: [],
+    undertaker_died_today_player_id: null,
     scarlet_woman_is_demon: false,
-    slayer_no_ability: false,
-    virgin_no_ability: false,
+    scarlet_woman_promoted_player_ids: [],
+    slayer_no_ability_player_ids: [],
+    virgin_no_ability_player_ids: [],
   };
   let presets = [];
   let currentPreset = null;          // name string
@@ -5613,11 +6071,6 @@
     // Read-only: no click handlers — open the panel to edit.
   }
 
-  function escapeHtml(s) {
-    return String(s)
-      .replace(/&/g, "&amp;").replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
-  }
   function escapeAttr(s) { return escapeHtml(s); }
 
   function openAddChars() {
@@ -5673,6 +6126,305 @@
     }
     randomizePool(preset);
   });
+
+  // ----- Live console + game-end prompt + game report -----
+  //
+  // The engine surfaces a structured "console" feed via
+  // /api/engine/console: each entry is { ts, phase, kind, summary,
+  // details }. We render it two ways: a small live-updating panel
+  // docked bottom-left during gameplay, and a wider scrollable
+  // overlay that opens when the storyteller clicks "View Report" on
+  // the game-end prompt. Both share the same renderer.
+
+  const gameEndOverlay = document.getElementById("gameEndOverlay");
+  const gameEndBanner = document.getElementById("gameEndBanner");
+  const gameEndReason = document.getElementById("gameEndReason");
+  const btnViewReport = document.getElementById("btnViewReport");
+  const btnGameEndClose = document.getElementById("btnGameEndClose");
+  const reportOverlay = document.getElementById("reportOverlay");
+  const reportWinner = document.getElementById("reportWinner");
+  const reportBody = document.getElementById("reportBody");
+  const btnReportClose = document.getElementById("btnReportClose");
+
+  const consolePanel = document.getElementById("consolePanel");
+  const consoleHeader = document.getElementById("consoleHeader");
+  const consoleToggle = document.getElementById("consoleToggle");
+  const consoleBody = document.getElementById("consoleBody");
+  const consoleCount = document.getElementById("consoleCount");
+
+  // Tracks the (winner|reason) signature we last surfaced so a poll
+  // re-running the game-end check after the storyteller dismisses the
+  // modal doesn't pop it back open. Null = nothing shown yet (or game
+  // was reset back to setup).
+  let _gameEndShownFor = null;
+  // Cache the most recent console payload — used by the live panel,
+  // the report overlay, and the game-end check.
+  let _consoleCache = { entries: [], winner: null, win_reason: null };
+  // Polling timer for /api/engine/console.
+  let _consoleTimer = null;
+  // Number of entries last rendered, so we can detect new tail and
+  // auto-scroll the live panel only when there is genuinely new
+  // content (avoids stomping the storyteller's manual scroll).
+  let _lastConsoleLen = 0;
+
+  function maybeShowGameEndOverlay(engineSnapshot) {
+    if (!engineSnapshot || engineSnapshot.phase !== "finished") return;
+    const winner = engineSnapshot.winner || "neutral";
+    const reason = engineSnapshot.win_reason || "";
+    const sig = winner + "|" + reason;
+    if (_gameEndShownFor === sig) return;
+    _gameEndShownFor = sig;
+    showGameEndOverlay(winner, reason);
+  }
+
+  function showGameEndOverlay(winner, reason) {
+    gameEndBanner.classList.remove("good", "evil", "neutral");
+    if (winner === "good") {
+      gameEndBanner.textContent = "Good Wins!";
+      gameEndBanner.classList.add("good");
+    } else if (winner === "evil") {
+      gameEndBanner.textContent = "Evil Wins!";
+      gameEndBanner.classList.add("evil");
+    } else {
+      gameEndBanner.textContent = "Game Over";
+      gameEndBanner.classList.add("neutral");
+    }
+    gameEndReason.textContent = reason || "";
+    gameEndOverlay.classList.add("open");
+  }
+
+  function hideGameEndOverlay() {
+    gameEndOverlay.classList.remove("open");
+  }
+
+  function hideReportOverlay() {
+    reportOverlay.classList.remove("open");
+  }
+
+  btnGameEndClose.addEventListener("click", hideGameEndOverlay);
+  btnViewReport.addEventListener("click", () => {
+    openGameReport();
+  });
+  btnReportClose.addEventListener("click", hideReportOverlay);
+
+  // Console panel collapse toggle. Header click + the explicit ▼/▲
+  // button both flip the panel; default state is collapsed so the
+  // town-square stays uncluttered until the storyteller opts in.
+  function toggleConsolePanel(forceState) {
+    let collapsed;
+    if (forceState === "open") collapsed = false;
+    else if (forceState === "closed") collapsed = true;
+    else collapsed = !consolePanel.classList.contains("collapsed");
+    consolePanel.classList.toggle("collapsed", collapsed);
+    consoleToggle.textContent = collapsed ? "▼" : "▲";
+    consoleToggle.setAttribute(
+      "aria-label", collapsed ? "Expand console" : "Collapse console");
+    if (!collapsed) {
+      // After expanding, snap to the bottom so the most recent entry
+      // is visible without an extra scroll.
+      consoleBody.scrollTop = consoleBody.scrollHeight;
+    }
+  }
+  consoleHeader.addEventListener("click", (e) => {
+    // Header is a single click target — but if the user clicks the
+    // toggle button itself, we want to handle that here too without
+    // double-toggling.
+    if (e.target === consoleToggle) return;
+    toggleConsolePanel();
+  });
+  consoleToggle.addEventListener("click", (e) => {
+    e.stopPropagation();
+    toggleConsolePanel();
+  });
+
+  // ---- Shared formatting helpers ----
+
+  function escapeHtml(s) {
+    return String(s == null ? "" : s).replace(/[&<>"']/g, (c) =>
+      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]
+    );
+  }
+
+  // Pretty label for the kind chip.
+  function eventKindLabel(kind) {
+    switch (kind) {
+      case "ability": return "Ability";
+      case "reaction": return "Reaction";
+      case "info": return "Info";
+      case "selection": return "Pick";
+      case "kill": return "Kill";
+      case "revive": return "Revive";
+      case "execution": return "Execution";
+      case "nomination": return "Nomination";
+      case "state": return "State";
+      case "phase": return "Phase";
+      case "game_end": return "Game end";
+      default: return kind || "Event";
+    }
+  }
+
+  // Group label for a single entry ("First Night", "Day 1", …).
+  function eventGroupLabel(ev) {
+    const phase = ev.phase || "";
+    const n = ev.night_number || 0;
+    const d = ev.day_number || 0;
+    if (phase === "first_night") return "First Night";
+    if (phase === "night") return "Night " + Math.max(n, 1);
+    if (phase === "day") return "Day " + Math.max(d, 1);
+    if (phase === "setup") return "Setup";
+    if (phase === "finished") return "End of Game";
+    return phase || "Other";
+  }
+
+  function renderEntryRow(ev, rowClass) {
+    const kind = ev.kind || "";
+    const summary = ev.summary || "";
+    return (
+      '<div class="' + rowClass + '">' +
+        '<div class="event-ts">' + escapeHtml(ev.ts || "") + '</div>' +
+        '<div class="event-kind ' + escapeHtml(kind) + '">' +
+          escapeHtml(eventKindLabel(kind)) + '</div>' +
+        '<div class="event-summary">' + escapeHtml(summary) + '</div>' +
+      '</div>'
+    );
+  }
+
+  // ---- Live console panel ----
+
+  function renderConsolePanel() {
+    const entries = _consoleCache.entries || [];
+    consoleCount.textContent = String(entries.length);
+    if (entries.length === 0) {
+      consoleBody.innerHTML = '<div class="empty-note">No activity yet.</div>';
+      _lastConsoleLen = 0;
+      return;
+    }
+    const parts = [];
+    for (const ev of entries) {
+      parts.push(renderEntryRow(ev, "console-row"));
+    }
+    consoleBody.innerHTML = parts.join("");
+    // Pin to bottom on a real append; preserve scroll otherwise.
+    if (entries.length > _lastConsoleLen) {
+      consoleBody.scrollTop = consoleBody.scrollHeight;
+    }
+    _lastConsoleLen = entries.length;
+  }
+
+  async function fetchConsole() {
+    try {
+      const r = await fetch("/api/engine/console");
+      if (!r.ok) return;
+      const data = await r.json();
+      _consoleCache = {
+        entries: Array.isArray(data.entries) ? data.entries : [],
+        winner: data.winner || null,
+        win_reason: data.win_reason || null,
+        phase: data.phase || null,
+        players: Array.isArray(data.players) ? data.players : [],
+      };
+      renderConsolePanel();
+      // If the report overlay is open, keep it in sync too.
+      if (reportOverlay.classList.contains("open")) {
+        renderReport(_consoleCache);
+      }
+    } catch (e) { /* ignore network blips */ }
+  }
+
+  function startConsolePolling() {
+    if (_consoleTimer) return;
+    fetchConsole();
+    _consoleTimer = setInterval(fetchConsole, 1200);
+  }
+
+  function stopConsolePolling() {
+    if (_consoleTimer) {
+      clearInterval(_consoleTimer);
+      _consoleTimer = null;
+    }
+  }
+
+  // Drive console polling off the engine phase: anything but setup
+  // means the engine has activity worth showing.
+  function syncConsolePolling(engineSnapshot) {
+    const phase = engineSnapshot && engineSnapshot.phase;
+    if (phase && phase !== "setup") {
+      startConsolePolling();
+    } else {
+      stopConsolePolling();
+      _consoleCache = { entries: [], winner: null, win_reason: null };
+      _lastConsoleLen = 0;
+      renderConsolePanel();
+    }
+  }
+
+  // ---- Report overlay (replays the live console) ----
+
+  function renderReport(report) {
+    // Header.
+    const winner = report.winner || "neutral";
+    const reason = report.win_reason || "";
+    reportWinner.classList.remove("good", "evil");
+    if (winner === "good") {
+      reportWinner.textContent = "Good wins" + (reason ? " — " + reason : "");
+      reportWinner.classList.add("good");
+    } else if (winner === "evil") {
+      reportWinner.textContent = "Evil wins" + (reason ? " — " + reason : "");
+      reportWinner.classList.add("evil");
+    } else {
+      reportWinner.textContent = reason || "";
+    }
+
+    const entries = Array.isArray(report.entries) ? report.entries : [];
+    if (entries.length === 0) {
+      reportBody.innerHTML =
+        '<div class="empty-note">No console entries were recorded.</div>';
+      return;
+    }
+
+    // Group entries by their phase label so the report reads as a
+    // chronological recap. Insertion order preserves time order
+    // since the engine appends in real-time.
+    const groups = [];
+    const groupByLabel = new Map();
+    for (const ev of entries) {
+      const label = eventGroupLabel(ev);
+      let g = groupByLabel.get(label);
+      if (!g) {
+        g = { label, entries: [] };
+        groupByLabel.set(label, g);
+        groups.push(g);
+      }
+      g.entries.push(ev);
+    }
+
+    const parts = [];
+    for (const g of groups) {
+      parts.push('<div class="phase-group">');
+      parts.push(
+        '<div class="phase-heading">' + escapeHtml(g.label) + '</div>'
+      );
+      for (const ev of g.entries) {
+        parts.push(renderEntryRow(ev, "event-row"));
+      }
+      parts.push('</div>');
+    }
+    reportBody.innerHTML = parts.join("");
+  }
+
+  async function openGameReport() {
+    reportOverlay.classList.add("open");
+    // Render whatever we have cached immediately so the panel never
+    // shows a blank flash; then refresh from the server in case
+    // anything changed since the last poll.
+    if ((_consoleCache.entries || []).length === 0) {
+      reportBody.innerHTML = '<div class="empty-note">Loading…</div>';
+    } else {
+      renderReport(_consoleCache);
+    }
+    await fetchConsole();
+    renderReport(_consoleCache);
+  }
 
   // Initial bootstrap.
   fetchPresets();

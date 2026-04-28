@@ -203,7 +203,13 @@ def test_imp_kills_soldier_no_death() -> None:
 
 
 def test_saint_executed_evil_wins() -> None:
-    """Executing the Saint ends the game with evil winning."""
+    """Executing the Saint ends the game with evil winning.
+
+    Per the project's pending-win rule, the win is parked at the
+    moment of execution and finalized at the next dawn. The day
+    finishes out, the (no-op) night runs, and dawn flips the phase
+    to FINISHED.
+    """
     e = Engine()
     a = e.add_seat("Alice")    # 1 — Saint
     b = e.add_seat("Bob")      # 2 — Mayor
@@ -224,8 +230,74 @@ def test_saint_executed_evil_wins() -> None:
     ])
     e.advance_to_day()
     e.execute_player(1)
+    # Pending win parked, but phase still DAY.
+    assert e.pending_winner is Alignment.EVIL
+    # Advance through dusk → night → dawn to finalize.
+    e.advance_to_night()
+    drain_prompts(e, [])  # no-op night
+    e.advance_to_day()
     assert e.phase is Phase.FINISHED, "Saint execution should end the game."
     assert e.winner is Alignment.EVIL
+
+
+def test_scarlet_woman_promoted_via_execution() -> None:
+    """Executing the Demon with 5+ alive (and a healthy Scarlet Woman
+    present) must promote the SW into the Demon — NOT end the game
+    with good winning.
+
+    Regression: ``execute_player`` previously dispatched only the
+    EXECUTION event and skipped the broader DEATH event, so the SW's
+    DEATH-listening reaction never fired and the post-execution win
+    check incorrectly registered "Demon is dead → good wins".
+    """
+    e = Engine()
+    a = e.add_seat("Alice")    # 1 — Soldier
+    b = e.add_seat("Bob")      # 2 — Empath
+    c = e.add_seat("Cara")     # 3 — Mayor
+    d = e.add_seat("Dan")      # 4 — Chef
+    fp = e.add_seat("Eve")     # 5 — Poisoner (Minion)
+    g = e.add_seat("Fay")      # 6 — Scarlet Woman (Minion)
+    h = e.add_seat("Gus")      # 7 — Imp (Demon)
+    e.assign_character(a.id, "Soldier")
+    e.assign_character(b.id, "Empath")
+    e.assign_character(c.id, "Mayor")
+    e.assign_character(d.id, "Chef")
+    e.assign_character(fp.id, "Poisoner")
+    e.assign_character(g.id, "Scarlet Woman")
+    e.assign_character(h.id, "Imp")
+    e.start_game()
+
+    # First night drain. This test runs without the preset, so the
+    # legacy night-order path is used (no MINION_INFO / DEMON_INFO
+    # preset steps). Just walk the abilities.
+    e.start_night()
+    drain_prompts(e, [
+        # Poisoner picks Cara (irrelevant for this test).
+        ({"character": "Poisoner", "step": "select_player"}, c.id),
+        # Chef sober + healthy → auto information.
+        ({"character": "Chef", "step": "information"}, None),
+        # Empath sober + healthy → auto information.
+        ({"character": "Empath", "step": "information"}, None),
+    ])
+    e.advance_to_day()
+
+    # Execute the Imp. With 7 alive ≥ 5 the SW reaction must promote.
+    e.execute_player(h.id)
+
+    # Game must NOT have ended. The SW (Fay) is now the Imp.
+    assert e.pending_winner is None, (
+        f"Imp executed with 5+ alive should not register a pending win; "
+        f"got {e.pending_winner!r}"
+    )
+    assert e.phase is Phase.DAY
+    fay = e.get_player(g.id)
+    assert fay.character is not None
+    assert fay.character.name == "Imp", (
+        f"Scarlet Woman should now be the Imp; got {fay.character.name!r}"
+    )
+    # Bookkeeping for the reminder token + night reveal queue.
+    assert g.id in e._sw_promoted_player_ids
+    assert g.id in e._sw_pending_demon_reveal
 
 
 def test_virgin_first_nomination() -> None:
@@ -307,9 +379,13 @@ def test_mayor_dusk_win_three_alive_no_execution() -> None:
     e.kill(b.id, DeathCause.STORYTELLER)
     assert e.phase is Phase.DAY, "Game should not have ended mid-day."
     assert not e._executed_today, "No execution happened today."
-    # Advancing to night = dusk — Mayor's win condition triggers here.
+    # Advancing to night = dusk — Mayor's win condition triggers here
+    # and parks a pending win. The next dawn finalizes it.
     e.advance_to_night()
-    assert e.phase is Phase.FINISHED, "Mayor should have won at dusk."
+    assert e.pending_winner is Alignment.GOOD
+    drain_prompts(e, [])  # no-op night
+    e.advance_to_day()
+    assert e.phase is Phase.FINISHED, "Mayor should have won by dawn."
     assert e.winner is Alignment.GOOD
     assert "Mayor" in (e.win_reason or "")
 
@@ -342,9 +418,12 @@ def test_mayor_dusk_win_uses_mayor_alignment() -> None:
     e.kill(a.id, DeathCause.STORYTELLER)
     e.kill(b.id, DeathCause.STORYTELLER)
     e.advance_to_night()
+    assert e.pending_winner is Alignment.EVIL
+    drain_prompts(e, [])  # no-op night
+    e.advance_to_day()
     assert e.phase is Phase.FINISHED
     assert e.winner is Alignment.EVIL, (
-        f"Evil Mayor should win evil at dusk; got {e.winner}."
+        f"Evil Mayor should win evil by dawn; got {e.winner}."
     )
 
 
@@ -431,6 +510,192 @@ def test_mayor_redirect_triggers_on_non_demon_kill() -> None:
     assert e.get_player(c.id).dead, "Mayor should be dead (declined)."
 
 
+def test_mayor_redirects_imp_kill_back_to_imp_triggers_starpass() -> None:
+    """Imp picks Mayor → Mayor redirects to Imp → Imp's self-kill fires.
+
+    The Imp's kill carries ``source=self`` into ``Engine.kill``; the
+    Mayor's redirect forwards that source on the re-entrant kill of
+    the Imp. The Imp's reaction picks up the self-attributed DEATH
+    and runs the starpass flow — promoting a Minion to the new Imp —
+    without either character knowing about the other.
+    """
+    e = Engine()
+    a = e.add_seat("Alice")    # 1 — Soldier
+    b = e.add_seat("Bob")      # 2 — Empath
+    c = e.add_seat("Cara")     # 3 — Mayor
+    d = e.add_seat("Dan")      # 4 — Poisoner
+    f = e.add_seat("Eve")      # 5 — Imp
+
+    e.assign_character(a.id, "Soldier")
+    e.assign_character(b.id, "Empath")
+    e.assign_character(c.id, "Mayor")
+    e.assign_character(d.id, "Poisoner")
+    e.assign_character(f.id, "Imp")
+
+    e.start_game()
+    e.start_night()
+    drain_prompts(e, [
+        ({"character": "Poisoner", "step": "select_player"}, 4),
+        ({"character": "Empath", "step": "information"}, None),
+    ])
+    e.advance_to_day()
+    e.advance_to_night()
+    e.start_night()
+
+    # Night 2: Imp picks Mayor → Mayor redirects → Imp dies.
+    # Only one alive Minion (Poisoner), so ``select_new_imp`` is
+    # auto-resolved by the engine; the new-Imp reveal still fires.
+    drain_prompts(e, [
+        ({"character": "Poisoner", "step": "select_player"}, 4),
+        ({"character": "Imp", "step": "select_target"}, 3),     # pick Mayor
+        ({"character": "Mayor", "step": "redirect_yes_no"}, True),
+        ({"character": "Mayor", "step": "redirect_select"}, 5), # back to Imp
+        ({"character": "Imp", "step": "new_imp_reveal"}, None),
+        ({"character": "Empath", "step": "information"}, None),
+    ])
+    if e._night_thread:
+        e._night_thread.join(2.0)
+
+    # Mayor never died; old Imp (Eve) is dead; Poisoner is the new Imp.
+    assert not e.get_player(c.id).dead, "Mayor should still be alive."
+    assert e.get_player(f.id).dead, "Old Imp (Eve) should be dead."
+    assert e.get_player(d.id).character.name == "Imp", (
+        "Poisoner should have been promoted to the new Imp via the "
+        "Imp's self-kill ability triggered by the Mayor's redirect."
+    )
+
+
+def test_day_win_defers_to_dawn_players_can_keep_acting() -> None:
+    """End-to-end check of the project's dawn-announcement rule.
+
+    Saint executed during the day:
+      * pending_winner is set, but phase stays DAY and winner is None;
+      * abilities and nominations still work after the trigger;
+      * advance_to_night moves to NIGHT and the night runs no actions
+        (the night thread auto-dawns immediately);
+      * dawn flips phase to FINISHED and announces the win.
+    """
+    import threading
+
+    e = Engine()
+    a = e.add_seat("Alice")    # 1 — Saint
+    b = e.add_seat("Bob")      # 2 — Mayor
+    c = e.add_seat("Cara")     # 3 — Soldier
+    d = e.add_seat("Dan")      # 4 — Poisoner
+    f = e.add_seat("Eve")      # 5 — Imp
+
+    e.assign_character(a.id, "Saint")
+    e.assign_character(b.id, "Mayor")
+    e.assign_character(c.id, "Soldier")
+    e.assign_character(d.id, "Poisoner")
+    e.assign_character(f.id, "Imp")
+
+    e.start_game()
+    e.start_night()
+    drain_prompts(e, [
+        ({"character": "Poisoner",   "step": "select_player"}, 4),
+    ])
+    e.advance_to_day()
+
+    # Trigger the win during the day by executing the Saint.
+    e.execute_player(a.id)
+    assert e.phase is Phase.DAY, (
+        "Day-time trigger must NOT end the game immediately; "
+        "win is parked for dawn."
+    )
+    assert e.pending_winner is Alignment.EVIL
+    assert e.pending_win_reason and "Saint" in e.pending_win_reason
+    assert e.winner is None, "winner only populated after dawn finalize."
+
+    # Players can still act / nominate during the rest of the day.
+    # Nominate something to prove the engine still accepts it.
+    e.nominate(b.id, c.id)
+    assert e.get_player(b.id).has_nominated_today
+    assert e.get_player(c.id).has_been_nominated_today
+    # Pending winner should not be overwritten by subsequent state changes.
+    assert e.pending_winner is Alignment.EVIL
+
+    # Advance through dusk → night. Even though the win is pending,
+    # advance_to_night still moves us into NIGHT.
+    e.advance_to_night()
+    assert e.phase is Phase.NIGHT
+    assert e.pending_winner is Alignment.EVIL
+    assert e.winner is None
+
+    # Run the no-op night and let it auto-dawn. With auto-advance on,
+    # the night thread will skip every ability and call _auto_dawn,
+    # which finalizes the pending win. (No preset is installed in
+    # this test, so there are no Dusk/Dawn announcement prompts to
+    # drain — the legacy night path simply skips every action.)
+    e.set_auto_advance_to_day(True)
+    e.start_night()
+    if e._night_thread is not None:
+        e._night_thread.join(timeout=3.0)
+        assert not e._night_thread.is_alive(), "night thread didn't finish"
+
+    # No prompts should have been emitted on the no-op legacy night.
+    assert e.pending_prompt() is None
+
+    assert e.phase is Phase.FINISHED, (
+        "Game must end at dawn after the no-op night."
+    )
+    assert e.winner is Alignment.EVIL
+    assert e.win_reason and "Saint" in e.win_reason
+    # Pending slots are cleared once the win is announced.
+    assert e.pending_winner is None
+    assert e.pending_win_reason is None
+
+
+def test_dawn_announcement_emits_game_end_console_event() -> None:
+    """The ``game_end`` console entry should appear at dawn, not before.
+
+    During the day on which the Saint is executed we expect a
+    ``win_pending`` console entry; the public ``game_end`` event is
+    only logged when the next dawn finalizes the win.
+    """
+    e = Engine()
+    a = e.add_seat("Alice")    # 1 — Saint
+    b = e.add_seat("Bob")      # 2 — Mayor
+    c = e.add_seat("Cara")     # 3 — Soldier
+    d = e.add_seat("Dan")      # 4 — Poisoner
+    f = e.add_seat("Eve")      # 5 — Imp
+
+    e.assign_character(a.id, "Saint")
+    e.assign_character(b.id, "Mayor")
+    e.assign_character(c.id, "Soldier")
+    e.assign_character(d.id, "Poisoner")
+    e.assign_character(f.id, "Imp")
+
+    e.start_game()
+    e.start_night()
+    drain_prompts(e, [
+        ({"character": "Poisoner",   "step": "select_player"}, 4),
+    ])
+    e.advance_to_day()
+    e.execute_player(a.id)
+
+    kinds_after_execute = [c["kind"] for c in e.console]
+    assert "win_pending" in kinds_after_execute, (
+        f"Expected win_pending entry; saw kinds={kinds_after_execute}"
+    )
+    assert "game_end" not in kinds_after_execute, (
+        "game_end must NOT appear until the next dawn."
+    )
+
+    # Walk through the no-op night to dawn.
+    e.advance_to_night()
+    e.set_auto_advance_to_day(True)
+    e.start_night()
+    if e._night_thread is not None:
+        e._night_thread.join(timeout=3.0)
+
+    kinds_after_dawn = [c["kind"] for c in e.console]
+    assert "game_end" in kinds_after_dawn, (
+        f"Expected game_end at dawn; kinds={kinds_after_dawn}"
+    )
+    assert e.phase is Phase.FINISHED
+
+
 if __name__ == "__main__":
     test_chef_pair_count()
     print("chef test passed.")
@@ -452,4 +717,8 @@ if __name__ == "__main__":
     print("mayor-execution-voids test passed.")
     test_mayor_redirect_triggers_on_non_demon_kill()
     print("mayor-redirect-non-demon test passed.")
+    test_day_win_defers_to_dawn_players_can_keep_acting()
+    print("dawn-deferred end-to-end test passed.")
+    test_dawn_announcement_emits_game_end_console_event()
+    print("dawn-announcement console event test passed.")
     print("All new-character tests passed.")

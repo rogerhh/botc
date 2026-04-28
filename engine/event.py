@@ -40,6 +40,13 @@ class EventType(str, Enum):
     RESOLUTION = "resolution"
 
     # Game-state changes other characters may want to react to.
+    # Fired *before* the death actually lands (after Soldier/Monk
+    # protection, but before ``player.kill()`` flips ``alive`` to
+    # False). A reaction may set ``event.data["cancelled"] = True``
+    # to abort the kill — used by the Mayor's night-death redirect
+    # so the Mayor never transiently appears dead. ``data["cause"]``
+    # carries the original ``DeathCause``.
+    PRE_DEATH = "pre_death"
     DEATH = "death"
     EXECUTION = "execution"
     NOMINATION = "nomination"
