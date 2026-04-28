@@ -2357,7 +2357,9 @@ class Engine:
         if player.dead:
             return player
 
-        # Demon-kill protection (Soldier, Monk).
+        # Demon-kill protection (Monk only here; the Soldier's
+        # protection rule lives on the Soldier class as a PRE_DEATH
+        # reaction — see :mod:`engine.characters.soldier`).
         if cause is DeathCause.DEMON_KILL:
             if player.protected_from_demon:
                 # Monk-style protection: someone is shielding ``player``
@@ -2368,18 +2370,6 @@ class Engine:
                 self.log_reaction(
                     "Monk",
                     f"{player.name} is protected from the Demon — no death.",
-                    target=player,
-                    trigger="demon_kill",
-                )
-                return player
-            if (
-                player.character is not None
-                and player.character.name == "Soldier"
-                and player.has_ability
-            ):
-                self.log_reaction(
-                    "Soldier",
-                    f"{player.name} cannot be killed by the Demon.",
                     target=player,
                     trigger="demon_kill",
                 )
