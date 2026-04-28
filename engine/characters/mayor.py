@@ -33,8 +33,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from typing import Optional, Tuple
+
 from engine.character import Character
-from engine.enums import CharType
+from engine.enums import Alignment, CharType
 from engine.event import Event, EventType
 from engine.prompt import SelectPlayerPrompt, YesNoPrompt
 
@@ -56,6 +58,35 @@ class Mayor(Character):
         super().__init__(player)
         # Guard against re-entrant redirect handling on the same death.
         self._redirect_in_flight: bool = False
+
+    # ------------------------------------------------------------------
+    # Win condition: 3 alive, no execution, at dusk.
+    # ------------------------------------------------------------------
+
+    def check_win_condition(
+        self, engine: "Engine", *, at_dusk: bool
+    ) -> "Optional[Tuple[Alignment, str]]":
+        """Mayor's win: at dusk, exactly 3 alive non-Traveler/Fabled
+        players remain and no execution happened today.
+
+        The Mayor must still be alive and have their ability for the
+        win to fire. Alignment comes from the Mayor's own player so
+        non-TB scripts where a Mayor is evil work correctly.
+        """
+        if not at_dusk:
+            return None
+        if self.player is None or not self.player.has_ability:
+            return None
+        if engine._executed_today:
+            return None
+        counted = [
+            p for p in engine.alive_players
+            if p.char_type not in (CharType.TRAVELER, CharType.FABLED)
+        ]
+        if len(counted) != 3:
+            return None
+        winner = self.player.alignment or Alignment.GOOD
+        return winner, "Mayor: 3 alive players and no execution today."
 
     # ------------------------------------------------------------------
     # Reaction.

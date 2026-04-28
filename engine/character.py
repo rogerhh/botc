@@ -168,6 +168,32 @@ class Character:
         """
         return None
 
+    def check_win_condition(
+        self, engine: "Engine", *, at_dusk: bool
+    ) -> "Optional[tuple[object, str]]":
+        """Per-character win check, called by the engine win-loop.
+
+        Returns ``(Alignment, reason)`` if this character's seat
+        triggers a win right now, or ``None`` otherwise. Called once
+        per seated character (and once per impersonated perceived
+        character) on every ``Engine._check_win_conditions`` pass.
+
+        The engine fires the *first* registered win — including its
+        builtin demon-dead and two-alive checks — so a character that
+        wants priority should rely on event ordering (e.g. Saint's
+        EXECUTION reaction fires before the post-execution win check).
+
+        ``at_dusk`` is True only for the dusk pass (after DAY_END,
+        before NIGHT_START). Mayor's 3-alive-no-execution win uses
+        this gate.
+
+        Default: no contribution. Override on Mayor (3 alive at dusk),
+        and any future role with a passive win condition. Saint stays
+        a reaction-based pending-win because it fires *during* the
+        execution event.
+        """
+        return None
+
     def compute_reminder_tokens(
         self, engine: "Engine"
     ) -> "dict[str, list[int]]":

@@ -2973,54 +2973,88 @@ class Engine:
     # already dead) doesn't overwrite the original cause.
 
     def _check_win_conditions(self, at_dusk: bool = False) -> None:
+        """Walk the win-condition registry; register the first triggered.
+
+        The registry is composed of two layers:
+
+          1. **Builtin** — script-agnostic conditions every game has:
+             "all Demons dead → good wins", "two players left → evil
+             wins". Lives on the engine so empty-roster tests still
+             produce a sensible end state.
+          2. **Per-character** — each seated character (and each
+             impersonated perceived character) is asked, via
+             :meth:`Character.check_win_condition`, whether *its*
+             condition fires now. Adding a new role with a new win
+             rule (Mayor today; Atheist, Engineer-redirect, …
+             tomorrow) needs no engine edit.
+
+        First one to fire wins; the rest are skipped. Saint's "evil
+        wins on execution" stays a reaction-based pending-win because
+        it has to fire *during* the execution event, before this
+        check runs.
+        """
         if self._phase is Phase.FINISHED:
             return
         if self._pending_winner is not None:
-            # Already pending — first one to fire wins, don't overwrite.
             return
+
+        # 1) Builtin checks.
+        result = self._check_builtin_win_conditions()
+        if result is not None:
+            winner, reason = result
+            self._register_pending_win(winner, reason)
+            return
+
+        # 2) Per-character contributions.
+        for p in self._players:
+            char = getattr(p, "character", None)
+            if char is None:
+                continue
+            try:
+                contrib = char.check_win_condition(self, at_dusk=at_dusk)
+            except Exception as exc:  # pragma: no cover (defensive)
+                self.log(
+                    f"check_win_condition crashed in "
+                    f"{type(char).__name__}: {exc!r}"
+                )
+                contrib = None
+            if contrib is not None:
+                winner, reason = contrib
+                self._register_pending_win(winner, reason)
+                return
+            perceived = char.acting_perceived_character()
+            if perceived is None:
+                continue
+            try:
+                contrib = perceived.check_win_condition(self, at_dusk=at_dusk)
+            except Exception as exc:  # pragma: no cover (defensive)
+                self.log(
+                    f"check_win_condition crashed in perceived "
+                    f"{type(perceived).__name__}: {exc!r}"
+                )
+                contrib = None
+            if contrib is not None:
+                winner, reason = contrib
+                self._register_pending_win(winner, reason)
+                return
+
+    def _check_builtin_win_conditions(
+        self,
+    ) -> "Optional[Tuple[Alignment, str]]":
+        """Script-agnostic win checks: demon-dead, two-alive."""
         alive = self.alive_players
         alive_demons = [
-            p for p in alive
-            if p.char_type is CharType.DEMON
+            p for p in alive if p.char_type is CharType.DEMON
         ]
         if not alive_demons:
-            self._register_pending_win(Alignment.GOOD, "The Demon is dead.")
-            return
+            return Alignment.GOOD, "The Demon is dead."
         counted = [
             p for p in alive
             if p.char_type not in (CharType.TRAVELER, CharType.FABLED)
         ]
         if len(counted) <= 2:
-            self._register_pending_win(
-                Alignment.EVIL, "Only two players remain."
-            )
-            return
-
-        # Mayor: at dusk, if exactly 3 non-Traveler/Fabled players are
-        # alive and no execution happened today, the Mayor's team wins.
-        # The Mayor's alignment is read from the player (could be evil
-        # in non-Trouble-Brewing scripts).
-        if at_dusk and not self._executed_today and len(counted) == 3:
-            mayor_player = next(
-                (
-                    p for p in alive
-                    if p.character is not None
-                    and p.character.name == "Mayor"
-                    and p.has_ability
-                ),
-                None,
-            )
-            if mayor_player is not None:
-                winner = mayor_player.alignment or Alignment.GOOD
-                self.log(
-                    f"Mayor {mayor_player.name} triggers win — "
-                    f"3 alive, no execution; "
-                    f"{winner.value} pending."
-                )
-                self._register_pending_win(
-                    winner,
-                    "Mayor: 3 alive players and no execution today.",
-                )
+            return Alignment.EVIL, "Only two players remain."
+        return None
 
     def _register_pending_win(self, winner: Alignment, reason: str) -> None:
         """Record a triggered win without ending the game yet.
