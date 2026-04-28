@@ -733,80 +733,20 @@ class Engine:
         Idempotent: passing the same ``data`` twice is fine. Missing
         keys leave the existing pick (if any) untouched.
         """
-        drunk_fake = data.get("drunk_fake")
-        ft_red_herring = data.get("ft_red_herring")
-        ww_townsfolk = data.get("washerwoman_townsfolk")
-        ww_wrong = data.get("washerwoman_wrong")
-        librarian_outsider = data.get("librarian_outsider")
-        librarian_wrong = data.get("librarian_wrong")
-        investigator_minion = data.get("investigator_minion")
-        investigator_wrong = data.get("investigator_wrong")
-
+        # Generic dispatch — every seated character absorbs the setup
+        # data its class declares. The engine has no character-name
+        # knowledge here; new roles wire themselves in by overriding
+        # :meth:`Character.absorb_setup_data`.
         for player in self._players:
             char = player.character
             if char is None:
                 continue
-            if char.name == "Drunk" and drunk_fake:
-                tf_char = script_data.build_character(drunk_fake)
-                char.members.clear()
-                char.members.append(tf_char)
-                player.perceived_character_name = drunk_fake
+            try:
+                char.absorb_setup_data(self, data)
+            except Exception as exc:  # pragma: no cover (defensive)
                 self.log(
-                    f"{player.name} (Drunk) believes they are the "
-                    f"{drunk_fake} (pre-set from setup)."
+                    f"absorb_setup_data crashed in {char.name}: {exc!r}"
                 )
-            elif char.name == "Fortune Teller" and ft_red_herring:
-                rh_char = script_data.build_character(ft_red_herring)
-                char.members.clear()
-                char.members.append(rh_char)
-                # Resolve the seated red-herring player.
-                for p in self._players:
-                    if p.character is not None and p.character.name == ft_red_herring:
-                        char._red_herring = p
-                        self.log(
-                            f"{p.name} ({ft_red_herring}) is the red "
-                            f"herring for {player.name} (pre-set)."
-                        )
-                        break
-            elif char.name == "Washerwoman":
-                if ww_townsfolk:
-                    char._chosen_townsfolk = ww_townsfolk
-                    self.log(
-                        f"{player.name} (Washerwoman) will be shown the "
-                        f"{ww_townsfolk} (pre-set)."
-                    )
-                if ww_wrong:
-                    char._chosen_wrong = ww_wrong
-                    self.log(
-                        f"{player.name} (Washerwoman) WRONG token "
-                        f"placed on the {ww_wrong} (pre-set)."
-                    )
-            elif char.name == "Librarian":
-                if librarian_outsider:
-                    char._chosen_outsider = librarian_outsider
-                    self.log(
-                        f"{player.name} (Librarian) will be shown the "
-                        f"{librarian_outsider} (pre-set)."
-                    )
-                if librarian_wrong:
-                    char._chosen_wrong = librarian_wrong
-                    self.log(
-                        f"{player.name} (Librarian) WRONG token "
-                        f"placed on the {librarian_wrong} (pre-set)."
-                    )
-            elif char.name == "Investigator":
-                if investigator_minion:
-                    char._chosen_minion = investigator_minion
-                    self.log(
-                        f"{player.name} (Investigator) will be shown the "
-                        f"{investigator_minion} (pre-set)."
-                    )
-                if investigator_wrong:
-                    char._chosen_wrong = investigator_wrong
-                    self.log(
-                        f"{player.name} (Investigator) WRONG token "
-                        f"placed on the {investigator_wrong} (pre-set)."
-                    )
 
     def set_perceived_character(self, player_id: int, character_name: str) -> None:
         player = self.get_player(player_id)
@@ -1184,66 +1124,98 @@ class Engine:
     # FT red herring) just delegate to the underlying ``move_*``.
     # ------------------------------------------------------------------
 
-    # Mutex partners — dropping ``kind`` on a chair currently carrying
-    # ``partner`` triggers a swap rather than a plain overwrite. None
-    # of the remaining tokens (Drunk / FT red herring / pre-game
-    # nightly-state markers) are paired this way, so they simply
-    # delegate to their ``move_*`` method.
-    _TOKEN_MUTEX_PARTNERS = {
-        "washerwoman_townsfolk": "washerwoman_wrong",
-        "washerwoman_wrong":     "washerwoman_townsfolk",
-        "librarian_outsider":    "librarian_wrong",
-        "librarian_wrong":       "librarian_outsider",
-        "investigator_minion":   "investigator_wrong",
-        "investigator_wrong":    "investigator_minion",
-    }
+    # ------------------------------------------------------------------
+    # Setup-pick registry, built lazily from every Character class'
+    # ``setup_picks`` declaration. The engine's apply_token logic, the
+    # snapshot's setup-token getters, and the pool-side dispatch
+    # (autofill / clear / reroll) all read from this registry — there
+    # are no character-name lookups in this engine file. Adding a new
+    # role with a new setup pick is a class-level declaration plus
+    # corresponding pool-slot methods.
+    # ------------------------------------------------------------------
 
-    def _token_move_method(self, kind: str):
-        """Return the ``move_*`` method for ``kind`` (or None)."""
-        return {
-            "drunk":                 self.move_drunk_token,
-            "ft_red_herring":        self.move_ft_red_herring_token,
-            "washerwoman_townsfolk": self.move_washerwoman_townsfolk_token,
-            "washerwoman_wrong":     self.move_washerwoman_wrong_token,
-            "librarian_outsider":    self.move_librarian_outsider_token,
-            "librarian_wrong":       self.move_librarian_wrong_token,
-            "investigator_minion":   self.move_investigator_minion_token,
-            "investigator_wrong":    self.move_investigator_wrong_token,
-        }.get(kind)
+    _setup_pick_registry_cache: Optional[Dict[str, Dict[str, Any]]] = None
+
+    @classmethod
+    def _setup_pick_registry(cls) -> Dict[str, Dict[str, Any]]:
+        """Return ``{kind: spec_dict}`` for every setup pick on every
+        registered character class, plus owning-role metadata.
+
+        Cached at the class level — registry contents are pure class
+        attributes and never change at runtime.
+        """
+        if cls._setup_pick_registry_cache is not None:
+            return cls._setup_pick_registry_cache
+        from engine.characters import CHARACTER_REGISTRY
+        registry: Dict[str, Dict[str, Any]] = {}
+        for role_name, klass in CHARACTER_REGISTRY.items():
+            for spec in getattr(klass, "setup_picks", ()) or ():
+                kind = spec.get("kind")
+                if not kind or kind in registry:
+                    continue
+                merged = dict(spec)
+                merged["owner_role"] = role_name
+                registry[kind] = merged
+        cls._setup_pick_registry_cache = registry
+        return registry
+
+    def _setup_spec(self, kind: str) -> Optional[Dict[str, Any]]:
+        return self._setup_pick_registry().get(kind)
 
     def _token_role_for_kind(self, kind: str) -> Optional[str]:
         """Return the *character name* the token of ``kind`` currently
         sits on, or ``None`` if no chair carries it.
+
+        Generic dispatch — looks up the kind's ``getter`` in the
+        registry and reads the pool. The Drunk's IS-THE-DRUNK kind
+        is handled specially because it tracks a chair (the seat
+        whose character is "Drunk") rather than a pool slot.
         """
-        if kind == "drunk":
-            # The Drunk token always sits on the chair whose character
-            # is "Drunk"; if no such chair exists yet (Drunk in pool but
-            # not seated), there's nothing to swap from.
-            for c in self.chairs.list():
-                if (c.get("character") or "").strip() == "Drunk":
-                    return "Drunk"
+        spec = self._setup_spec(kind)
+        if spec is None:
             return None
-        getters = {
-            "ft_red_herring":        self.pool.ft_red_herring,
-            "washerwoman_townsfolk": self.pool.washerwoman_townsfolk,
-            "washerwoman_wrong":     self.pool.washerwoman_wrong,
-            "librarian_outsider":    self.pool.librarian_outsider,
-            "librarian_wrong":       self.pool.librarian_wrong,
-            "investigator_minion":   self.pool.investigator_minion,
-            "investigator_wrong":    self.pool.investigator_wrong,
-        }
-        getter = getters.get(kind)
+        if spec.get("triggers_seat_swap"):
+            owner = spec.get("owner_role")
+            for c in self.chairs.list():
+                if (c.get("character") or "").strip() == owner:
+                    return owner
+            return None
+        getter_name = spec.get("getter")
+        if not getter_name:
+            return None
+        getter = getattr(self.pool, getter_name, None)
         return getter() if getter else None
 
-    # Token kinds whose pool slot is the *typed* (seen) half of an
-    # info-character pair — Townsfolk for WW, Outsider for Librarian,
-    # Minion for Investigator. The matching ``_wrong`` kinds are the
-    # other half.
-    _TYPED_TOKEN_KINDS = frozenset({
-        "washerwoman_townsfolk",
-        "librarian_outsider",
-        "investigator_minion",
-    })
+    def _token_typed_kinds(self) -> "frozenset[str]":
+        """Token kinds that are the *typed* (seen) half of a mutex pair."""
+        return frozenset(
+            kind for kind, spec in self._setup_pick_registry().items()
+            if spec.get("is_typed")
+        )
+
+    def _token_mutex_partner(self, kind: str) -> Optional[str]:
+        spec = self._setup_spec(kind)
+        if spec is None:
+            return None
+        partners = spec.get("mutex_with") or ()
+        return partners[0] if partners else None
+
+    def _token_move_method(self, kind: str):
+        """Return the ``move_*`` method for ``kind`` (or None).
+
+        Each setup-pick spec names its own per-slot validator on the
+        Engine — the existing per-kind ``move_*_token`` methods stay
+        as the per-slot validators (they encode rules like "WRONG
+        must differ from seen"); ``apply_token`` dispatches to them
+        through the registry.
+        """
+        spec = self._setup_spec(kind)
+        if spec is None:
+            return None
+        # Convention: move_<kind>_token. The Drunk uses move_drunk_token
+        # (no _<kind>_ infix since there's only the one Drunk slot).
+        method_name = "move_" + kind + "_token"
+        return getattr(self, method_name, None)
 
     def apply_token(self, kind: str, dest_chair_id: int) -> Optional[str]:
         """Apply token ``kind`` to ``dest_chair_id`` with swap semantics.
@@ -1263,7 +1235,7 @@ class Engine:
         if move is None:
             return f"unknown token kind {kind!r}"
 
-        partner_kind = self._TOKEN_MUTEX_PARTNERS.get(kind)
+        partner_kind = self._token_mutex_partner(kind)
         if partner_kind is not None:
             dest = self.chairs.get(dest_chair_id)
             if dest is None:
@@ -1298,7 +1270,8 @@ class Engine:
                     return move(dest_chair_id)
 
                 # Decide which of (kind, partner_kind) is the typed slot.
-                if kind in self._TYPED_TOKEN_KINDS:
+                typed_kinds = self._token_typed_kinds()
+                if kind in typed_kinds:
                     typed_kind, typed_chair = kind, dest_chair_id
                     wrong_kind, wrong_chair = partner_kind, source_chair_id
                 else:
@@ -1363,29 +1336,23 @@ class Engine:
         return move(dest_chair_id)
 
     def _clear_token_slot(self, kind: str) -> None:
-        """Set the pool slot for ``kind`` to None, bypassing the
-        ``set_*`` methods' cross-slot side effects when possible.
+        """Set the pool slot for ``kind`` to None via the registry.
 
         Used by :meth:`apply_token` when an in-progress swap turns
         out to be infeasible — we need to clear the typed slot so the
         partner WRONG can be set without tripping the "must differ
         from seen" validation, then trigger a fresh autofill pick.
         """
-        setters = {
-            "ft_red_herring":        self.pool.set_ft_red_herring,
-            "washerwoman_townsfolk": self.pool.set_washerwoman_townsfolk,
-            "washerwoman_wrong":     self.pool.set_washerwoman_wrong,
-            "librarian_outsider":    self.pool.set_librarian_outsider,
-            "librarian_wrong":       self.pool.set_librarian_wrong,
-            "investigator_minion":   self.pool.set_investigator_minion,
-            "investigator_wrong":    self.pool.set_investigator_wrong,
-        }
-        setter = setters.get(kind)
-        if setter is not None:
-            try:
-                setter(None)
-            except ValueError:
-                pass
+        spec = self._setup_spec(kind)
+        if spec is None:
+            return
+        setter = getattr(self.pool, spec.get("setter") or "", None)
+        if setter is None:
+            return
+        try:
+            setter(None)
+        except ValueError:
+            pass
 
     def _seen_candidates_excluding(
         self, typed_kind: str, exclude_role: str
@@ -1393,21 +1360,21 @@ class Engine:
         """Return all in-pool roles that could legitimately receive
         the typed seen token, *excluding* ``exclude_role``.
 
-        Used by :meth:`apply_token` to decide whether an infeasible
-        swap can fall back to a displaced reroll (there's another
-        valid home for the seen token) or has to refuse the drop
-        outright (no alternate home; the seen would be left empty).
+        Generic across token kinds: the registry's ``check`` value
+        names a Check-style attribute/passes pair; we apply it through
+        the existing :meth:`_role_could_pass` helper plus the
+        ``forbid_self`` rule.
         """
-        names = self.pool.list()
-        ok = {
-            "washerwoman_townsfolk":
-                lambda n: self._townsfolk_in_play(n) and n != "Washerwoman",
-            "librarian_outsider":   self._outsider_in_play,
-            "investigator_minion":  self._minion_in_play,
-        }.get(typed_kind)
-        if ok is None:
+        spec = self._setup_spec(typed_kind)
+        if spec is None:
             return []
-        return [n for n in names if n != exclude_role and ok(n)]
+        owner = spec.get("owner_role")
+        return [
+            n for n in self.pool.list()
+            if n != exclude_role
+            and (not spec.get("forbid_self") or n != owner)
+            and self._role_passes_setup_check(n, spec.get("check"))
+        ]
 
     def _reroll_seen_excluding(
         self, typed_kind: str, exclude_role: str
@@ -1417,34 +1384,19 @@ class Engine:
 
         Used by :meth:`apply_token` after the WRONG slot has been
         forced to ``exclude_role`` — we need to re-pick the seen slot
-        from the same pool of candidates as the autofill, minus the
-        WRONG role, so the pool invariant "WRONG must differ from
-        seen" stays valid. Uses the appropriate ``set_*`` setter so
-        all the side-effect bookkeeping (e.g. retriggering setup
-        absorption) runs.
+        so the pool invariant "WRONG must differ from seen" stays
+        valid. Uses the registry's ``setter`` so all side-effect
+        bookkeeping (retriggering setup absorption) runs.
         """
         import random as _random
-        names = self.pool.list()
-        picker = {
-            "washerwoman_townsfolk": (
-                self.pool.set_washerwoman_townsfolk,
-                lambda n: self._townsfolk_in_play(n) and n != "Washerwoman",
-            ),
-            "librarian_outsider": (
-                self.pool.set_librarian_outsider,
-                lambda n: self._outsider_in_play(n),
-            ),
-            "investigator_minion": (
-                self.pool.set_investigator_minion,
-                lambda n: self._minion_in_play(n),
-            ),
-        }
-        entry = picker.get(typed_kind)
-        if entry is None:
-            return
-        setter, ok = entry
-        candidates = [n for n in names if n != exclude_role and ok(n)]
+        candidates = self._seen_candidates_excluding(typed_kind, exclude_role)
         if not candidates:
+            return
+        spec = self._setup_spec(typed_kind)
+        if spec is None:
+            return
+        setter = getattr(self.pool, spec.get("setter") or "", None)
+        if setter is None:
             return
         try:
             setter(_random.choice(candidates))
@@ -1454,26 +1406,45 @@ class Engine:
             pass
 
     def _autofill_token_slot(self, kind: str) -> None:
-        """Re-run the autofill for ``kind``'s pool slot.
-
-        Pool autofills are private (underscore-prefixed) helpers; this
-        wraps them so apply_token can re-roll a slot it just cleared.
-        Acquires the pool's lock manually for the duration.
-        """
-        autofills = {
-            "ft_red_herring":        self.pool._autofill_ft_red_herring,
-            "washerwoman_townsfolk": self.pool._autofill_washerwoman_townsfolk,
-            "washerwoman_wrong":     self.pool._autofill_washerwoman_wrong,
-            "librarian_outsider":    self.pool._autofill_librarian_outsider,
-            "librarian_wrong":       self.pool._autofill_librarian_wrong,
-            "investigator_minion":   self.pool._autofill_investigator_minion,
-            "investigator_wrong":    self.pool._autofill_investigator_wrong,
-        }
-        fn = autofills.get(kind)
+        """Re-run the autofill for ``kind``'s pool slot via the registry."""
+        spec = self._setup_spec(kind)
+        if spec is None or not spec.get("autofill"):
+            return
+        fn = getattr(self.pool, spec["autofill"], None)
         if fn is None:
             return
         with self.pool._lock:
             fn()
+
+    def _role_passes_setup_check(self, name: str, check_decl) -> bool:
+        """Apply a setup-pick ``check`` declaration to a role name.
+
+        Accepts the small enumerated forms used in ``setup_picks``:
+          * ``None`` — any role passes (used by WRONG slots).
+          * ``("char_type", "TOWNSFOLK"|"OUTSIDER"|"MINION"|"GOOD")``
+            — uses the existing Check abstraction so misregistering
+            roles (Spy, Recluse) participate correctly.
+          * ``"true_townsfolk"`` — strict-true Townsfolk (no Spy).
+        """
+        if check_decl is None:
+            return True
+        if check_decl == "true_townsfolk":
+            return self._true_townsfolk(name)
+        if (
+            isinstance(check_decl, tuple)
+            and len(check_decl) == 2
+            and check_decl[0] == "char_type"
+        ):
+            ct = check_decl[1]
+            if ct == "TOWNSFOLK":
+                return self._townsfolk_in_play(name)
+            if ct == "OUTSIDER":
+                return self._outsider_in_play(name)
+            if ct == "MINION":
+                return self._minion_in_play(name)
+            if ct == "GOOD":
+                return self._good_in_play(name)
+        return False
 
     def _retrigger_setup_for_role(
         self, role_name: str, *, reset_first: bool = False
@@ -3370,17 +3341,20 @@ class Engine:
     #                       SNAPSHOTS
     # ==================================================================
 
-    # Setup-time tokens key off the matching pool slot's role name —
-    # the token sits on whichever chair currently holds that role.
-    _SETUP_TOKEN_GETTERS = (
-        ("ft_red_herring",        "ft_red_herring"),
-        ("washerwoman_townsfolk", "washerwoman_townsfolk"),
-        ("washerwoman_wrong",     "washerwoman_wrong"),
-        ("librarian_outsider",    "librarian_outsider"),
-        ("librarian_wrong",       "librarian_wrong"),
-        ("investigator_minion",   "investigator_minion"),
-        ("investigator_wrong",    "investigator_wrong"),
-    )
+    @classmethod
+    def _setup_token_getters(cls) -> "tuple[tuple[str, str], ...]":
+        """Return ``((kind, pool_getter_name), …)`` for every setup
+        pick whose value lives in a pool slot.
+
+        Sourced from the same registry the token-drag dispatch uses.
+        Excludes the Drunk's IS-THE-DRUNK kind (the marker tracks the
+        chair whose character is "Drunk", not a pool slot).
+        """
+        return tuple(
+            (kind, spec["getter"])
+            for kind, spec in cls._setup_pick_registry().items()
+            if not spec.get("triggers_seat_swap") and spec.get("getter")
+        )
 
     def _per_seat_tokens(self) -> Dict[str, List[int]]:
         """Per-seat (player_id) reminder-token presence.
@@ -3454,7 +3428,7 @@ class Engine:
         # Resolve each setup token's current role-name once per call.
         setup_roles = {
             kind: getattr(self.pool, getter)()
-            for kind, getter in self._SETUP_TOKEN_GETTERS
+            for kind, getter in self._setup_token_getters()
         }
         drunk_fake_role = self.pool.drunk_fake()
         pool_names = set(self.pool.list())

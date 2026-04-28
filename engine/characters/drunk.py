@@ -38,9 +38,43 @@ class Drunk(Character):
         {"name": 'IS THE DRUNK', "icon": 'drunk_is_the_drunk.png'},
     ]
 
+    setup_picks = (
+        {
+            "kind":         "drunk",
+            "slot":         "fake",
+            "getter":       "drunk_fake",
+            "setter":       "set_drunk_fake",
+            "autofill":     None,             # no autofill — ST picks
+            "mutex_with":   (),
+            "check":        "true_townsfolk", # strict-true TF
+            "forbid_self":  False,
+            "triggers_seat_swap": True,
+        },
+    )
+
     # ------------------------------------------------------------------
     # Seat-assignment hook.
     # ------------------------------------------------------------------
+
+    def absorb_setup_data(self, engine: "Engine", data: dict) -> None:
+        """Pre-set the impersonated TF from the UI's setup data."""
+        super().absorb_setup_data(engine, data)
+        if self.player is None:
+            return
+        drunk_fake = data.get("drunk_fake") or data.get("drunk")
+        if not drunk_fake:
+            return
+        try:
+            tf_char = engine.build_character(drunk_fake)
+        except KeyError:
+            return
+        self.members.clear()
+        self.members.append(tf_char)
+        self.player.perceived_character_name = drunk_fake
+        engine.log(
+            f"{self.player.name} (Drunk) believes they are the "
+            f"{drunk_fake} (pre-set from setup)."
+        )
 
     def compute_reminder_tokens(self, engine: "Engine") -> "dict[str, list[int]]":
         """Place the IS THE DRUNK token on the Drunk's own seat."""

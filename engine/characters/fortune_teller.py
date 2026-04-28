@@ -55,6 +55,20 @@ class FortuneTeller(Character):
         {"name": 'RED HERRING', "icon": 'fortune_teller_red_herring.png'},
     ]
 
+    setup_picks = (
+        {
+            "kind":         "ft_red_herring",
+            "slot":         "red_herring",
+            "getter":       "ft_red_herring",
+            "setter":       "set_ft_red_herring",
+            "autofill":     "_autofill_ft_red_herring",
+            "mutex_with":   (),
+            "check":        ("char_type", "GOOD"),  # TF or Outsider
+            "forbid_self":  False,
+            "reset_first":  True,
+        },
+    )
+
     DETECTION_CATEGORIES = (CharType.DEMON,)
 
     def __init__(self, player: Optional["Player"] = None) -> None:
@@ -78,6 +92,29 @@ class FortuneTeller(Character):
         role; see :attr:`_red_herring` for the resolved Player.
         """
         return self.members[0] if self.members else None
+
+    def absorb_setup_data(self, engine: "Engine", data: dict) -> None:
+        """Pre-set the red-herring role from the UI's setup data."""
+        super().absorb_setup_data(engine, data)
+        if self.player is None:
+            return
+        rh_name = data.get("ft_red_herring")
+        if not rh_name:
+            return
+        try:
+            rh_char = engine.build_character(rh_name)
+        except KeyError:
+            return
+        self.members.clear()
+        self.members.append(rh_char)
+        for p in engine.players:
+            if p.character is not None and p.character.name == rh_name:
+                self._red_herring = p
+                engine.log(
+                    f"{p.name} ({rh_name}) is the red herring for "
+                    f"{self.player.name} (pre-set)."
+                )
+                break
 
     def _resolve_red_herring_player(
         self, engine: "Engine"

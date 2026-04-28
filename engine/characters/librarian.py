@@ -66,6 +66,31 @@ class Librarian(Character):
         },
     ]
 
+    setup_picks = (
+        {
+            "kind":         "librarian_outsider",
+            "slot":         "outsider",
+            "getter":       "librarian_outsider",
+            "setter":       "set_librarian_outsider",
+            "autofill":     "_autofill_librarian_outsider",
+            "mutex_with":   ("librarian_wrong",),
+            "check":        ("char_type", "OUTSIDER"),
+            "forbid_self":  False,
+            "is_typed":     True,
+        },
+        {
+            "kind":         "librarian_wrong",
+            "slot":         "wrong",
+            "getter":       "librarian_wrong",
+            "setter":       "set_librarian_wrong",
+            "autofill":     "_autofill_librarian_wrong",
+            "mutex_with":   ("librarian_outsider",),
+            "check":        None,
+            "forbid_self":  True,
+            "forbid_seen":  True,
+        },
+    )
+
     @classmethod
     def accepts_tokens(cls) -> "frozenset[str]":
         # The Librarian herself can't host the Librarian WRONG token.
@@ -77,6 +102,26 @@ class Librarian(Character):
         super().__init__(player)
         self._chosen_outsider: Optional[str] = None
         self._chosen_wrong: Optional[str] = None
+
+    def absorb_setup_data(self, engine: "Engine", data: dict) -> None:
+        """Pre-set seen-Outsider + WRONG from UI setup data."""
+        super().absorb_setup_data(engine, data)
+        if self.player is None:
+            return
+        librarian_outsider = data.get("librarian_outsider")
+        librarian_wrong = data.get("librarian_wrong")
+        if librarian_outsider:
+            self._chosen_outsider = librarian_outsider
+            engine.log(
+                f"{self.player.name} (Librarian) will be shown the "
+                f"{librarian_outsider} (pre-set)."
+            )
+        if librarian_wrong:
+            self._chosen_wrong = librarian_wrong
+            engine.log(
+                f"{self.player.name} (Librarian) WRONG token "
+                f"placed on the {librarian_wrong} (pre-set)."
+            )
 
     def on_setup_ability(
         self,

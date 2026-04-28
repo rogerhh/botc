@@ -168,6 +168,48 @@ class Character:
         """
         return None
 
+    # Setup-time token-slot declarations.
+    #
+    # Each entry describes one setup-time reminder-token kind whose
+    # value (a role name) lives in :class:`engine.pool.CharacterPool`.
+    # The engine's generic token-drag dispatch (Engine.apply_token) is
+    # driven entirely by this declaration; adding a new role with a
+    # new setup pick (e.g. Pixie's chosen Townsfolk, Snake Charmer's
+    # initial target) is one entry here plus a class attribute on the
+    # role.
+    #
+    # Each entry is a dict with keys:
+    #   ``kind``        — token kind (matches snapshot tokens[].kind).
+    #   ``slot``        — short logical name ("townsfolk", "wrong",
+    #                     "fake", "red_herring", …). Used in logging.
+    #   ``getter``      — name of the CharacterPool method that returns
+    #                     the current value (e.g. "washerwoman_townsfolk").
+    #   ``setter``      — name of the CharacterPool method that writes
+    #                     the value (e.g. "set_washerwoman_townsfolk").
+    #   ``autofill``    — name of the CharacterPool method that
+    #                     re-rolls a sensible default (or None).
+    #   ``mutex_with``  — list of *other* token kinds this slot pairs
+    #                     with (drag onto a chair carrying a partner
+    #                     swaps the two). Default empty.
+    #   ``check``       — Check identifying which chair characters can
+    #                     receive this token. ``None`` means any chair
+    #                     (e.g. WRONG tokens — any character can carry
+    #                     them as long as it's not self / not the seen
+    #                     partner). ``"true_townsfolk"`` is a magic
+    #                     value used by the Drunk's IS-THE-DRUNK
+    #                     swap which requires a *true* Townsfolk
+    #                     (not a misregistered Spy).
+    #   ``forbid_self`` — True if the token can't sit on the owner's
+    #                     own seat (the WRONG and TYPED tokens forbid
+    #                     this).
+    #   ``forbid_seen`` — True if this WRONG token must differ from
+    #                     its mutex_with seen partner (Washerwoman /
+    #                     Librarian / Investigator WRONG slots).
+    #   ``triggers_seat_swap`` — True only for the Drunk's IS-THE-
+    #                     DRUNK token, which moves the IS-THE-DRUNK
+    #                     marker AND swaps the chair characters.
+    setup_picks: "tuple[dict, ...]" = ()
+
     def check_win_condition(
         self, engine: "Engine", *, at_dusk: bool
     ) -> "Optional[tuple[object, str]]":
@@ -217,6 +259,47 @@ class Character:
         Scarlet Woman's IS THE DEMON, …).
         """
         return {}
+
+    def absorb_setup_data(
+        self, engine: "Engine", data: "dict"
+    ) -> None:
+        """Absorb pre-game UI picks for this character.
+
+        Called from :meth:`Engine.apply_setup_data` for every seated
+        character. The default looks up each declared ``setup_picks``
+        kind in ``data`` (keyed by token kind, e.g. ``"drunk_fake"``,
+        ``"washerwoman_townsfolk"``) and writes the value to the
+        matching pool slot via the registry's setter — so a generic
+        UI bag-state replay works without per-character code on the
+        engine.
+
+        Override on roles whose absorption needs to mutate
+        character-internal state too (Drunk's ``members[0]`` /
+        ``perceived_character_name``, Fortune Teller's
+        ``_red_herring`` / ``members[0]``, Washerwoman / Librarian /
+        Investigator's ``_chosen_*``). Such overrides should call
+        ``super().absorb_setup_data(engine, data)`` to keep the
+        pool-slot writes.
+        """
+        if self.player is None:
+            return
+        for spec in getattr(self.__class__, "setup_picks", ()) or ():
+            kind = spec.get("kind")
+            value = data.get(kind)
+            if value is None:
+                continue
+            setter_name = spec.get("setter")
+            if not setter_name:
+                continue
+            setter = getattr(engine.pool, setter_name, None)
+            if setter is None:
+                continue
+            try:
+                setter(value)
+            except ValueError:
+                # Tolerate stale UI snapshots — the pool's invariants
+                # raise when a value isn't valid for the current slot.
+                pass
 
     def on_assign_to_seat(self, engine: "Engine") -> None:
         """Run when this character is assigned to a seat.

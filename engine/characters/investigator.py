@@ -62,6 +62,31 @@ class Investigator(Character):
         },
     ]
 
+    setup_picks = (
+        {
+            "kind":         "investigator_minion",
+            "slot":         "minion",
+            "getter":       "investigator_minion",
+            "setter":       "set_investigator_minion",
+            "autofill":     "_autofill_investigator_minion",
+            "mutex_with":   ("investigator_wrong",),
+            "check":        ("char_type", "MINION"),
+            "forbid_self":  False,
+            "is_typed":     True,
+        },
+        {
+            "kind":         "investigator_wrong",
+            "slot":         "wrong",
+            "getter":       "investigator_wrong",
+            "setter":       "set_investigator_wrong",
+            "autofill":     "_autofill_investigator_wrong",
+            "mutex_with":   ("investigator_minion",),
+            "check":        None,
+            "forbid_self":  True,
+            "forbid_seen":  True,
+        },
+    )
+
     @classmethod
     def accepts_tokens(cls) -> "frozenset[str]":
         # The Investigator herself can't host the Investigator WRONG token.
@@ -73,6 +98,26 @@ class Investigator(Character):
         super().__init__(player)
         self._chosen_minion: Optional[str] = None
         self._chosen_wrong: Optional[str] = None
+
+    def absorb_setup_data(self, engine: "Engine", data: dict) -> None:
+        """Pre-set seen-Minion + WRONG from UI setup data."""
+        super().absorb_setup_data(engine, data)
+        if self.player is None:
+            return
+        investigator_minion = data.get("investigator_minion")
+        investigator_wrong = data.get("investigator_wrong")
+        if investigator_minion:
+            self._chosen_minion = investigator_minion
+            engine.log(
+                f"{self.player.name} (Investigator) will be shown the "
+                f"{investigator_minion} (pre-set)."
+            )
+        if investigator_wrong:
+            self._chosen_wrong = investigator_wrong
+            engine.log(
+                f"{self.player.name} (Investigator) WRONG token "
+                f"placed on the {investigator_wrong} (pre-set)."
+            )
 
     def on_setup_ability(
         self,

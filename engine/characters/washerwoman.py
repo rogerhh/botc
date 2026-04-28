@@ -62,6 +62,31 @@ class Washerwoman(Character):
         },
     ]
 
+    setup_picks = (
+        {
+            "kind":         "washerwoman_townsfolk",
+            "slot":         "townsfolk",
+            "getter":       "washerwoman_townsfolk",
+            "setter":       "set_washerwoman_townsfolk",
+            "autofill":     "_autofill_washerwoman_townsfolk",
+            "mutex_with":   ("washerwoman_wrong",),
+            "check":        ("char_type", "TOWNSFOLK"),
+            "forbid_self":  True,
+            "is_typed":     True,
+        },
+        {
+            "kind":         "washerwoman_wrong",
+            "slot":         "wrong",
+            "getter":       "washerwoman_wrong",
+            "setter":       "set_washerwoman_wrong",
+            "autofill":     "_autofill_washerwoman_wrong",
+            "mutex_with":   ("washerwoman_townsfolk",),
+            "check":        None,
+            "forbid_self":  True,
+            "forbid_seen":  True,
+        },
+    )
+
     @classmethod
     def accepts_tokens(cls) -> "frozenset[str]":
         # The WW herself can't host the WW WRONG token.
@@ -82,6 +107,26 @@ class Washerwoman(Character):
         # Pre-set during setup (Engine.apply_setup_data). Names the
         # *role* of the WRONG player the WW will be pointed at.
         self._chosen_wrong: Optional[str] = None
+
+    def absorb_setup_data(self, engine: "Engine", data: dict) -> None:
+        """Pre-set seen-Townsfolk + WRONG from UI setup data."""
+        super().absorb_setup_data(engine, data)
+        if self.player is None:
+            return
+        ww_townsfolk = data.get("washerwoman_townsfolk")
+        ww_wrong = data.get("washerwoman_wrong")
+        if ww_townsfolk:
+            self._chosen_townsfolk = ww_townsfolk
+            engine.log(
+                f"{self.player.name} (Washerwoman) will be shown the "
+                f"{ww_townsfolk} (pre-set)."
+            )
+        if ww_wrong:
+            self._chosen_wrong = ww_wrong
+            engine.log(
+                f"{self.player.name} (Washerwoman) WRONG token "
+                f"placed on the {ww_wrong} (pre-set)."
+            )
 
     def on_setup_ability(
         self,
