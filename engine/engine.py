@@ -1637,6 +1637,48 @@ class Engine:
     # Preset-driven night order.
     # ------------------------------------------------------------------
 
+    # System-step handlers: preset steps that aren't a single
+    # character's ability. Each entry maps the step name to a
+    # ``(method_attr, history_label)`` pair. The dispatch itself lives
+    # in :meth:`_run_preset_night`. Extending the engine for a new
+    # system-driven step (e.g. a ritual at start-of-night) is purely
+    # additive — drop a new method on the engine and add an entry
+    # here.
+    _SYSTEM_STEP_HANDLERS: Dict[str, Tuple[str, str]] = {
+        preset_module.MINION_INFO: ("_run_minion_info_step", "Minion Info"),
+        preset_module.DEMON_INFO:  ("_run_demon_info_step",  "Demon Info"),
+        "Scarlet Woman":           ("_run_scarlet_woman_demon_reveal_step",
+                                    "Scarlet Woman"),
+    }
+
+    def _run_minion_info_step(
+        self, step: "preset_module.NightStep", night_number: int
+    ) -> None:
+        self._run_minion_info(step)
+
+    def _run_demon_info_step(
+        self, step: "preset_module.NightStep", night_number: int
+    ) -> None:
+        self._run_demon_info(step)
+
+    def _run_scarlet_woman_demon_reveal_step(
+        self, step: "preset_module.NightStep", night_number: int
+    ) -> None:
+        """Drive the night-time "YOU ARE the <Demon>" reveal queue.
+
+        The Scarlet Woman class' reaction queues a freshly promoted
+        seat onto ``engine._sw_pending_demon_reveal`` when it inherits
+        the Demon. The preset places a "Scarlet Woman" step at the
+        right night-order slot for the reveal; this handler drains
+        the queue if any reveal is pending. (Once the SW reaction has
+        fired, the seat's ``character`` is now an Imp instance, so
+        the generic ``in_play.get(step.name)`` path would silently
+        skip — hence the dedicated step handler.)
+        """
+        if self._sw_pending_demon_reveal:
+            self._announce_step(step)
+            self._run_scarlet_woman_step(step)
+
     def _run_preset_night(self, night_number: int) -> None:
         """Walk the preset's night sheet, prompting the storyteller for
         each step in turn.
@@ -1718,38 +1760,20 @@ class Engine:
                 self._completed_step_index += 1
                 continue
 
-            if step.name == preset_module.MINION_INFO:
-                self._run_minion_info(step)
+            # System-step registry — engine-driven steps that aren't a
+            # single character's ability (Minion Info, Demon Info, the
+            # Scarlet Woman demon-role reveal, …). Each step name is
+            # mapped to a ``(handler, label)`` pair via
+            # ``_SYSTEM_STEP_HANDLERS``. Adding a new system step is a
+            # one-line registry entry plus a method on the engine.
+            handler_entry = self._SYSTEM_STEP_HANDLERS.get(step.name)
+            if handler_entry is not None:
+                handler_attr, label = handler_entry
+                handler = getattr(self, handler_attr)
+                handler(step, night_number)
                 self._completed_step_index += 1
                 self._save_history_checkpoint(
-                    f"after Minion Info (night {night_number})"
-                )
-                continue
-            if step.name == preset_module.DEMON_INFO:
-                self._run_demon_info(step)
-                self._completed_step_index += 1
-                self._save_history_checkpoint(
-                    f"after Demon Info (night {night_number})"
-                )
-                continue
-
-            # Special case: the Scarlet Woman step on the night sheet
-            # exists to walk a freshly-promoted Scarlet Woman through
-            # the demon-role reveal (per the trouble-brewing night
-            # sheet, but consolidated into a single "YOU ARE the
-            # <Demon>" prompt — no separate YOU ARE token stage).
-            # Once the SW reaction has fired, the seated player's
-            # ``character`` is no longer Scarlet Woman, so the generic
-            # ``in_play.get(step.name)`` lookup below would silently
-            # skip the step. Handle the reveal explicitly here, ahead of
-            # that lookup, so the reveal still runs.
-            if step.name == "Scarlet Woman":
-                if self._sw_pending_demon_reveal:
-                    self._announce_step(step)
-                    self._run_scarlet_woman_step(step)
-                self._completed_step_index += 1
-                self._save_history_checkpoint(
-                    f"after Scarlet Woman (night {night_number})"
+                    f"after {label} (night {night_number})"
                 )
                 continue
 
