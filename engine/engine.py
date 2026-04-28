@@ -668,12 +668,14 @@ class Engine:
         player = self.get_player(player_id)
         char = script_data.build_character(character_name)
         player.assign_character(char)
-        # Drunk: by default, perceived character is "Townsfolk" placeholder
-        # until the storyteller sets a specific one.
-        if character_name == "Drunk":
-            player.set_drunk(True)
-            if player.perceived_character_name is None:
-                player.perceived_character_name = "Townsfolk"
+        # Per-character seed: each Character class declares any
+        # seat-bound side effect via ``on_assign_to_seat`` (the Drunk
+        # marks itself drunk, etc.). The engine has no character-name
+        # knowledge here.
+        try:
+            char.on_assign_to_seat(self)
+        except Exception as exc:  # pragma: no cover (defensive)
+            self.log(f"Error in {char.name} on_assign_to_seat: {exc!r}")
         self.log(f"Assigned {character_name} to {player.name!r} (id={player_id}).")
         # Trigger the on-setup ability in the appropriate mode. During
         # phase=SETUP the UI is in control, so SETUP_PHASE is silent

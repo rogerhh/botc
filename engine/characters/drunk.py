@@ -39,6 +39,23 @@ class Drunk(Character):
     ]
 
     # ------------------------------------------------------------------
+    # Seat-assignment hook.
+    # ------------------------------------------------------------------
+
+    def on_assign_to_seat(self, engine: "Engine") -> None:
+        """Mark the Drunk seat drunk; seed the perceived-TF placeholder.
+
+        Replaces the engine's old ``if character_name == "Drunk":``
+        branch in :meth:`Engine.assign_character`. The engine no longer
+        has Drunk-specific code; the Drunk class owns this rule.
+        """
+        if self.player is None:
+            return
+        self.player.set_drunk(True)
+        if self.player.perceived_character_name is None:
+            self.player.perceived_character_name = "Townsfolk"
+
+    # ------------------------------------------------------------------
     # Convenience accessor.
     # ------------------------------------------------------------------
 

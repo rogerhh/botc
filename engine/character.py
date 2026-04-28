@@ -168,6 +168,26 @@ class Character:
         """
         return None
 
+    def on_assign_to_seat(self, engine: "Engine") -> None:
+        """Run when this character is assigned to a seat.
+
+        Fires from :meth:`Engine.assign_character` after the
+        :class:`Player` <-> :class:`Character` wiring is in place but
+        before any :meth:`on_setup_ability` pass. This is the place to
+        seed character-owned state that has to exist *before* the role
+        is acted on:
+
+          * Drunk: mark the seat drunk; default ``perceived_character_name``
+            to ``"Townsfolk"`` so the player's phone doesn't reveal the
+            Drunk before the storyteller picks the impersonated TF.
+
+        Default: no-op. Override on any role with seat-bound side
+        effects of being assigned. The engine has no character-name
+        knowledge in :meth:`Engine.assign_character`; everything the
+        new role needs to seed lives on this hook.
+        """
+        return None
+
     def setup_ability(self, engine: "Engine") -> None:
         """Run the character's setup-time ability, if any (legacy entry).
 
