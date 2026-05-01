@@ -110,6 +110,13 @@ class Mayor(Character):
             and self.player.has_ability
             and any(t.id == self.player.id for t in event.targets)
             and engine.phase.is_night
+            # If a passive canceller earlier in the dispatch order has
+            # already saved the Mayor (Tea Lady's good-neighbour
+            # protection, Innkeeper's SAFE marker, Sailor's cannot-die,
+            # Fool's first-death save, etc.), skip the redirect prompt
+            # — the Mayor doesn't get an unnecessary ST decision and
+            # the death is already prevented.
+            and not event.data.get("cancelled")
         ):
             self._maybe_redirect_night_kill(engine, event)
 

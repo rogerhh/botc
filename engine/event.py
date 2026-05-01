@@ -57,6 +57,13 @@ class EventType(str, Enum):
     NIGHT_END = "night_end"
     DAY_START = "day_start"
     DAY_END = "day_end"
+    # Fired by ``Engine.change_character`` *before* a player's
+    # Character class is swapped. ``targets`` is the affected Player;
+    # ``data["new_character"]`` is the incoming role's name. The OLD
+    # character instance is still wired to the player at dispatch
+    # time, so it gets a chance to clean up any persistent effects it
+    # has placed (the Poisoner's poison, etc.) before being discarded.
+    CHARACTER_CHANGE = "character_change"
     # Fired by the night loop right before a character's ability runs.
     # Carries the preset step's name + description in ``data`` so the
     # UI can highlight the character about to act and surface the

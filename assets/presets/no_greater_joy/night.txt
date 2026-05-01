@@ -1,0 +1,20 @@
+Dusk
+Start the Night Phase.
+
+Scarlet Woman
+If the Scarlet Woman became the Demon today, show them the YOU ARE token, then the Demon token.
+
+Imp
+The Imp chooses a player.  If the Imp chose themselves: Replace 1 alive Minion token with a spare Imp token. Put the old Imp to sleep. Wake the new Imp. Show the YOU ARE token, then show the Imp token.
+
+Sage
+If the Demon killed the Sage, wake the Sage and point to 2 players, 1 of which is the Demon.
+
+Empath
+Give a finger signal.
+
+Chambermaid
+The Chambermaid chooses 2 living players. Give a finger signal.
+
+Dawn
+Wait for a few seconds. End the Night Phase.

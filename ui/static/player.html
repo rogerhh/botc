@@ -3,18 +3,55 @@
 <head>
 <meta charset="utf-8" />
 <title>Player View</title>
-<!-- Player-facing phone UI. This is the view a player sees when
-     they scan their personal QR (per-player code, set up later) — not
-     the storyteller's mobile UI (that lives at /phone). For now this
-     is a placeholder while the storyteller UI is being finalized. -->
+<!-- Player UI (named by its audience: a single player). This is the
+     view a player sees when they scan the shared player QR shown by
+     the Storyteller — NOT the Storyteller UI (which lives at /storyteller)
+     and NOT the Local UI (index.html).
+
+     INFORMATION HIDING — BINDING (see ui/README.md):
+       * The Player UI must NEVER display player character
+         information during the game. Not the player's own
+         character, not anyone else's. A player learns their own
+         character from the physical token they were dealt at the
+         table — it does not belong on this surface.
+       * The Player UI never shows the Grimoire (state reminder
+         tokens, alive/dead status, etc.). The only Spy exception
+         is documented in ui/README.md.
+       * The only things the Player UI shows are: the player's own
+         name (and where they're seated), the townsquare with seated
+         player names, and Information prompts the engine routes to
+         it (with the source character name redacted).
+
+     This page has two modes, driven by /api/lobby/me:
+       login       — no lobby cookie, or stale cookie. Show a name
+                     entry form. Submitting POSTs /api/lobby/join,
+                     which sets the botc_lobby_id cookie.
+       townsquare  — lobby cookie matches a live entry. Render the
+                     chair ring (positions from /api/state) using the
+                     same cream-chair / wood-board palette the Local
+                     and Storyteller UIs use, so the player sees the
+                     same town square the storyteller does — only
+                     without character tokens or grimoire reminders.
+                     If the player has been assigned to a chair, that
+                     chair is highlighted with an amber stroke + glow;
+                     otherwise the page shows a "waiting to be seated"
+                     banner.
+-->
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="mobile-web-app-capable" content="yes" />
 <meta name="theme-color" content="#1a1410" />
 <style>
   :root {
+    /* Match the Local / Storyteller UI palette so the player sees the
+       same town square aesthetic, just without grimoire information. */
     --bg: #1a1410;
     --panel: #221c17;
+    --board: #3a2a1d;
+    --board-edge: #8a6a4b;
+    --chair: #d9c9a8;
+    --chair-edge: #5a3f27;
+    --you: #f0c27a;
     --text: #ece3d3;
     --muted: #a99880aa;
     --accent: #f0c27a;
@@ -29,10 +66,18 @@
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
     overflow: hidden;
     -webkit-tap-highlight-color: transparent;
+  }
+  body {
     -webkit-user-select: none;
     user-select: none;
+    -webkit-touch-callout: none;
   }
-  .wrap {
+  /* ---- mode switching ---- */
+  body[data-mode="login"]      .mode-townsquare { display: none; }
+  body[data-mode="townsquare"] .mode-login      { display: none; }
+
+  /* ---- login mode ---- */
+  .login-wrap {
     position: absolute;
     inset: 0;
     display: flex;
@@ -42,38 +87,878 @@
     padding: 24px;
     text-align: center;
   }
-  h1 {
-    margin: 0 0 12px;
+  .login-wrap h1 {
+    margin: 0 0 8px;
     font-size: 22px;
     font-weight: 700;
     color: var(--accent);
     letter-spacing: 0.04em;
   }
-  p {
-    margin: 6px 0;
+  .login-wrap p {
+    margin: 4px 0 18px;
     font-size: 14px;
     line-height: 1.5;
-    color: var(--text);
-    max-width: 360px;
+    color: var(--muted);
+    max-width: 320px;
   }
-  .hint {
-    margin-top: 20px;
-    font-size: 12px;
+  .login-wrap form {
+    width: 100%;
+    max-width: 320px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .login-wrap input {
+    -webkit-user-select: auto;
+    user-select: auto;
+    width: 100%;
+    padding: 12px 14px;
+    border-radius: 10px;
+    border: 1px solid #6a5e44;
+    background: var(--panel);
+    color: var(--text);
+    font-size: 17px;
+    text-align: center;
+    outline: none;
+  }
+  .login-wrap input:focus { border-color: var(--accent); }
+  .login-wrap button {
+    width: 100%;
+    padding: 12px 14px;
+    border-radius: 10px;
+    border: 0;
+    background: var(--accent);
+    color: #1a1410;
+    font-size: 16px;
+    font-weight: 700;
+    cursor: pointer;
+  }
+  .login-wrap button:disabled { opacity: 0.4; cursor: default; }
+  .login-wrap .err {
+    color: #d77676;
+    font-size: 13px;
+    min-height: 18px;
+  }
+
+  /* ---- townsquare mode ---- */
+  .ts-wrap {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+  }
+  .ts-header {
+    flex: 0 0 auto;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 12px 16px 8px;
+    text-align: center;
+    background: var(--panel);
+    border-bottom: 1px solid #00000088;
+  }
+  .ts-header .you-name {
+    font-size: 22px;
+    font-weight: 700;
+    color: var(--accent);
+    letter-spacing: 0.04em;
+  }
+  .ts-header .you-status {
+    margin-top: 4px;
+    font-size: 11px;
     color: var(--muted);
     text-transform: uppercase;
     letter-spacing: 0.12em;
   }
+  .ts-header .you-status.waiting { color: #d7a676; }
+  .ts-header .you-status.seated { color: #8cc97a; }
+  .ts-header .change-name {
+    margin-top: 6px;
+    background: transparent;
+    border: 0;
+    color: var(--muted);
+    font-size: 12px;
+    text-decoration: underline dotted;
+    cursor: pointer;
+    padding: 0;
+  }
+
+  /* The board itself: a square wood-stained card centered in the
+     remaining vertical space. Mirrors the Local UI's #board styling
+     so the chair ring reads the same on both surfaces. */
+  .ts-board-area {
+    flex: 1 1 auto;
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 8px 6px;
+    overflow: hidden;
+  }
+  #board {
+    width: min(100%, calc(100vh - 220px));
+    aspect-ratio: 1 / 1;
+    background: radial-gradient(ellipse at center, #4a3525 0%, #2a1c13 100%);
+    border: 2px solid var(--board-edge);
+    border-radius: 6px;
+    box-shadow: 0 4px 24px #00000088, inset 0 0 60px #00000077;
+  }
+  /* Chair circles use the same cream fill / dark stroke as the Local
+     UI. The "you" seat is drawn with an amber stroke + glow so the
+     player can find themselves at a glance without breaking the
+     no-grimoire rule. */
+  .chair-circle {
+    fill: var(--chair);
+    stroke: var(--chair-edge);
+    stroke-width: 3;
+  }
+  /* Empty chairs match the Local UI: same cream fill as filled chairs.
+     A dashed stroke is the only cue distinguishing them so the player
+     sees the same townsquare aesthetic the storyteller does. */
+  .chair-empty .chair-circle {
+    fill: var(--chair);
+    stroke: var(--chair-edge);
+    stroke-dasharray: 6 5;
+  }
+  .chair-you .chair-circle {
+    stroke: var(--you);
+    stroke-width: 5;
+    filter: drop-shadow(0 0 12px rgba(240, 194, 122, 0.55));
+  }
+  .chair-name {
+    font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, "Times New Roman", serif;
+    font-size: 21px;
+    font-weight: 700;
+    fill: #2a1c13;
+    text-anchor: middle;
+    dominant-baseline: middle;
+    pointer-events: none;
+    user-select: none;
+  }
+  .chair-empty .chair-name {
+    fill: #6a5e44;
+    font-style: italic;
+  }
+  .chair-num {
+    font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, "Times New Roman", serif;
+    font-size: 14px;
+    font-weight: 700;
+    fill: #2a1c13;
+    text-anchor: middle;
+    pointer-events: none;
+    user-select: none;
+  }
+  .chair-empty .chair-num { fill: #6a5e44; }
+
+  /* ---- character-reveal overlay ----
+     Fullscreen blackout shown when the storyteller has hit "Reveal
+     Characters" on the Local UI. Centers the player's assigned
+     character token (PNG from /assets/tokens) with a Hide button
+     underneath. Tapping Hide clears the flag for THIS player only,
+     forever, until the storyteller hits Reveal again. */
+  #charRevealOverlay {
+    position: fixed;
+    inset: 0;
+    background: #000000ee;
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+    padding: 24px;
+    text-align: center;
+  }
+  #charRevealOverlay.open { display: flex; }
+  #charRevealOverlay .reveal-name {
+    font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, "Times New Roman", serif;
+    font-size: 28px;
+    font-weight: 700;
+    color: var(--accent);
+    margin-bottom: 16px;
+    letter-spacing: 0.04em;
+  }
+  #charRevealOverlay .reveal-token {
+    width: min(78vw, 380px);
+    height: min(78vw, 380px);
+    background-size: contain;
+    background-repeat: no-repeat;
+    background-position: center;
+    filter: drop-shadow(0 6px 20px #000c);
+    margin-bottom: 22px;
+  }
+  #charRevealOverlay .reveal-token.no-image {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: radial-gradient(ellipse at center, #4a3525 0%, #2a1c13 100%);
+    border: 4px solid var(--board-edge);
+    border-radius: 50%;
+    color: var(--accent);
+    font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, "Times New Roman", serif;
+    font-size: 26px;
+    font-weight: 700;
+    text-align: center;
+    padding: 24px;
+  }
+  #charRevealOverlay .reveal-hide {
+    padding: 14px 36px;
+    border-radius: 999px;
+    border: 2px solid var(--accent);
+    background: transparent;
+    color: var(--accent);
+    font-size: 17px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    cursor: pointer;
+  }
+  #charRevealOverlay .reveal-hide:active { background: #f0c27a22; }
+
+  /* ---- "View Script" button + pinch-zoom PDF overlay ----
+     The button lives in the townsquare header. Tap to open a
+     fullscreen overlay that loads the first page of the active
+     preset's script.pdf as a PNG (rendered server-side from
+     /api/presets/<preset>/script_page1.png) and lets the player pinch
+     to zoom and drag to pan. */
+  .ts-header .view-script {
+    margin-top: 8px;
+    background: transparent;
+    border: 1px solid #6a5e44;
+    border-radius: 999px;
+    color: var(--accent);
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 6px 16px;
+    cursor: pointer;
+  }
+  .ts-header .view-script:active { background: #f0c27a18; }
+
+  #scriptOverlay {
+    position: fixed;
+    inset: 0;
+    background: #000000ee;
+    display: none;
+    flex-direction: column;
+    z-index: 1100;
+    /* Disable browser-level gesture handling so our pinch-zoom math
+       isn't fighting the OS for the same touches. */
+    touch-action: none;
+    overscroll-behavior: contain;
+  }
+  #scriptOverlay.open { display: flex; }
+  #scriptOverlay .script-topbar {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 14px;
+    background: var(--panel);
+    border-bottom: 1px solid #00000088;
+    color: var(--text);
+  }
+  #scriptOverlay .script-topbar .title {
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    color: var(--accent);
+  }
+  #scriptOverlay .script-topbar button {
+    background: transparent;
+    border: 1px solid var(--accent);
+    color: var(--accent);
+    border-radius: 999px;
+    padding: 6px 14px;
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    cursor: pointer;
+  }
+  /* The viewport: a 1:1 box that captures touches. The image inside
+     gets transformed (translate + scale) by the pinch-zoom code. */
+  #scriptOverlay .script-viewport {
+    flex: 1 1 auto;
+    position: relative;
+    overflow: hidden;
+    touch-action: none;
+    background: #111;
+  }
+  #scriptOverlay .script-stage {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    transform-origin: 0 0;
+    will-change: transform;
+  }
+  #scriptOverlay .script-img {
+    display: block;
+    /* The image always renders at the viewport's natural size and
+       lets the transform handle scaling — keeps pinch math simple. */
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    user-select: none;
+    -webkit-user-drag: none;
+    pointer-events: none;
+  }
+  #scriptOverlay .script-msg {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--muted);
+    font-size: 14px;
+    text-align: center;
+    padding: 24px;
+  }
+
 </style>
 </head>
-<body>
-<div class="wrap">
-  <h1>Player view</h1>
-  <p>Your personal player view will live here. The storyteller will
-    set this up at the start of the game.</p>
-  <p>If you scanned the storyteller's QR by accident, this is the
-    wrong page — the storyteller can show you their own phone
-    directly.</p>
-  <div class="hint">Coming soon</div>
+<body data-mode="login">
+
+<!-- ============== LOGIN MODE ============== -->
+<div class="login-wrap mode-login">
+  <h1>Join the Town</h1>
+  <p>Type your name to take a seat. The Storyteller will assign your
+    chair on their screen.</p>
+  <form id="loginForm">
+    <input id="nameInput" type="text" autocomplete="off"
+           autocapitalize="words" placeholder="Your name" maxlength="64" />
+    <button type="submit" id="loginSubmit">Join</button>
+    <div class="err" id="loginError"></div>
+  </form>
 </div>
+
+<!-- ============== TOWNSQUARE MODE ============== -->
+<div class="ts-wrap mode-townsquare">
+  <header class="ts-header">
+    <div class="you-name" id="youName">—</div>
+    <div class="you-status waiting" id="youStatus">PENDING</div>
+    <button type="button" class="change-name" id="changeName">change name</button>
+    <button type="button" class="view-script" id="btnViewScript">📖 View Script</button>
+  </header>
+  <div class="ts-board-area">
+    <svg id="board" viewBox="0 0 1000 1000" preserveAspectRatio="xMidYMid meet">
+      <g id="seats"></g>
+    </svg>
+  </div>
+</div>
+
+<!-- ============== SCRIPT PDF VIEWER OVERLAY ==============
+     Fullscreen overlay that opens when the player hits "View Script".
+     Loads the first page of the active preset's script.pdf as a PNG
+     (rendered server-side via pdftoppm) and supports pinch-to-zoom
+     and drag-to-pan via touch events. -->
+<div id="scriptOverlay" role="dialog" aria-modal="true" aria-label="Script">
+  <div class="script-topbar">
+    <span class="title" id="scriptTitle">Script</span>
+    <button type="button" id="scriptClose">Close</button>
+  </div>
+  <div class="script-viewport" id="scriptViewport">
+    <div class="script-stage" id="scriptStage">
+      <img class="script-img" id="scriptImg" alt="Script first page" />
+    </div>
+    <div class="script-msg" id="scriptMsg" style="display:none"></div>
+  </div>
+</div>
+
+<!-- ============== CHARACTER REVEAL OVERLAY ==============
+     Shown when the storyteller has hit "Reveal Characters" on the
+     Local UI and this seat has an assigned character. The Hide button
+     POSTs /api/lobby/me/hide_character which clears the flag for this
+     player only — once hidden, the overlay stays gone until the
+     storyteller hits Reveal again. -->
+<div id="charRevealOverlay" role="dialog" aria-modal="true" aria-label="Your character">
+  <div class="reveal-name" id="charRevealName">—</div>
+  <div class="reveal-token" id="charRevealToken"></div>
+  <button type="button" class="reveal-hide" id="charRevealHide">Hide</button>
+</div>
+
+<script>
+(() => {
+  "use strict";
+
+  const SVG_NS = "http://www.w3.org/2000/svg";
+  const POLL_MS = 1500;
+
+  // Match the Local UI's chair geometry constants so chair circles
+  // line up at the same size relative to the board.
+  const BOARD_SIZE = 1000;
+  const CHAIR_RADIUS = 51;
+
+  const body = document.body;
+  const loginForm = document.getElementById("loginForm");
+  const nameInput = document.getElementById("nameInput");
+  const loginSubmit = document.getElementById("loginSubmit");
+  const loginError = document.getElementById("loginError");
+  const youName = document.getElementById("youName");
+  const youStatus = document.getElementById("youStatus");
+  const changeNameBtn = document.getElementById("changeName");
+  const seatsG = document.getElementById("seats");
+  const charRevealOverlay = document.getElementById("charRevealOverlay");
+  const charRevealName = document.getElementById("charRevealName");
+  const charRevealToken = document.getElementById("charRevealToken");
+  const charRevealHide = document.getElementById("charRevealHide");
+  const btnViewScript = document.getElementById("btnViewScript");
+  const scriptOverlay = document.getElementById("scriptOverlay");
+  const scriptClose = document.getElementById("scriptClose");
+  const scriptViewport = document.getElementById("scriptViewport");
+  const scriptStage = document.getElementById("scriptStage");
+  const scriptImg = document.getElementById("scriptImg");
+  const scriptMsg = document.getElementById("scriptMsg");
+  const scriptTitle = document.getElementById("scriptTitle");
+
+  // Latest snapshots from the server. Updated on every poll; the
+  // render functions are pure reads of these.
+  let me = null;            // {id, name, assigned_chair_id, ...}
+  let chairs = [];          // [{id, x, y, name, ...}, ...]
+  let selectedPreset = null; // string | null — drives the View Script overlay
+
+  // ---- API helpers ----
+
+  async function apiGet(url) {
+    const r = await fetch(url, { cache: "no-store", credentials: "same-origin" });
+    if (!r.ok) throw new Error(url + " status " + r.status);
+    return r.json();
+  }
+
+  async function apiPostJson(url, body) {
+    const r = await fetch(url, {
+      method: "POST",
+      cache: "no-store",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body || {}),
+    });
+    let payload = null;
+    try { payload = await r.json(); } catch (_) {}
+    if (!r.ok) {
+      const err = (payload && payload.error) || ("status " + r.status);
+      throw new Error(err);
+    }
+    return payload;
+  }
+
+  // ---- mode + render ----
+
+  function setMode(mode) { body.dataset.mode = mode; }
+
+  // ---- character reveal overlay ----
+  // The /api/lobby/me payload includes ``character_revealed`` (set by
+  // the storyteller's "Reveal Characters" button on the Local UI), the
+  // assigned ``character`` name, and a ``character_token`` URL. While
+  // the flag is on, render the token fullscreen with a Hide button.
+  // Hide POSTs /api/lobby/me/hide_character — the flag stays off (per
+  // CLAUDE.md, "hide forever") until the storyteller re-reveals.
+  function renderCharReveal() {
+    const revealed = !!(me && me.character_revealed && me.character);
+    if (!revealed) {
+      charRevealOverlay.classList.remove("open");
+      return;
+    }
+    charRevealName.textContent = `YOU ARE THE ${String(me.character).toUpperCase()}`;
+    if (me.character_token) {
+      charRevealToken.classList.remove("no-image");
+      charRevealToken.style.backgroundImage = `url("${me.character_token}")`;
+      charRevealToken.textContent = "";
+    } else {
+      // No PNG on disk for this role — fall back to a styled disc with
+      // the character name so the player still has something tangible
+      // to look at.
+      charRevealToken.classList.add("no-image");
+      charRevealToken.style.backgroundImage = "";
+      charRevealToken.textContent = me.character;
+    }
+    charRevealOverlay.classList.add("open");
+  }
+
+  charRevealHide.addEventListener("click", async () => {
+    // Optimistically hide so the player gets immediate feedback even
+    // if the network is slow; the next /api/lobby/me poll confirms.
+    charRevealOverlay.classList.remove("open");
+    if (me) me.character_revealed = false;
+    try {
+      await apiPostJson("/api/lobby/me/hide_character", {});
+    } catch (e) {
+      // If the POST fails the next poll will simply re-show the
+      // overlay; nothing to surface to the player.
+      console.warn("hide failed:", e);
+    }
+  });
+
+  function renderYouHeader() {
+    if (!me) return;
+    youName.textContent = me.name || "—";
+    if (me.assigned_chair_id != null) {
+      const chair = chairs.find((c) => c.id === me.assigned_chair_id);
+      const seatNum = chair ? chair.id : me.assigned_chair_id;
+      youStatus.textContent = "SEAT " + seatNum;
+      youStatus.classList.remove("waiting");
+      youStatus.classList.add("seated");
+    } else {
+      youStatus.textContent = "PENDING";
+      youStatus.classList.add("waiting");
+      youStatus.classList.remove("seated");
+    }
+  }
+
+  // Truncate names that won't fit inside a chair circle. Same heuristic
+  // the Local UI uses (see ``MAX_CHAIR_TEXT`` there); we don't have the
+  // Local UI's wrap helper, so we just clip with an ellipsis.
+  function chairName(s) {
+    s = (s || "").trim();
+    if (!s) return "";
+    if (s.length <= 12) return s;
+    return s.slice(0, 11) + "…";
+  }
+
+  function renderTownsquare() {
+    seatsG.replaceChildren();
+    const ordered = [...chairs].sort((a, b) => a.id - b.id);
+    if (ordered.length === 0) {
+      const t = document.createElementNS(SVG_NS, "text");
+      t.setAttribute("x", 500);
+      t.setAttribute("y", 500);
+      t.setAttribute("text-anchor", "middle");
+      t.setAttribute("dominant-baseline", "middle");
+      t.setAttribute("fill", "#a99880aa");
+      t.setAttribute("font-size", "26");
+      t.textContent = "Storyteller is setting up the table…";
+      seatsG.appendChild(t);
+      return;
+    }
+    for (const c of ordered) {
+      const cx = (c.x ?? 0.5) * BOARD_SIZE;
+      const cy = (c.y ?? 0.5) * BOARD_SIZE;
+      const isYou = (me && me.assigned_chair_id === c.id);
+      const isEmpty = !(c.name && c.name.trim());
+
+      const g = document.createElementNS(SVG_NS, "g");
+      let cls = "chair";
+      if (isYou) cls += " chair-you";
+      if (isEmpty) cls += " chair-empty";
+      g.setAttribute("class", cls);
+      g.setAttribute("transform", `translate(${cx}, ${cy})`);
+
+      const circ = document.createElementNS(SVG_NS, "circle");
+      circ.setAttribute("class", "chair-circle");
+      circ.setAttribute("r", CHAIR_RADIUS);
+      g.appendChild(circ);
+
+      // Seat number, top-of-chair (matches Local UI's chair-num).
+      const num = document.createElementNS(SVG_NS, "text");
+      num.setAttribute("class", "chair-num");
+      num.setAttribute("y", -CHAIR_RADIUS * 0.55);
+      num.textContent = String(c.id);
+      g.appendChild(num);
+
+      // Player name. The seated player's own chair is identified by the
+      // amber stroke / glow (see .chair-circle.you in CSS); no separate
+      // "you" text tag is rendered. Empty chairs render the seat
+      // number alone — no "(empty)" placeholder text.
+      if (!isEmpty) {
+        const label = document.createElementNS(SVG_NS, "text");
+        label.setAttribute("class", "chair-name");
+        label.setAttribute("y", 6);
+        label.textContent = chairName(c.name);
+        g.appendChild(label);
+      }
+
+      seatsG.appendChild(g);
+    }
+  }
+
+  // ---- polling ----
+
+  let pollHandle = null;
+
+  async function pollOnce() {
+    try {
+      const meResp = await apiGet("/api/lobby/me");
+      me = (meResp && meResp.player) || null;
+      if (!me) {
+        setMode("login");
+        return;
+      }
+      const stateResp = await apiGet("/api/state");
+      chairs = (stateResp && stateResp.chairs) || [];
+      selectedPreset = (stateResp && stateResp.engine
+        && stateResp.engine.selected_preset) || null;
+      renderYouHeader();
+      renderTownsquare();
+      renderCharReveal();
+      setMode("townsquare");
+    } catch (e) {
+      // Soft fail — the next tick will retry.
+      console.warn("poll failed:", e);
+    }
+  }
+
+  function startPolling() {
+    if (pollHandle != null) return;
+    const tick = () => {
+      pollOnce().finally(() => {
+        pollHandle = setTimeout(tick, POLL_MS);
+      });
+    };
+    tick();
+  }
+
+  // ---- login submit ----
+
+  loginForm.addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    loginError.textContent = "";
+    const name = nameInput.value.trim();
+    if (!name) {
+      loginError.textContent = "Please type a name.";
+      return;
+    }
+    loginSubmit.disabled = true;
+    try {
+      const resp = await apiPostJson("/api/lobby/join", { name });
+      me = resp.player;
+      try {
+        const stateResp = await apiGet("/api/state");
+        chairs = (stateResp && stateResp.chairs) || [];
+      } catch (_) {}
+      renderYouHeader();
+      renderTownsquare();
+      setMode("townsquare");
+    } catch (e) {
+      loginError.textContent = e.message || String(e);
+    } finally {
+      loginSubmit.disabled = false;
+    }
+  });
+
+  // "change name" returns to the login screen but pre-fills the
+  // current name. Submitting again calls /api/lobby/join, which the
+  // server treats as a rename for an already-cookied browser.
+  changeNameBtn.addEventListener("click", () => {
+    nameInput.value = (me && me.name) || "";
+    loginError.textContent = "";
+    setMode("login");
+    setTimeout(() => nameInput.focus(), 50);
+  });
+
+  // ---- script PDF viewer (pinch-to-zoom) ----
+  //
+  // The button in the townsquare header opens a fullscreen overlay
+  // that shows the first page of the active preset's script.pdf.
+  // The page comes from /api/presets/<preset>/script_page1.png (the
+  // server renders it on demand via pdftoppm and caches the PNG).
+  //
+  // Pinch-zoom + drag-to-pan are implemented manually with pointer
+  // events because the page-level meta viewport pins the page at
+  // scale 1 (so the standard browser pinch-to-zoom is disabled).
+  // Two-pointer drag = pinch; one-pointer drag = pan; double-tap =
+  // toggle between fit and 2x.
+  function _prettyPreset(slug) {
+    if (!slug) return "Script";
+    return slug.replace(/_/g, " ")
+               .replace(/\b\w/g, (c) => c.toUpperCase());
+  }
+
+  let _scriptZoom = {
+    scale: 1, tx: 0, ty: 0,         // current transform
+    pointers: new Map(),            // pointerId -> {x, y}
+    pinchStartDist: 0,
+    pinchStartScale: 1,
+    pinchCenter: { x: 0, y: 0 },    // viewport-coords of pinch origin
+    pinchAnchor: { x: 0, y: 0 },    // stage-coords of pinch origin
+    panLastX: 0, panLastY: 0,
+    lastTap: 0,                     // for double-tap
+    minScale: 1, maxScale: 6,
+  };
+
+  function _applyScriptTransform() {
+    const z = _scriptZoom;
+    scriptStage.style.transform =
+      `translate3d(${z.tx}px, ${z.ty}px, 0) scale(${z.scale})`;
+  }
+
+  function _resetScriptTransform() {
+    _scriptZoom.scale = 1;
+    _scriptZoom.tx = 0;
+    _scriptZoom.ty = 0;
+    _applyScriptTransform();
+  }
+
+  function _clampPan() {
+    // Allow some overscroll past the edges so the user can briefly
+    // pull the page off-center; we clamp on pointerup. For now keep
+    // it loose — phones expect generous panning.
+    const z = _scriptZoom;
+    const vw = scriptViewport.clientWidth;
+    const vh = scriptViewport.clientHeight;
+    const sw = vw * z.scale;
+    const sh = vh * z.scale;
+    const minX = Math.min(0, vw - sw);
+    const minY = Math.min(0, vh - sh);
+    const maxX = 0;
+    const maxY = 0;
+    if (z.scale <= 1.001) {
+      z.tx = 0; z.ty = 0;
+      return;
+    }
+    if (z.tx > maxX) z.tx = maxX;
+    if (z.ty > maxY) z.ty = maxY;
+    if (z.tx < minX) z.tx = minX;
+    if (z.ty < minY) z.ty = minY;
+  }
+
+  function _pointerDown(ev) {
+    if (!scriptOverlay.classList.contains("open")) return;
+    scriptViewport.setPointerCapture(ev.pointerId);
+    _scriptZoom.pointers.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+    if (_scriptZoom.pointers.size === 1) {
+      _scriptZoom.panLastX = ev.clientX;
+      _scriptZoom.panLastY = ev.clientY;
+      // Double-tap detection — two taps within 300ms toggles zoom.
+      const now = Date.now();
+      if (now - _scriptZoom.lastTap < 300) {
+        const rect = scriptViewport.getBoundingClientRect();
+        const px = ev.clientX - rect.left;
+        const py = ev.clientY - rect.top;
+        if (_scriptZoom.scale > 1.05) {
+          _resetScriptTransform();
+        } else {
+          // Zoom to 2x centered on the tap.
+          const newScale = 2;
+          const z = _scriptZoom;
+          // Solve for tx/ty so that (px, py) maps to the same stage
+          // point before/after the scale change.
+          z.tx = px - (px - z.tx) * (newScale / z.scale);
+          z.ty = py - (py - z.ty) * (newScale / z.scale);
+          z.scale = newScale;
+          _clampPan();
+          _applyScriptTransform();
+        }
+        _scriptZoom.lastTap = 0;
+      } else {
+        _scriptZoom.lastTap = now;
+      }
+    } else if (_scriptZoom.pointers.size === 2) {
+      const pts = [..._scriptZoom.pointers.values()];
+      const dx = pts[0].x - pts[1].x;
+      const dy = pts[0].y - pts[1].y;
+      _scriptZoom.pinchStartDist = Math.hypot(dx, dy) || 1;
+      _scriptZoom.pinchStartScale = _scriptZoom.scale;
+      const cx = (pts[0].x + pts[1].x) / 2;
+      const cy = (pts[0].y + pts[1].y) / 2;
+      const rect = scriptViewport.getBoundingClientRect();
+      _scriptZoom.pinchCenter = { x: cx - rect.left, y: cy - rect.top };
+      // Stage-coords of the pinch origin at the current scale.
+      _scriptZoom.pinchAnchor = {
+        x: (_scriptZoom.pinchCenter.x - _scriptZoom.tx) / _scriptZoom.scale,
+        y: (_scriptZoom.pinchCenter.y - _scriptZoom.ty) / _scriptZoom.scale,
+      };
+    }
+  }
+
+  function _pointerMove(ev) {
+    if (!_scriptZoom.pointers.has(ev.pointerId)) return;
+    _scriptZoom.pointers.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+    if (_scriptZoom.pointers.size === 2) {
+      const pts = [..._scriptZoom.pointers.values()];
+      const dx = pts[0].x - pts[1].x;
+      const dy = pts[0].y - pts[1].y;
+      const dist = Math.hypot(dx, dy) || 1;
+      let next = _scriptZoom.pinchStartScale * (dist / _scriptZoom.pinchStartDist);
+      next = Math.max(_scriptZoom.minScale, Math.min(_scriptZoom.maxScale, next));
+      const z = _scriptZoom;
+      // Keep the pinch anchor pinned to the same screen-coord.
+      z.tx = z.pinchCenter.x - z.pinchAnchor.x * next;
+      z.ty = z.pinchCenter.y - z.pinchAnchor.y * next;
+      z.scale = next;
+      _clampPan();
+      _applyScriptTransform();
+    } else if (_scriptZoom.pointers.size === 1) {
+      const z = _scriptZoom;
+      // Only allow panning when zoomed in.
+      if (z.scale > 1.001) {
+        z.tx += ev.clientX - z.panLastX;
+        z.ty += ev.clientY - z.panLastY;
+        _clampPan();
+        _applyScriptTransform();
+      }
+      z.panLastX = ev.clientX;
+      z.panLastY = ev.clientY;
+    }
+  }
+
+  function _pointerUp(ev) {
+    _scriptZoom.pointers.delete(ev.pointerId);
+    try { scriptViewport.releasePointerCapture(ev.pointerId); } catch (_) {}
+    // Snap back if we ended up below 1.0 (shouldn't happen because of
+    // minScale, but defensive).
+    if (_scriptZoom.scale < 1.001) {
+      _resetScriptTransform();
+    } else {
+      _clampPan();
+      _applyScriptTransform();
+    }
+  }
+
+  function openScriptOverlay() {
+    const preset = selectedPreset;
+    scriptTitle.textContent = preset
+      ? "Script — " + _prettyPreset(preset)
+      : "Script";
+    if (!preset) {
+      scriptImg.removeAttribute("src");
+      scriptImg.style.display = "none";
+      scriptMsg.style.display = "flex";
+      scriptMsg.textContent = "No preset selected yet.";
+    } else {
+      scriptImg.style.display = "";
+      scriptMsg.style.display = "none";
+      scriptImg.onerror = () => {
+        scriptImg.style.display = "none";
+        scriptMsg.style.display = "flex";
+        scriptMsg.textContent =
+          "Couldn't load the script's first page. The server may not have " +
+          "pdftoppm available, or this preset has no script.pdf.";
+      };
+      scriptImg.onload = () => {
+        scriptMsg.style.display = "none";
+      };
+      scriptImg.src = "/api/presets/" + encodeURIComponent(preset)
+        + "/script_page1.png";
+    }
+    _resetScriptTransform();
+    scriptOverlay.classList.add("open");
+  }
+
+  function closeScriptOverlay() {
+    scriptOverlay.classList.remove("open");
+    _resetScriptTransform();
+  }
+
+  if (btnViewScript) {
+    btnViewScript.addEventListener("click", openScriptOverlay);
+  }
+  scriptClose.addEventListener("click", closeScriptOverlay);
+  scriptViewport.addEventListener("pointerdown", _pointerDown);
+  scriptViewport.addEventListener("pointermove", _pointerMove);
+  scriptViewport.addEventListener("pointerup", _pointerUp);
+  scriptViewport.addEventListener("pointercancel", _pointerUp);
+  scriptViewport.addEventListener("pointerleave", _pointerUp);
+  // The default touch behavior (page scroll) would otherwise eat
+  // multi-finger gestures inside the viewport.
+  scriptViewport.addEventListener("touchmove", (ev) => {
+    if (scriptOverlay.classList.contains("open")) ev.preventDefault();
+  }, { passive: false });
+
+  // ---- boot ----
+  startPolling();
+})();
+</script>
 </body>
 </html>

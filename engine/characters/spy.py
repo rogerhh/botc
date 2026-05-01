@@ -147,11 +147,36 @@ class Spy(Character):
             Event(EventType.WAKEUP, source=self, targets=[self.player])
         )
 
-        # Show the Spy the grimoire. We pack the full snapshot into the
-        # prompt's meta so the Spy's phone can render it. This is the
-        # *one* place where the mobile UI legitimately sees other
-        # players' character tokens — see ui/README.md "Information
-        # hiding rules".
+        # Show the Spy the grimoire. Per the Spy.pdf wiki page: "wake
+        # the Spy and show them the Grimoire for as long as they
+        # need". The actual grimoire rendering is the live chair
+        # circle on a Storyteller surface — the Spy reads it
+        # directly off the storyteller's screen. This prompt's
+        # payload is therefore deliberately minimal: a single "THIS
+        # IS THE GRIMOIRE" token under the standard "Show this to
+        # <Spy>" header.
+        #
+        # ``meta["show_full_grimoire"]`` tells both Storyteller-audience
+        # surfaces — the Local UI (``index.html``) and the Storyteller
+        # UI (``phone.html``) — that this prompt is the rare case where
+        # every chair must remain at full grimoire fidelity. The Local
+        # UI normally dims every chair except the prompt's
+        # target_player_id; the Storyteller UI normally collapses
+        # chairs to player-name-only when ``shown_to_player`` is set.
+        # Both suppressions are themselves suppressed when this flag is
+        # on so the Spy can see every player's character, alignment,
+        # and reminder tokens — exactly the live chair circle, with
+        # nothing redacted.
+        #
+        # The Spy is the *only* character for whom the per-player
+        # Player UI (``player.html``) is ever allowed to show the
+        # Grimoire — see the binding rules in ``ui/README.md``. Until
+        # the Player UI is built out, the Spy reveal happens on the
+        # Storyteller's screen as described above.
+        #
+        # The full snapshot is still attached as ``meta["grimoire"]``
+        # for any consumer (replay, logs) that wants the data; the UI
+        # itself ignores it and reads the live chairs.
         snapshot = engine.snapshot()
         engine.send_prompt(
             InformationPrompt(
@@ -163,11 +188,11 @@ class Spy(Character):
                     "step": "grimoire",
                     "stage": "info",
                     "grimoire": snapshot,
+                    "show_full_grimoire": True,
                     "render": {
                         "tokens": [{
-                            "label": "GRIMOIRE",
-                            "body": "Study the grimoire on the "
-                                "Storyteller's screen.",
+                            "label": "THIS IS THE GRIMOIRE",
+                            "body": "",
                         }],
                     },
                 },

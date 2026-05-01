@@ -109,6 +109,10 @@ def test_monk_safe_token_appears_after_pick_and_clears_next_night() -> None:
     e.start_night()
     drain(e, [
         ({"step_kind": "preset_step", "step_name": "Dusk"}, None),
+        # Demon Info fires even at 5 players (no Minions seated, so
+        # Minion Info is skipped by its own no-minions guard).
+        ({"step_kind": "demon_info", "stage": "st_pre"}, None),
+        ({"step_kind": "demon_info", "stage": "info"}, None),
         # Empath's first-night info (sober + healthy → auto info).
         ({"character": "Empath", "step": "information"}, None),
         ({"step_kind": "preset_step", "step_name": "Dawn"}, None),
@@ -187,6 +191,9 @@ def test_undertaker_died_today_token_after_execution() -> None:
     e.start_night()
     drain(e, [
         ({"step_kind": "preset_step", "step_name": "Dusk"}, None),
+        # Demon Info fires (no Minions seated → Minion Info skipped).
+        ({"step_kind": "demon_info", "stage": "st_pre"}, None),
+        ({"step_kind": "demon_info", "stage": "info"}, None),
         ({"character": "Empath", "step": "information"}, None),
         ({"step_kind": "preset_step", "step_name": "Dawn"}, None),
     ])
@@ -224,6 +231,9 @@ def test_slayer_no_ability_token_after_shot() -> None:
     e.start_night()
     drain(e, [
         ({"step_kind": "preset_step", "step_name": "Dusk"}, None),
+        # Demon Info fires (no Minions seated → Minion Info skipped).
+        ({"step_kind": "demon_info", "stage": "st_pre"}, None),
+        ({"step_kind": "demon_info", "stage": "info"}, None),
         ({"character": "Empath", "step": "information"}, None),
         ({"step_kind": "preset_step", "step_name": "Dawn"}, None),
     ])
@@ -276,6 +286,10 @@ def test_virgin_no_ability_token_after_first_nomination() -> None:
     e.start_night()
     drain(e, [
         ({"step_kind": "preset_step", "step_name": "Dusk"}, None),
+        # Minion Info + Demon Info fire even at 5 players (project rule).
+        ({"step_kind": "minion_info"}, None),
+        ({"step_kind": "demon_info", "stage": "st_pre"}, None),
+        ({"step_kind": "demon_info", "stage": "info"}, None),
         # Poisoner picks Dan (irrelevant).
         ({"character": "Poisoner", "step": "select_player"}, ids["Dan"]),
         ({"step_kind": "preset_step", "step_name": "Dawn"}, None),
@@ -318,10 +332,13 @@ def test_demon_dead_token_clears_at_end_of_night() -> None:
     ui.ENGINE = e
     e.start_game()
 
-    # Burn through night 1 (no Imp kill).
+    # Burn through night 1 (no Imp kill). Demon Info fires (no
+    # Minions seated → Minion Info skipped).
     e.start_night()
     drain(e, [
         ({"step_kind": "preset_step", "step_name": "Dusk"}, None),
+        ({"step_kind": "demon_info", "stage": "st_pre"}, None),
+        ({"step_kind": "demon_info", "stage": "info"}, None),
         ({"character": "Empath", "step": "information"}, None),
         ({"step_kind": "preset_step", "step_name": "Dawn"}, None),
     ])

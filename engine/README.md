@@ -137,8 +137,10 @@ An ability is an ordered sequence of up to five Events:
 2. **Wakeup** — tell the Storyteller to wake the player. Night-only.
 3. **Select** — collect input from the player via the Storyteller (Monk picks
    a target, Fortune Teller picks two players).
-4. **Information** — show information back to the player on their phone
-   (Empath count, Fortune Teller yes/no, Washerwoman token).
+4. **Information** — show information back to the player on their
+   Player UI (Empath count, Fortune Teller yes/no, Washerwoman token).
+   The Player UI never displays the source character's name — only the
+   information itself.
 5. **Resolution** — apply the effect to game state (Slayer kill, Imp kill,
    Virgin's nominator dies).
 
@@ -211,8 +213,9 @@ Prompt subtypes:
   `count` field; `count == 1` returns a character name (str) and
   `count > 1` (e.g. the Demon's three not-in-play bluff roles) returns
   a list of names. Includes Randomize.
-- **ShowInformation** — pure display. The only control is "Next". This is
-  what the player phone renders.
+- **ShowInformation** — pure display. The only control is "Next". This
+  is what the Player UI renders for player-audience prompts (and what
+  the Storyteller UI mirrors for the hand-over fallback).
 - **Arbitrate** — free-form Storyteller decision when the rules require a
   ruling that is not one of the above (e.g. Recluse register-as choice,
   Scarlet Woman triggering, Mayor death-redirect).
@@ -225,8 +228,11 @@ A Prompt carries:
 - `eligible` — the set of players/characters that are valid choices, used
   by the UI to highlight selections.
 - `allow_randomize` — true for player/character selections.
-- `target_audience` — local UI (Storyteller) or mobile UI (a specific
-  player's phone).
+- `target_audience` — Local UI / Storyteller UI (both Storyteller
+  surfaces) or Player UI (a specific player's phone). Player-audience
+  prompts are subject to the Player UI information-hiding rules in
+  `ui/README.md` — most importantly, no player character information
+  is ever shown on the Player UI during the game.
 
 The Prompt is the *only* way information escapes the engine. The Player
 selections it returns are the *only* way decisions enter the engine. This
@@ -274,11 +280,13 @@ The six sections, in fixed order:
    become the new Imp" on a self-kill. Same answer-pill treatment as
    stage 1 once given.
 7. **Show this to player** — the final `InformationPrompt` with
-   `meta["stage"] = "info"` and `shown_to_player = True`. The UI
-   renders the info tokens (e.g. *THESE ARE YOUR MINIONS*, *THESE
-   CHARACTERS ARE NOT IN PLAY*, the Washerwoman's character token
-   alongside the two highlighted chairs); the Storyteller hands the
-   phone to the player and clicks Next to dismiss.
+   `meta["stage"] = "info"` and `shown_to_player = True`. The info
+   tokens (e.g. *THESE ARE YOUR MINIONS*, *THESE CHARACTERS ARE NOT
+   IN PLAY*, the Washerwoman's character token alongside the two
+   highlighted chairs) render on the player's Player UI, and on the
+   Storyteller UI as a hand-over fallback. The Storyteller clicks
+   Next to dismiss. The Player UI never reveals the source character
+   name — the info itself is what's displayed.
 
 Not every ability uses every section. The Empath has stages 1
 (drunk/poisoned only), 4, and 7 — no player decision, no post-pick
@@ -299,7 +307,7 @@ When a Character is about to act, the engine checks the Player's drunk and
 poisoned states. If either is set:
 
 - The Storyteller is prompted (Arbitrate) to compose false information for
-  the player, before any Information event reaches the phone.
+  the player, before any Information event reaches the Player UI.
 - The Resolution event is suppressed in terms of game-state mutation, but
   any Wakeup/Information events still run, so the player believes their
   ability fired normally.
@@ -483,7 +491,7 @@ Drunk/poisoned detectors run their wrong-info pre-fill (per
 registration call still happens — the Spy or Recluse may still
 misregister to the drunk/poisoned detector — but the engine then
 overwrites the result with a Storyteller-pre-filled wrong default
-before the Information prompt goes to the player's phone.
+before the Information prompt reaches the player's Player UI.
 
 #### Why this design
 
@@ -570,7 +578,8 @@ The Engine is a phase machine over an event queue.
 
 The four day-time player actions are exposed as small, focused public
 methods on the Engine, all driven by the per-player side panel in the
-Local UI (see `ui/README.md` "Player side panel"):
+Storyteller's surfaces — the Local UI and the Storyteller UI (see
+`ui/README.md` "Player side panel"):
 
 - `Engine.nominate(nominator_id, nominee_id)` — sets
   `has_nominated_today` / `has_been_nominated_today` and dispatches

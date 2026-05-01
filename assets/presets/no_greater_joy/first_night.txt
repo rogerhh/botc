@@ -1,0 +1,23 @@
+Dusk
+Start the Night Phase.
+
+Minion Info
+Wake all Minions: Show the THIS IS THE DEMON token. Point to the Demon. Show the THESE ARE YOUR MINIONS token. Point to the other Minions.
+
+Demon Info
+Wake the Demon: Show the THESE ARE YOUR MINIONS token. Point to all Minions. Show the THESE CHARACTERS ARE NOT IN PLAY token. Show 3 not-in-play good character tokens.
+
+Investigator
+Show the Minion character token. Point to both the MINION and WRONG players.
+
+Empath
+Give a finger signal.
+
+Clockmaker
+Give a finger signal.
+
+Chambermaid
+The Chambermaid chooses 2 living players. Give a finger signal.
+
+Dawn
+Wait for a few seconds. End the Night Phase.

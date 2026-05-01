@@ -241,6 +241,7 @@ class Player:
         # character has no day action (Empath, Soldier, ...).
         has_day_ability = False
         once_per_game = False
+        daytime_active_when_dead = False
         if self.character is not None:
             from engine.character import Character as _Char
             try:
@@ -254,6 +255,9 @@ class Player:
             except Exception:  # pragma: no cover (defensive)
                 has_day_ability = False
             once_per_game = bool(getattr(self.character, "once_per_game", False))
+            daytime_active_when_dead = bool(getattr(
+                self.character, "daytime_ability_active_when_dead", False
+            ))
 
         return {
             "id": self.id,
@@ -282,4 +286,5 @@ class Player:
             # Day-action affordances for the side panel.
             "has_daytime_ability": has_day_ability,
             "once_per_game": once_per_game,
+            "daytime_ability_active_when_dead": daytime_active_when_dead,
         }

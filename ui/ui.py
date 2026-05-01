@@ -1,10 +1,22 @@
 """Blood on the Clocktower — Storyteller GUI server.
 
-A small stdlib-only HTTP server that:
+A small stdlib-only HTTP server that serves three UI surfaces, named
+by who their audience is (see ``ui/README.md``):
 
-  * Serves the storyteller's local-machine ``index.html`` (town square UI).
-  * Serves the read-only / per-player ``phone.html`` for phones on the
-    same LAN.
+  * **Local UI** — ``index.html`` at ``/``. The storyteller's full
+    instrument panel, served on the storyteller's local machine.
+  * **Storyteller UI** — ``storyteller.html`` at ``/storyteller``. A
+    portrait-phone mirror of the Local UI for the storyteller's own
+    phone. Audience is the storyteller; not the page a player loads.
+    ``/phone`` is preserved as a backwards-compat alias.
+  * **Player UI** — ``player.html`` at ``/player``. The page each
+    player loads on their own phone after scanning a per-seat QR.
+    By design the Player UI never displays player character
+    information during the game (only the player's own name and
+    whatever the engine routes to it as an Information prompt).
+
+The same server also:
+
   * Holds the visual "chair" arrangement (the in-progress town square).
   * Talks to the :class:`engine.Engine` instance — exposing setup,
     night/day controls, and the prompt/response loop.
@@ -13,7 +25,9 @@ Run:
     python3 -m ui.ui [--host 0.0.0.0] [--port 8000]
                      [--access-code [CODE]]
 
-Then open http://localhost:8000 in a browser. Phone view: /phone.
+Then open http://localhost:8000 in a browser. Storyteller phone
+mirror: /storyteller (legacy /phone still works). Per-player phone
+view: /player.
 
 The chair UI is preserved unchanged from the prior implementation —
 the new engine endpoints sit alongside the chair endpoints and only
@@ -92,6 +106,68 @@ class _ChairStoreProxy:
 
 
 _PRESETS_DIR = os.path.join(_ROOT, "assets", "presets")
+_TOKENS_DIR = os.path.join(_ROOT, "assets", "tokens")
+_TOKENS_MANIFEST_PATH = os.path.join(_TOKENS_DIR, "manifest.json")
+
+
+def _character_slug(character: str) -> str:
+    """Lowercase, underscore-y slug for a character name. Mirrors the
+    convention used by ``assets/tokens/manifest.json`` so we can build
+    a token URL for any character even when the manifest entry is
+    missing.
+
+    Examples: ``"Devil's Advocate"`` -> ``"devils_advocate"``,
+              ``"Scarlet Woman"`` -> ``"scarlet_woman"``,
+              ``"Imp"`` -> ``"imp"``.
+    """
+    if not character:
+        return ""
+    out = []
+    for ch in character.lower().strip():
+        if ch.isalnum():
+            out.append(ch)
+        elif ch in (" ", "_", "-"):
+            out.append("_")
+        # apostrophes / punctuation just get dropped
+    slug = "".join(out)
+    while "__" in slug:
+        slug = slug.replace("__", "_")
+    return slug.strip("_")
+
+
+_TOKENS_MANIFEST_CACHE: Optional[Dict[str, Any]] = None
+
+
+def _tokens_manifest() -> Dict[str, Any]:
+    """Lazy-load (and cache) the tokens manifest. Falls back to an
+    empty dict if the file isn't present."""
+    global _TOKENS_MANIFEST_CACHE
+    if _TOKENS_MANIFEST_CACHE is None:
+        try:
+            with open(_TOKENS_MANIFEST_PATH, "r", encoding="utf-8") as f:
+                _TOKENS_MANIFEST_CACHE = json.load(f) or {}
+        except (OSError, json.JSONDecodeError):
+            _TOKENS_MANIFEST_CACHE = {}
+    return _TOKENS_MANIFEST_CACHE
+
+
+def _character_token_url(character: str) -> Optional[str]:
+    """Resolve ``/assets/tokens/<file>.png`` for a character, or None
+    if no token PNG exists. Uses the manifest's ``icon`` first; falls
+    back to ``<slug>.png`` if a file with that name exists on disk."""
+    if not character:
+        return None
+    manifest = _tokens_manifest()
+    entry = manifest.get(character)
+    if entry and entry.get("icon"):
+        return "/assets/tokens/" + entry["icon"]
+    slug = _character_slug(character)
+    if not slug:
+        return None
+    candidate = os.path.join(_TOKENS_DIR, slug + ".png")
+    if os.path.isfile(candidate):
+        return "/assets/tokens/" + slug + ".png"
+    return None
 
 # Map CSV "team" values to the JSON-style category keys the rest of the
 # codebase (and the front-end) expect.
@@ -115,6 +191,80 @@ class _PoolProxy:
     def __getattr__(self, name: str):
         return getattr(ENGINE.pool, name)
 
+
+
+def _resync_lobby_bindings_to_chairs() -> None:
+    """Reconcile lobby ``assigned_chair_id`` against the current chairs.
+
+    Called after operations that mutate the chair set (chair remove /
+    remove_last) where the chair store may have renumbered ids. Walks
+    every lobby entry, drops bindings to chairs that no longer exist,
+    and re-binds entries to whichever chair currently carries their
+    name (case-insensitive). Idempotent: no-op when chairs and lobby
+    are already consistent.
+    """
+    chairs_by_id = {c["id"]: c for c in ENGINE.chairs.list()}
+    name_to_chair_id: Dict[str, int] = {}
+    for cid, c in chairs_by_id.items():
+        nm = (c.get("name") or "").strip()
+        if nm:
+            name_to_chair_id[nm.lower()] = cid
+    for entry in ENGINE.lobby.list():
+        cur = entry.get("assigned_chair_id")
+        match = name_to_chair_id.get(entry["name"].lower())
+        if match is not None and match != cur:
+            ENGINE.lobby.assign(entry["id"], match)
+        elif match is None and cur is not None:
+            ENGINE.lobby.unassign(entry["id"])
+
+
+def _render_script_first_page_png(preset_name: str) -> Optional[str]:
+    """Render the first page of ``assets/presets/<preset>/script.pdf``
+    to a PNG so the Player UI can show it inside a pinch-zoomable
+    overlay (mobile browsers don't all render PDFs inline). The
+    rendered file lives next to the PDF and is reused on subsequent
+    requests; if the PDF is missing or rendering fails, returns None.
+
+    Rendering goes via ``pdftoppm`` (poppler) — a tool that's part of
+    most Linux installs. If it isn't available we just return None and
+    the Player UI surfaces a graceful error.
+    """
+    safe = os.path.normpath(preset_name)
+    if not safe or safe.startswith("..") or os.path.isabs(safe) or "/" in safe:
+        return None
+    preset_dir = os.path.join(_PRESETS_DIR, safe)
+    pdf_path = os.path.join(preset_dir, "script.pdf")
+    if not os.path.isfile(pdf_path):
+        return None
+    out_path = os.path.join(preset_dir, "script_page1.png")
+    if os.path.isfile(out_path):
+        # Re-render if the PDF is newer than the cached PNG.
+        try:
+            if os.path.getmtime(pdf_path) <= os.path.getmtime(out_path):
+                return out_path
+        except OSError:
+            return out_path
+    # Render with pdftoppm: -f 1 -l 1 picks page 1; -r 200 = 200dpi
+    # which gives a sharp-on-mobile-zoom but still phone-sized PNG.
+    # ``pdftoppm`` writes to ``<prefix>-1.png``; we rename it to drop
+    # the trailing ``-1`` so the served URL is stable.
+    prefix = os.path.join(preset_dir, "_script_page1_render")
+    try:
+        subprocess.run(
+            ["pdftoppm", "-png", "-r", "200", "-f", "1", "-l", "1",
+             pdf_path, prefix],
+            check=True, capture_output=True, timeout=30,
+        )
+    except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        return None
+    rendered = prefix + "-1.png"
+    if not os.path.isfile(rendered):
+        return None
+    try:
+        os.replace(rendered, out_path)
+    except OSError:
+        return None
+    return out_path
 
 
 def _list_presets() -> List[str]:
@@ -228,19 +378,22 @@ def _randomize_pool_from_preset(
     chosen_demons = random.sample(demons, rec_d)
     chosen_minions = random.sample(minions, rec_m)
 
-    # Apply setup deltas from the chosen evil team. (In Trouble Brewing
-    # this is just the Baron, but the math is general.)
-    townsfolk_delta = 0
-    outsider_delta = 0
-    for n in chosen_minions + chosen_demons:
-        spec = script_data.SCRIPT_BY_NAME[n]
-        townsfolk_delta += spec.setup_townsfolk_delta
-        outsider_delta += spec.setup_outsider_delta
+    # Apply setup deltas from the chosen evil team, clamped against
+    # this preset's roster. ``apply_setup_deltas`` handles the general
+    # case so that a Baron on a small script (e.g. No Greater Joy with
+    # only 2 outsiders) caps its outsider gain at what the roster can
+    # supply and converts the unused slots back into townsfolk —
+    # keeping the bag the right size without picking duplicates.
+    adjusted_t, adjusted_o = script_data.apply_setup_deltas(
+        rec_t, rec_o,
+        chosen_minions + chosen_demons,
+        roster_townsfolk=len(townsfolk),
+        roster_outsiders=len(outsiders),
+    )
 
-    adjusted_t = max(0, rec_t + townsfolk_delta)
-    adjusted_o = max(0, rec_o + outsider_delta)
-
-    # Don't ask for more than the preset has.
+    # ``apply_setup_deltas`` already clamps against the roster, so
+    # ``take_*`` is exact. Keep the min() as a belt-and-braces guard
+    # in case a future caller bypasses the clamp.
     take_t = min(adjusted_t, len(townsfolk))
     take_o = min(adjusted_o, len(outsiders))
 
@@ -308,9 +461,27 @@ def _apply_token(kind: str, dest_chair_id: int) -> Optional[str]:
 # Globals (set up in main()).
 # ---------------------------------------------------------------------------
 
+class _LobbyProxy:
+    """Thin pass-through to ``ENGINE.lobby`` (lookup-at-call-time).
+
+    Same pattern as ``_ChairStoreProxy``/``_PoolProxy`` so the request
+    handlers don't need to know that the lobby moved onto the engine.
+    """
+
+    def __getattr__(self, name: str):
+        return getattr(ENGINE.lobby, name)
+
+
 ENGINE = Engine()
 STORE = _ChairStoreProxy()
 POOL = _PoolProxy()
+LOBBY = _LobbyProxy()
+
+# Cookie used to identify a lobby player across page reloads. Distinct
+# from ``COOKIE_NAME`` (the access-code cookie) so the player phone can
+# carry both: a code cookie for /api gating, and a lobby-id cookie that
+# tells the server which joined player this browser is.
+LOBBY_COOKIE_NAME = "botc_lobby_id"
 
 # Selected preset name (e.g. "trouble_brewing"). Lives on the engine
 # post-refactor; these module-level shims keep the handler code reading
@@ -626,6 +797,7 @@ def _detect_lan_ips() -> list:
 CHAIR_ID_RE = re.compile(r"^/api/chairs/(\d+)/?$")
 PLAYER_ID_RE = re.compile(r"^/api/players/(\d+)/?$")
 PLAYER_VIEW_RE = re.compile(r"^/api/player_view/(\d+)/?$")
+LOBBY_ID_RE = re.compile(r"^/api/lobby/([0-9a-f]+)/?$")
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -635,12 +807,19 @@ class Handler(BaseHTTPRequestHandler):
 
     # ---- helpers ----
 
-    def _send_json(self, status: int, payload) -> None:
+    def _send_json(
+        self,
+        status: int,
+        payload,
+        extra_headers: Optional[List[Tuple[str, str]]] = None,
+    ) -> None:
         body = json.dumps(payload, default=str).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        for name, value in (extra_headers or []):
+            self.send_header(name, value)
         self.end_headers()
         self.wfile.write(body)
 
@@ -734,6 +913,43 @@ class Handler(BaseHTTPRequestHandler):
         m["samesite"] = "Lax"
         return m.OutputString()
 
+    def _provided_lobby_id(self) -> Optional[str]:
+        """Return the ``botc_lobby_id`` cookie value if present.
+
+        The Player UI sets this on a successful ``/api/lobby/join`` so a
+        player who reloads the page can be matched back to their lobby
+        record without retyping their name.
+        """
+        raw_cookie = self.headers.get("Cookie", "")
+        if not raw_cookie:
+            return None
+        jar = http.cookies.SimpleCookie()
+        try:
+            jar.load(raw_cookie)
+        except http.cookies.CookieError:
+            return None
+        morsel = jar.get(LOBBY_COOKIE_NAME)
+        return morsel.value if morsel is not None else None
+
+    def _set_lobby_cookie(self, lobby_id: str) -> str:
+        jar = http.cookies.SimpleCookie()
+        jar[LOBBY_COOKIE_NAME] = lobby_id
+        m = jar[LOBBY_COOKIE_NAME]
+        m["path"] = "/"
+        # 30 days — long enough to outlast a typical multi-game evening.
+        m["max-age"] = str(60 * 60 * 24 * 30)
+        m["samesite"] = "Lax"
+        return m.OutputString()
+
+    def _clear_lobby_cookie(self) -> str:
+        jar = http.cookies.SimpleCookie()
+        jar[LOBBY_COOKIE_NAME] = ""
+        m = jar[LOBBY_COOKIE_NAME]
+        m["path"] = "/"
+        m["max-age"] = "0"
+        m["samesite"] = "Lax"
+        return m.OutputString()
+
     # ---- routing ----
 
     def do_GET(self) -> None:  # noqa: N802
@@ -767,21 +983,33 @@ class Handler(BaseHTTPRequestHandler):
                             "text/html; charset=utf-8")
             return
 
-        if path in ("/phone", "/phone/", "/phone.html"):
-            # Storyteller mobile UI. The QR shown on the local UI
+        if path in (
+            "/storyteller", "/storyteller/", "/storyteller.html",
+            # Backwards-compat aliases. Older QRs / bookmarks may still
+            # point at /phone — serve the same Storyteller UI rather
+            # than 404 so a re-scan is never required.
+            "/phone", "/phone/", "/phone.html",
+        ):
+            # Storyteller UI. Audience: the storyteller (NOT a
+            # player). The Storyteller QR shown on the Local UI
             # points here, so a phone scan gives the storyteller a
-            # mobile-friendly grimoire (chairs + tokens + side panel +
-            # prompts). Player-facing views live at /player below.
-            self._send_file(os.path.join(STATIC_DIR, "phone.html"),
+            # portrait-phone mirror of their grimoire (chairs +
+            # tokens + side panel + prompts). Player-facing views
+            # live at /player below and follow stricter
+            # information-hiding rules.
+            self._send_file(os.path.join(STATIC_DIR, "storyteller.html"),
                             "text/html; charset=utf-8")
             return
 
         if path in ("/player", "/player/", "/player.html"):
-            # Per-player phone UI. Placeholder for now — once player
-            # codes / personal QR routing is set up this will be the
-            # view a single player gets on their own device. Kept
-            # separate from /phone (storyteller mobile) so the two
-            # UIs can evolve independently.
+            # Player UI. Audience: a single player (one per seat).
+            # Placeholder for now — once per-seat QR routing is set
+            # up this will be the view that player gets on their own
+            # phone. Kept separate from /phone (the Storyteller UI)
+            # so the two surfaces can evolve independently. The
+            # Player UI must NEVER display player character
+            # information during the game; see "Information hiding
+            # rules" in ui/README.md.
             self._send_file(os.path.join(STATIC_DIR, "player.html"),
                             "text/html; charset=utf-8")
             return
@@ -804,6 +1032,56 @@ class Handler(BaseHTTPRequestHandler):
             })
             return
 
+        # ---- lobby endpoints ----
+        # The "lobby" is the joined-but-not-yet-seated list. Players hit
+        # /player on their own phones, type a name, and post to
+        # /api/lobby/join. The Storyteller drags lobby names onto chairs
+        # in the Local UI to seat them. See ``engine/lobby.py``.
+
+        if path == "/api/lobby":
+            self._send_json(HTTPStatus.OK, {
+                "players": LOBBY.list(),
+            })
+            return
+
+        if path == "/api/lobby/me":
+            # Returns the Player UI's own lobby record (looked up via
+            # the ``botc_lobby_id`` cookie). The body is always
+            # ``{player: ...}`` so the front-end can branch on null.
+            #
+            # When the storyteller has hit "Reveal Characters" on the
+            # Local UI, the entry's ``character_revealed`` flag is
+            # True; in that case we also resolve the seated character
+            # from the chair store and return its token URL so the
+            # Player UI can render the character token. The resolved
+            # ``character`` / ``character_token`` are dropped as soon
+            # as the player taps "Hide" (which clears the flag again).
+            lobby_id = self._provided_lobby_id()
+            entry = LOBBY.get(lobby_id) if lobby_id else None
+            if entry is not None and entry.get("character_revealed"):
+                chair_id = entry.get("assigned_chair_id")
+                character_name: Optional[str] = None
+                token_url: Optional[str] = None
+                if chair_id is not None:
+                    chair = STORE.get(chair_id)
+                    if chair is not None:
+                        nm = (chair.get("character") or "").strip()
+                        if nm:
+                            character_name = nm
+                            token_url = _character_token_url(nm)
+                if character_name:
+                    entry = dict(entry)
+                    entry["character"] = character_name
+                    entry["character_token"] = token_url
+                else:
+                    # No character assigned yet — silently drop the flag
+                    # in the response so the Player UI doesn't show an
+                    # empty token.
+                    entry = dict(entry)
+                    entry["character_revealed"] = False
+            self._send_json(HTTPStatus.OK, {"player": entry})
+            return
+
         # ---- preset / character-pool endpoints ----
 
         if path == "/api/presets":
@@ -811,7 +1089,23 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if path.startswith("/api/presets/"):
-            preset_name = urllib.parse.unquote(path[len("/api/presets/"):]).rstrip("/")
+            tail = urllib.parse.unquote(path[len("/api/presets/"):]).rstrip("/")
+            # Preset-scoped sub-resources. Today only ``script_page1.png``
+            # — the first page of the preset's script.pdf, rendered to
+            # a PNG so the Player UI can display it in a pinch-zoom
+            # overlay (mobile browsers don't all render PDF inline).
+            if tail.endswith("/script_page1.png"):
+                preset_name = tail[: -len("/script_page1.png")]
+                rendered = _render_script_first_page_png(preset_name)
+                if rendered is None:
+                    self._send_json(
+                        HTTPStatus.NOT_FOUND,
+                        {"error": "script.pdf not found or could not be rendered"},
+                    )
+                    return
+                self._send_file(rendered, "image/png")
+                return
+            preset_name = tail
             data = _load_preset(preset_name)
             if data is None:
                 self._send_json(HTTPStatus.NOT_FOUND, {"error": "no such preset"})
@@ -929,6 +1223,154 @@ class Handler(BaseHTTPRequestHandler):
         if not self._gate():
             return
 
+        # ---- lobby endpoints ----
+        # See ``engine/lobby.py``. The join endpoint is the only one a
+        # player phone hits; the rest are Storyteller-driven.
+
+        if path == "/api/lobby/join":
+            ok, data = self._read_json()
+            if not ok:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"error": "invalid JSON"})
+                return
+            name = data.get("name")
+            if not isinstance(name, str) or not name.strip():
+                self._send_json(HTTPStatus.BAD_REQUEST,
+                                {"error": "need a name"})
+                return
+            try:
+                # If the caller already has a lobby cookie that points
+                # at a live entry, treat this as a rename rather than a
+                # second join — same browser, same player, just changing
+                # what they typed. This makes the join screen idempotent.
+                existing_id = self._provided_lobby_id()
+                if existing_id and LOBBY.get(existing_id) is not None:
+                    entry = LOBBY.rename(existing_id, name)
+                    if entry is None:
+                        entry = LOBBY.join(name)
+                    # If the renamed player is already seated, propagate
+                    # the new name onto the chair so the town square
+                    # updates without the storyteller having to re-drag.
+                    if entry and entry.get("assigned_chair_id") is not None:
+                        STORE.update(entry["assigned_chair_id"],
+                                     name=entry["name"])
+                else:
+                    entry = LOBBY.join(name)
+            except ValueError as exc:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+                return
+            self._send_json(
+                HTTPStatus.OK,
+                {"player": entry},
+                extra_headers=[("Set-Cookie", self._set_lobby_cookie(entry["id"]))],
+            )
+            return
+
+        if path == "/api/lobby/assign":
+            # Storyteller drops a lobby name onto a chair in the Local UI.
+            # Stamps the chair's ``name`` field AND records the binding in
+            # the lobby so the unassigned list re-renders without the
+            # seated entry.
+            ok, data = self._read_json()
+            if (not ok
+                or "lobby_id" not in data
+                or "chair_id" not in data):
+                self._send_json(HTTPStatus.BAD_REQUEST,
+                                {"error": "need lobby_id and chair_id"})
+                return
+            try:
+                chair_id = int(data["chair_id"])
+            except (TypeError, ValueError):
+                self._send_json(HTTPStatus.BAD_REQUEST,
+                                {"error": "chair_id must be an int"})
+                return
+            entry = LOBBY.get(str(data["lobby_id"]))
+            if entry is None:
+                self._send_json(HTTPStatus.NOT_FOUND,
+                                {"error": "no such lobby player"})
+                return
+            chair = STORE.get(chair_id)
+            if chair is None:
+                self._send_json(HTTPStatus.NOT_FOUND,
+                                {"error": "no such chair"})
+                return
+            # If a different lobby entry was previously seated here,
+            # ``Lobby.assign`` will have already cleared it. Stamp the
+            # chair's name so the existing chair-rendering code picks up
+            # the change with no further wiring.
+            updated = LOBBY.assign(str(data["lobby_id"]), chair_id)
+            STORE.update(chair_id, name=entry["name"])
+            self._send_json(HTTPStatus.OK, {
+                "player": updated,
+                "chair": STORE.get(chair_id),
+                "lobby": LOBBY.list(),
+            })
+            return
+
+        if path == "/api/lobby/unassign":
+            # Either ``{lobby_id}`` (knock that one player out of their
+            # seat) or ``{chair_id}`` (vacate this chair). Clears the
+            # chair's name so the chair re-appears empty in the
+            # unassigned-names dock.
+            ok, data = self._read_json()
+            if not ok:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"error": "invalid JSON"})
+                return
+            entry: Optional[dict] = None
+            chair_id: Optional[int] = None
+            if "lobby_id" in data:
+                entry = LOBBY.get(str(data["lobby_id"]))
+                if entry is None:
+                    self._send_json(HTTPStatus.NOT_FOUND,
+                                    {"error": "no such lobby player"})
+                    return
+                chair_id = entry.get("assigned_chair_id")
+                LOBBY.unassign(str(data["lobby_id"]))
+            elif "chair_id" in data:
+                try:
+                    chair_id = int(data["chair_id"])
+                except (TypeError, ValueError):
+                    self._send_json(HTTPStatus.BAD_REQUEST,
+                                    {"error": "chair_id must be an int"})
+                    return
+                LOBBY.unassign_chair(chair_id)
+            else:
+                self._send_json(HTTPStatus.BAD_REQUEST,
+                                {"error": "need lobby_id or chair_id"})
+                return
+            if chair_id is not None and STORE.get(chair_id) is not None:
+                STORE.update(chair_id, name="")
+            self._send_json(HTTPStatus.OK, {"lobby": LOBBY.list()})
+            return
+
+        if path == "/api/lobby/reveal_characters":
+            # Storyteller-only: flip ``character_revealed`` on for every
+            # seated lobby entry so each player's phone shows their
+            # assigned character token (until they tap Hide). Idempotent.
+            flipped = LOBBY.reveal_characters_to_seated()
+            self._send_json(HTTPStatus.OK, {
+                "revealed": [e["id"] for e in flipped],
+                "count": len(flipped),
+                "lobby": LOBBY.list(),
+            })
+            return
+
+        if path == "/api/lobby/me/hide_character":
+            # Player-only: clears ``character_revealed`` on the cookied
+            # lobby entry so the token disappears from the phone.
+            # The storyteller must hit Reveal again to put it back.
+            lobby_id = self._provided_lobby_id()
+            if not lobby_id:
+                self._send_json(HTTPStatus.UNAUTHORIZED,
+                                {"error": "no lobby cookie"})
+                return
+            entry = LOBBY.hide_character(lobby_id)
+            if entry is None:
+                self._send_json(HTTPStatus.NOT_FOUND,
+                                {"error": "no such lobby player"})
+                return
+            self._send_json(HTTPStatus.OK, {"player": entry})
+            return
+
         # ---- chair endpoints ----
 
         if self.path == "/api/chairs":
@@ -942,6 +1384,11 @@ class Handler(BaseHTTPRequestHandler):
 
         if self.path == "/api/chairs/remove_last":
             removed = STORE.remove_last()
+            if removed is not None:
+                # Chair gone — release any lobby binding pointed at it
+                # and reconcile the rest against the renumbered chairs.
+                LOBBY.unassign_chair(removed)
+                _resync_lobby_bindings_to_chairs()
             self._send_json(HTTPStatus.OK, {"removed": removed})
             return
 
@@ -1119,6 +1566,18 @@ class Handler(BaseHTTPRequestHandler):
             saved_ww_tf = ENGINE.pool.washerwoman_townsfolk()
             saved_ww_wrong = ENGINE.pool.washerwoman_wrong()
             saved_preset = ENGINE.selected_preset_name
+            # Keep joined players across a reset — they shouldn't have to
+            # rescan / retype names just because the Storyteller wiped
+            # the engine. Carry the whole Lobby across by reference.
+            saved_lobby = ENGINE.lobby
+            # A game reset wipes any pending character reveals so the
+            # next "Reveal Characters" press starts from a clean slate.
+            try:
+                saved_lobby.clear_all_character_reveals()
+            except AttributeError:
+                # Old in-memory Lobby instances pre-dating the field
+                # don't have the helper; ignore safely.
+                pass
             new_engine = Engine(default_seats=0)
             for chair in saved_chairs:
                 new_chair = new_engine.chairs.add()
@@ -1147,6 +1606,7 @@ class Handler(BaseHTTPRequestHandler):
                 # session), let auto-fill repopulate it via set_many.
                 pass
             new_engine.selected_preset_name = saved_preset
+            new_engine.lobby = saved_lobby
             ENGINE_replace(new_engine)
             self._send_json(HTTPStatus.OK, {
                 "engine": ENGINE.snapshot(),
@@ -1392,16 +1852,44 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(HTTPStatus.BAD_REQUEST,
                             {"error": "need at least one of x, y, name, character"})
             return
+        # Track the *change* in chair name so we can keep the lobby
+        # binding in sync. Two cases:
+        #   1. The chair's name is being cleared (set to ""). Any lobby
+        #      entry that was seated here returns to the unassigned
+        #      list automatically — that's the round-trip the
+        #      Storyteller asked for ("when player chair is canceled,
+        #      need to return player to unassigned").
+        #   2. The chair's name is being changed to the name of a lobby
+        #      entry. We re-bind the lobby entry to this chair so the
+        #      unassigned-names dock drops it. (No change for typed-in
+        #      names that don't match any lobby entry.)
+        prior_chair = STORE.get(cid)
+        prior_name = (prior_chair.get("name") or "") if prior_chair else ""
+        new_name_field = data.get("name")
         chair = STORE.update(
             cid,
             x=data.get("x"),
             y=data.get("y"),
-            name=data.get("name"),
+            name=new_name_field,
             character=data.get("character"),
         )
         if chair is None:
             self._send_json(HTTPStatus.NOT_FOUND, {"error": "no such chair"})
             return
+        if isinstance(new_name_field, str):
+            stripped = new_name_field.strip()
+            if not stripped:
+                # Name cleared — drop any lobby binding for this chair.
+                LOBBY.unassign_chair(cid)
+            elif stripped != prior_name.strip():
+                # Name changed to something new. Re-bind to whichever
+                # lobby entry shares this name (case-insensitive); if
+                # nothing matches, just drop any stale binding.
+                LOBBY.unassign_chair(cid)
+                for entry in LOBBY.list():
+                    if entry["name"].lower() == stripped.lower():
+                        LOBBY.assign(entry["id"], cid)
+                        break
         self._send_json(HTTPStatus.OK, chair)
 
     def do_DELETE(self) -> None:  # noqa: N802
@@ -1409,6 +1897,27 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         path = self.path.split("?", 1)[0]
+
+        # ---- lobby endpoints ----
+        # ``DELETE /api/lobby/<id>`` removes a joined player entirely.
+        # Used by the Storyteller's "✕" button next to each entry in
+        # the unassigned-names dock. If the entry was seated, the chair
+        # name is cleared too so the chair returns to its blank state.
+        m_lobby = LOBBY_ID_RE.match(path)
+        if m_lobby:
+            lobby_id = m_lobby.group(1)
+            entry = LOBBY.get(lobby_id)
+            if entry is None:
+                self._send_json(HTTPStatus.NOT_FOUND,
+                                {"error": "no such lobby player"})
+                return
+            seated_chair = entry.get("assigned_chair_id")
+            LOBBY.remove(lobby_id)
+            if seated_chair is not None and STORE.get(seated_chair) is not None:
+                STORE.update(seated_chair, name="")
+            self._send_json(HTTPStatus.OK, {"lobby": LOBBY.list()})
+            return
+
         if path.startswith("/api/character_pool/"):
             name = urllib.parse.unquote(path[len("/api/character_pool/"):]).rstrip("/")
             if not name:
@@ -1428,6 +1937,15 @@ class Handler(BaseHTTPRequestHandler):
             return
         cid = int(m.group(1))
         if STORE.remove(cid):
+            # The chair is gone; release any lobby entry that was
+            # bound to it so that joined player drops back into the
+            # unassigned list. ChairStore renumbers chair ids on
+            # remove (see ``_renumber``), so we also rebuild every
+            # remaining lobby binding by name match against the new
+            # chair set — otherwise a binding might point at a chair
+            # that, post-renumber, holds a different player.
+            LOBBY.unassign_chair(cid)
+            _resync_lobby_bindings_to_chairs()
             self._send_json(HTTPStatus.OK, {"removed": cid})
         else:
             self._send_json(HTTPStatus.NOT_FOUND, {"error": "no such chair"})
@@ -1542,15 +2060,11 @@ def _character_pool_snapshot() -> dict:
 
     # Per-type counts of the current pool.
     counts = {ct.value: 0 for ct in CharType}
-    townsfolk_delta = 0
-    outsider_delta = 0
     for n in names:
         spec = script_data.SCRIPT_BY_NAME.get(n)
         if spec is None:
             continue
         counts[spec.char_type.value] += 1
-        townsfolk_delta += spec.setup_townsfolk_delta
-        outsider_delta += spec.setup_outsider_delta
 
     # Recommended counts. We only have setup tables for >=5 players;
     # below that we fall back to zeros so the UI stays sensible.
@@ -1561,6 +2075,33 @@ def _character_pool_snapshot() -> dict:
         rec_t, rec_o, rec_m, rec_d = 0, 0, 0, 0
         has_recommendation = False
 
+    # Roster sizes for the currently-selected preset (if any). Passed
+    # into ``apply_setup_deltas`` so any setup-time adjustment (e.g.
+    # the Baron's "+2 Outsiders") is capped against what the script
+    # actually carries — when a preset only ships with 2 outsiders,
+    # the Baron can only add up to 2 distinct ones, and the remaining
+    # slots stay as townsfolk. Without a selected preset we pass
+    # ``None`` and the helper applies the deltas without clamping.
+    roster_t: Optional[int] = None
+    roster_o: Optional[int] = None
+    selected = _selected_preset()
+    if selected:
+        preset_data = _load_preset(selected)
+        if preset_data is not None:
+            roster_t = sum(
+                1 for n in (preset_data.get("Townsfolk") or [])
+                if n in script_data.SCRIPT_BY_NAME
+            )
+            roster_o = sum(
+                1 for n in (preset_data.get("Outsiders") or [])
+                if n in script_data.SCRIPT_BY_NAME
+            )
+
+    adj_t, adj_o = script_data.apply_setup_deltas(
+        rec_t, rec_o, names,
+        roster_townsfolk=roster_t, roster_outsiders=roster_o,
+    )
+
     recommended = {
         "townsfolk": rec_t,
         "outsider": rec_o,
@@ -1568,8 +2109,8 @@ def _character_pool_snapshot() -> dict:
         "demon": rec_d,
     }
     adjusted = {
-        "townsfolk": max(0, rec_t + townsfolk_delta),
-        "outsider": max(0, rec_o + outsider_delta),
+        "townsfolk": adj_t,
+        "outsider": adj_o,
         "minion": rec_m,
         "demon": rec_d,
     }
@@ -1617,6 +2158,7 @@ def _character_pool_snapshot() -> dict:
     undertaker_died_today_player_id: Optional[int] = None
     slayer_no_ability_player_ids: list = []
     virgin_no_ability_player_ids: list = []
+    artist_no_ability_player_ids: list = []
     try:
         engine_players = ENGINE.players
     except Exception:
@@ -1671,6 +2213,8 @@ def _character_pool_snapshot() -> dict:
             slayer_no_ability_player_ids.append(p.id)
         elif char.name == "Virgin" and getattr(char, "_triggered", False):
             virgin_no_ability_player_ids.append(p.id)
+        elif char.name == "Artist" and getattr(char, "_used", False):
+            artist_no_ability_player_ids.append(p.id)
         elif char.name == "Undertaker":
             # Undertaker's "DIED TODAY" reminder marks the seat of the
             # player executed today. The Undertaker character resets
@@ -1824,6 +2368,7 @@ def _character_pool_snapshot() -> dict:
         "scarlet_woman_promoted_player_ids": list(sw_promoted_ids),
         "slayer_no_ability_player_ids": slayer_no_ability_player_ids,
         "virgin_no_ability_player_ids": virgin_no_ability_player_ids,
+        "artist_no_ability_player_ids": artist_no_ability_player_ids,
         # Generic setup-pick map sourced from Character.setup_picks.
         # ``{owner_role: {slot: value}}``. Lets the UI render
         # parenthetical annotations (e.g. "Drunk (Empath)") without

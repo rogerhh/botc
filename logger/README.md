@@ -50,8 +50,8 @@ logger/
   durable to disk via the JSONL sink, so a process restart does not lose
   the record.
 - **Be private.** The log contains Storyteller-level information (drunk
-  player saw fake info X; Imp killed Y) and is never sent to a player's
-  phone.
+  player saw fake info X; Imp killed Y) and is never sent to the
+  Player UI.
 - **Be deterministic.** Given the same seating, character assignment, and
   Storyteller decisions, replaying the log reconstructs the same game
   state.
@@ -118,8 +118,10 @@ to the UI without the engine knowing the difference.
 - **JsonlSink** — appends each entry as one JSON line to a file on
   disk. Crash-safe: the file is fsynced after each line. Replay reads
   this file back.
-- **StreamSink** — pushes new entries over the engine -> Local UI
-  socket. The UI's timeline panel renders them live.
+- **StreamSink** — pushes new entries over the engine -> Storyteller
+  surfaces socket (Local UI and Storyteller UI). The UI's timeline
+  panel renders them live. The Player UI is never a subscriber — it
+  only ever sees Information prompts the engine routes to it.
 
 Multiple sinks can be attached. `EventLog.append` fans out to all of
 them.
@@ -255,14 +257,16 @@ This keeps logging centralised in one place.
 
 ## Integration with the UI
 
-The Local UI subscribes to the StreamSink. Every appended entry pushes
-a row to the timeline panel. Tapping a row jumps the UI's seat-state
-view to "as of this entry", which is implemented by replaying from the
-nearest snapshot.
+The Local UI and the Storyteller UI both subscribe to the StreamSink
+(they are both Storyteller-audience surfaces and may show the full
+log). Every appended entry pushes a row to the timeline panel.
+Tapping a row jumps the UI's seat-state view to "as of this entry",
+which is implemented by replaying from the nearest snapshot.
 
-The Mobile UI does not subscribe to anything in the logger. Player
-phones see only the Information events the engine routes to them
-through Prompts.
+The Player UI does not subscribe to anything in the logger. Each
+Player UI sees only the Information events the engine routes to it
+through Prompts — and never any character information about its own
+player or any other player.
 
 
 ## Format

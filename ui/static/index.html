@@ -220,17 +220,26 @@
   /* The Next button lives at the bottom of the dock during the night
      and during *daytime* abilities (Slayer slayshot, Virgin reaction,
      etc.). Hidden by default; re-enabled in two cases:
-       1. Night phase (always — between prompts as well as during).
+       1. Night phase WITH an active prompt (the storyteller is stepping
+          through the night sheet ability-by-ability).
        2. Day phase WITH an active prompt (the Slayer-shot case the
           storyteller has to dispatch with Next).
-     During day with no active prompt the Start Night button takes its
-     place; with an active prompt the Start Night button steps aside so
-     the storyteller doesn't accidentally jump to night while a daytime
-     ability is mid-resolution. */
+
+     The Start Night button takes its place whenever the dock is idle
+     (no active prompt) past Setup — i.e. on day-with-no-prompt OR on
+     first-night/night-with-no-prompt (the latter covers the
+     thread-not-yet-started case so the storyteller can manually kick
+     it off). Setting ``phase-day-only`` on the button is no longer
+     enough; we drive visibility with a phase-aware rule below. */
   #promptNext { display: none !important; }
-  body.phase-night #promptNext { display: block !important; }
-  body.phase-day #phaseDock:not(.no-prompt) #promptNext { display: block !important; }
-  body.phase-day #phaseDock:not(.no-prompt) #btnStartNight { display: none !important; }
+  body.phase-night #phaseDock:not(.no-prompt) #promptNext { display: block !important; }
+  body.phase-day   #phaseDock:not(.no-prompt) #promptNext { display: block !important; }
+  /* Start Night: hidden by default; shown when the dock is idle in
+     any in-game phase. The button's old ``phase-day-only`` class is
+     overridden here. */
+  #btnStartNight { display: none !important; }
+  body.phase-day   #phaseDock.no-prompt #btnStartNight { display: block !important; }
+  body.phase-night #phaseDock.no-prompt #btnStartNight { display: block !important; }
 
   #phaseDock .dock-button {
     width: 100%;
@@ -508,6 +517,33 @@
     min-width: 90px;
     text-align: right;
   }
+  /* During setup the player-count pill is click-to-edit. The hover
+     hint lets the storyteller know it's interactive without adding
+     extra chrome. Once the game starts the body loses
+     ``phase-setup`` and the pill stops accepting clicks (see JS),
+     so we drop the hover affordance too. */
+  body.phase-setup .count { cursor: text; }
+  body.phase-setup .count:hover { color: var(--text); }
+  .count.editing { color: var(--text); }
+  .count-input {
+    width: 3em;
+    background: transparent;
+    color: var(--text);
+    border: 1px solid var(--button-hover);
+    border-radius: 3px;
+    font: inherit;
+    padding: 1px 4px;
+    text-align: right;
+    margin-right: 2px;
+  }
+  .count-input:focus { outline: none; border-color: var(--st-edge); }
+  /* Hide the spinner arrows so the field still reads as a label. */
+  .count-input::-webkit-outer-spin-button,
+  .count-input::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+  .count-input { -moz-appearance: textfield; }
 
   main {
     position: absolute;
@@ -759,13 +795,17 @@
      night/day/finished. Pure read of engine state plus four action
      buttons that POST to /api/engine/{nominate,vote,execute,
      use_ability}. See ui/README.md "Player side panel". */
+  /* Shares the left column with the console panel below. Width
+     matches the console (384px); height stops above the console
+     (320px tall + 16px bottom margin + 16px gap = 352px) so the
+     two never overlap when both are visible. */
   .seat-panel {
     position: fixed;
     top: 0;
     left: 0;
-    width: 320px;
+    width: 384px;
     max-width: 92vw;
-    height: 100vh;
+    height: calc(100vh - 352px);
     background: #1a1815;
     color: var(--text);
     border-right: 1px solid #00000099;
@@ -1015,6 +1055,35 @@
     margin: 0 0 10px 0;
     font-size: 12px;
     color: var(--muted);
+  }
+  /* QR target tabs — switch between Player phone (/player) and
+     Storyteller phone (/phone). Both QR codes are generated from the
+     same LAN base URL, so the host_info detection in detectBestUrl()
+     is shared. */
+  .qr-target {
+    display: flex;
+    gap: 6px;
+    margin: 0 0 12px 0;
+    padding: 4px;
+    background: #14100d;
+    border-radius: 6px;
+    border: 1px solid #00000088;
+  }
+  .qr-target .qr-tab {
+    flex: 1;
+    background: transparent;
+    border: 0;
+    color: var(--muted);
+    padding: 7px 10px;
+    border-radius: 4px;
+    font-size: 13px;
+    cursor: pointer;
+    letter-spacing: 0.02em;
+  }
+  .qr-target .qr-tab:hover { color: var(--text); }
+  .qr-target .qr-tab.selected {
+    background: #2c3a26;
+    color: #d8e8c8;
   }
   .faint { color: var(--muted); font-weight: 400; letter-spacing: 0; text-transform: none; }
   .qr-preview {
@@ -1424,6 +1493,133 @@
     padding: 4px 0;
   }
 
+  /* --- Lobby side panel (LEFT, setup-only). ----------------------
+     Lists joined-but-not-yet-seated player names that came in via the
+     player phones (POST /api/lobby/join). Each row is draggable; the
+     storyteller picks a name and drops it onto a chair, which calls
+     /api/lobby/assign and stamps the chair's name.
+
+     Phase-setup-only: once the game starts, the seating is finalised
+     and the dock disappears. The in-game seat-panel (also left-side)
+     occupies the same screen real estate during night/day. */
+  .lobby-side {
+    position: fixed;
+    top: 72px;
+    left: 16px;
+    width: 220px;
+    max-height: calc(100vh - 88px);
+    background: var(--panel);
+    border: 1px solid #00000099;
+    border-radius: 8px;
+    box-shadow: 0 8px 24px #000000aa;
+    padding: 10px 12px;
+    z-index: 60;
+    overflow-y: auto;
+    color: var(--text);
+  }
+  .lobby-side .lobby-title {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: #f0c27a;
+    margin: 0 0 8px;
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+  }
+  .lobby-side .lobby-title .total {
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.04em;
+    text-transform: none;
+    color: var(--muted);
+  }
+  .lobby-side .lobby-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .lobby-side .lobby-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    padding: 7px 8px;
+    background: #14100d;
+    border: 1px solid #00000099;
+    border-radius: 5px;
+    font-size: 13px;
+    color: var(--text);
+    cursor: grab;
+    user-select: none;
+    transition: border-color 0.12s, background 0.12s;
+  }
+  .lobby-side .lobby-row:hover { border-color: #f0c27a99; }
+  .lobby-side .lobby-row:active { cursor: grabbing; }
+  .lobby-side .lobby-row.dragging {
+    position: fixed;
+    z-index: 200;
+    pointer-events: none;
+    cursor: grabbing;
+    background: #2a2118;
+    border-color: #f0c27a;
+    box-shadow: 0 6px 16px #000a;
+    width: 196px;
+  }
+  .lobby-side .lobby-row .name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .lobby-side .lobby-row .remove,
+  .lobby-side .lobby-row .unseat {
+    flex-shrink: 0;
+    background: transparent;
+    border: 0;
+    color: #aa9a72;
+    cursor: pointer;
+    font-size: 14px;
+    padding: 0 4px;
+    line-height: 1;
+  }
+  .lobby-side .lobby-row .remove:hover { color: #d77676; }
+  .lobby-side .lobby-row .unseat:hover { color: #f0c27a; }
+  .lobby-side .lobby-row .seat-tag {
+    flex-shrink: 0;
+    font-size: 10px;
+    font-weight: 700;
+    color: #f0c27acc;
+    background: #00000055;
+    border: 1px solid #f0c27a55;
+    border-radius: 4px;
+    padding: 1px 6px;
+    letter-spacing: 0.08em;
+  }
+  .lobby-side .lobby-row .seat-tag.pending {
+    color: #d7a676cc;
+    border-color: #d7a67655;
+  }
+  /* Seated rows are slightly subdued so the eye lands on the
+     drag-eligible "waiting" rows first. */
+  .lobby-side .lobby-row.seated {
+    background: #1a1611;
+    cursor: default;
+  }
+  .lobby-side .lobby-row.seated:active { cursor: default; }
+  .lobby-side .lobby-row.seated .name { color: #b9a87f; }
+  .lobby-side .lobby-empty {
+    font-size: 12px;
+    color: var(--muted);
+    padding: 4px 0;
+    line-height: 1.5;
+  }
+  /* Chairs that will accept a lobby drop (same pulse as token drops,
+     reusing the existing chair-drop-target class so the geometry +
+     animation are shared). */
+
   /* --- Character picker inside the edit-Player modal --- */
   .char-picker {
     max-height: 240px;
@@ -1689,17 +1885,24 @@
   }
 
   /* --- Live storyteller console panel ---
-     Bottom-left floating panel that shows the structured engine log
-     in real time. Hidden during setup (nothing to log yet) and
-     collapsed by default to keep the town-square uncluttered; the
-     header acts as the toggle. */
+     Panel docked at the bottom-left, sharing the same left-anchored
+     column as the per-player seat (player info) side panel above
+     it. Both are 384px wide; the seat panel's height is shortened
+     (see ``.seat-panel`` below) so it ends above the console + 16px
+     gap. The console is 320px tall (shorter than wide) so the
+     dock'd portion of the seat panel still has plenty of vertical
+     room. Reserves a consistent 384x320 footprint so the body has
+     a stable scrollable region. The header still works as a
+     collapse toggle. */
   .console-panel {
     position: fixed;
-    left: 20px;
-    bottom: 20px;
+    left: 16px;
+    bottom: 16px;
     z-index: 60;
-    width: min(380px, calc(100vw - 36px));
-    max-height: min(420px, calc(100vh - 80px));
+    width: 384px;
+    height: 320px;
+    max-width: calc(100vw - 32px);
+    max-height: calc(100vh - 96px);
     background: #1d1d1faa;
     border: 1px solid #00000088;
     border-radius: 10px;
@@ -1708,8 +1911,8 @@
     display: flex;
     flex-direction: column;
     backdrop-filter: blur(6px);
+    overflow: hidden;
   }
-  body.phase-setup .console-panel { display: none; }
   .console-panel .console-header {
     display: flex;
     align-items: center;
@@ -1719,6 +1922,7 @@
     border-bottom: 1px solid #00000077;
     cursor: pointer;
     user-select: none;
+    flex: 0 0 auto;
   }
   .console-panel .console-title {
     font-size: 13px;
@@ -1745,12 +1949,16 @@
     overflow-y: auto;
     padding: 4px 0;
     flex: 1 1 auto;
+    min-height: 0;
   }
+  /* When the user collapses the panel via the header toggle, drop
+     the square so just the header is showing — the right-dock above
+     can then expand to use the freed space if needed. */
+  .console-panel.collapsed { height: auto; }
   .console-panel.collapsed .console-body { display: none; }
-  .console-panel.collapsed { max-height: none; }
   .console-panel .console-row {
     display: grid;
-    grid-template-columns: 50px 80px 1fr;
+    grid-template-columns: 50px 70px 1fr;
     gap: 8px;
     padding: 5px 12px;
     align-items: baseline;
@@ -1768,7 +1976,18 @@
   <h1>Blood on the Clocktower — Town Square</h1>
   <div class="toolbar">
     <button id="btnAdd" class="phase-setup-only">+ Add Player</button>
-    <button id="btnQR" class="phase-setup-only">QR Code</button>
+    <button id="btnQrPlayer" class="phase-setup-only"
+            title="Show the player join QR (for everyone at the table)">
+      📱 Player QR
+    </button>
+    <button id="btnQrSt"
+            title="Show the storyteller phone QR (for your own phone)">
+      🎩 Storyteller QR
+    </button>
+    <button id="btnRevealCharacters" type="button"
+            title="Push every seated player's assigned character token to their phone (Player UI). The player can then tap Hide to clear it; you can hit Reveal again to put it back.">
+      👁 Reveal Characters
+    </button>
     <button id="btnResetGame" class="danger phase-game-only" type="button"
             title="Kill the running game engine and return to the town square.">
       ⟳ Reset Game
@@ -1848,9 +2067,9 @@
 
 <div id="qrBackdrop" class="modal-backdrop" role="dialog" aria-modal="true">
   <div class="modal qr-modal">
-    <h2>Phone view — QR code</h2>
-    <p class="qr-sub">Players scan this to open the read-only town square on
-      their phones.</p>
+    <h2 id="qrTitle">Phone view — QR code</h2>
+    <p class="qr-sub" id="qrSub">Show this to a phone camera to open the
+      page on the LAN.</p>
 
     <label for="qrUrl">Base URL</label>
     <input id="qrUrl" type="text" autocomplete="off" spellcheck="false" />
@@ -1873,6 +2092,17 @@
       </div>
     </div>
   </div>
+</div>
+
+<!-- Lobby dock — left side, setup-only. Lists joined-but-not-yet-
+     seated player names. Each row is draggable; drop on a chair to
+     POST /api/lobby/assign. -->
+<div id="lobbyDock" class="lobby-side phase-setup-only" aria-live="polite">
+  <div class="lobby-title">
+    <span>Joined players</span>
+    <span class="total" id="lobbyDockTotal"></span>
+  </div>
+  <div id="lobbyDockBody" class="lobby-list"></div>
 </div>
 
 <div id="rightDock" class="right-dock">
@@ -2052,14 +2282,14 @@
      revives, nominations, executions, phase transitions, game end)
      so the storyteller can scan recent activity without reading the
      verbose log. Header acts as the collapse toggle. -->
-<div id="consolePanel" class="console-panel collapsed">
+<div id="consolePanel" class="console-panel">
   <div id="consoleHeader" class="console-header">
     <div>
       <span class="console-title">📋 Console</span>
       <span id="consoleCount" class="console-count">0</span>
     </div>
     <button type="button" id="consoleToggle" class="console-toggle"
-            aria-label="Expand console">▼</button>
+            aria-label="Collapse console">▲</button>
   </div>
   <div id="consoleBody" class="console-body">
     <div class="empty-note">No activity yet.</div>
@@ -2178,6 +2408,98 @@
     }
   }
 
+  // ----- Inline player-count editor -----
+  //
+  // The "N players" pill in the header is click-to-edit during setup:
+  // tapping it swaps the label for a tiny <input type="number">. On
+  // commit (Enter or blur) the engine adds chairs (POST /api/chairs)
+  // or pops the highest-id chair (DELETE) until the live count
+  // matches what was typed. Escape cancels. The editor is suppressed
+  // outside the setup phase via the body class check below.
+  const MAX_CHAIR_LIMIT = 20;  // hard ceiling for chairs the storyteller can request
+  let countEditing = false;
+
+  async function setChairCount(target) {
+    // Cap at sane bounds. The Blood on the Clocktower base scripts
+    // top out at 15 named characters; we allow up to MAX_CHAIR_LIMIT
+    // here for storyteller flexibility.
+    if (!Number.isFinite(target)) return;
+    target = Math.max(0, Math.min(MAX_CHAIR_LIMIT, Math.floor(target)));
+    while (chairs.size < target) {
+      // eslint-disable-next-line no-await-in-loop
+      await addChair();
+    }
+    while (chairs.size > target) {
+      const ids = [...chairs.keys()].sort((a, b) => b - a);
+      if (ids.length === 0) break;
+      // eslint-disable-next-line no-await-in-loop
+      await removeChair(ids[0]);
+    }
+  }
+
+  function startCountEdit() {
+    if (countEditing) return;
+    // Only editable during setup. After Start Game the pill becomes
+    // a passive readout again.
+    if (!document.body.classList.contains("phase-setup")) return;
+    countEditing = true;
+    const current = chairs.size;
+    countEl.classList.add("editing");
+    countEl.textContent = "";
+    const input = document.createElement("input");
+    input.type = "number";
+    input.min = "0";
+    input.max = String(MAX_CHAIR_LIMIT);
+    input.step = "1";
+    input.value = String(current);
+    input.className = "count-input";
+    input.setAttribute("aria-label", "Number of players");
+    const suffix = document.createElement("span");
+    suffix.className = "count-suffix";
+    suffix.textContent = " players";
+    countEl.appendChild(input);
+    countEl.appendChild(suffix);
+
+    let finished = false;
+    const finish = async (commit) => {
+      if (finished) return;
+      finished = true;
+      countEditing = false;
+      countEl.classList.remove("editing");
+      const target = parseInt(input.value, 10);
+      // Restore the label first so any throw inside setChairCount
+      // doesn't leave the pill stuck on a stale input element.
+      render();
+      // setChairCount is a no-op when the typed target matches the
+      // live chairs.size, so we don't need a separate equality guard
+      // here.
+      if (commit && Number.isFinite(target)) {
+        await setChairCount(target);
+      }
+    };
+
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        input.blur();  // triggers commit via blur handler
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        finish(false);
+      }
+    });
+    input.addEventListener("blur", () => { finish(true); });
+
+    // Defer focus/select to the next frame so the click that opened
+    // the editor doesn't immediately re-blur the input on some
+    // browsers.
+    requestAnimationFrame(() => {
+      input.focus();
+      input.select();
+    });
+  }
+
+  countEl.addEventListener("click", startCountEdit);
+
   async function pushMove(id, x, y) {
     try {
       await fetch(`/api/chairs/${id}`, {
@@ -2241,6 +2563,7 @@
     slayer_no_ability:       "slayer_no_ability",
     undertaker_died_today:   "undertaker_died_today",
     virgin_no_ability:       "virgin_no_ability",
+    artist_no_ability:       "artist_no_ability",
     washerwoman_townsfolk:   "washerwoman_townsfolk",
     washerwoman_wrong:       "washerwoman_wrong",
     // Each info character has its own WRONG token so the Storyteller
@@ -2294,6 +2617,7 @@
     undertaker_died_today:  { icon: "undertaker_died_today",  angle: 180, title: "Died today (Undertaker will see this character tonight)" },
     slayer_no_ability:      { icon: "slayer_no_ability",      angle: -150, title: "Slayer has used their once-per-game shot" },
     virgin_no_ability:      { icon: "virgin_no_ability",      angle: -150, title: "Virgin's nominator-execute ability has been used" },
+    artist_no_ability:      { icon: "artist_no_ability",      angle: -150, title: "Artist has asked their once-per-game question" },
   };
 
   // Per-player side-panel labels for each token kind. Same source of
@@ -2316,6 +2640,7 @@
     scarlet_woman_is_demon: { label: "Scarlet Woman is the Demon",  cls: "flag-on" },
     slayer_no_ability:      { label: "Slayer no ability",           cls: "flag-off" },
     virgin_no_ability:      { label: "Virgin no ability",           cls: "flag-off" },
+    artist_no_ability:      { label: "Artist no ability",           cls: "flag-off" },
   };
 
   // Append a reminder-token badge to a chair group. The badge is
@@ -2802,7 +3127,14 @@
       for (const t of textsToFit) fitText(t, MAX_CHAIR_TEXT);
       attachChairInteractions(g, c);
     }
-    countEl.textContent = `${chairs.size} player${chairs.size === 1 ? "" : "s"}`;
+    // Skip the textContent rewrite while the storyteller is editing
+    // the count inline — otherwise a state-poll refresh would clobber
+    // the in-flight <input> they're typing into. The edit-mode hooks
+    // (commit/cancel in startCountEdit) restore the display when the
+    // edit ends.
+    if (!countEditing) {
+      countEl.textContent = `${chairs.size} player${chairs.size === 1 ? "" : "s"}`;
+    }
     // The chair <g> elements were rebuilt above, dropping any
     // ``.highlight-target`` classes from the previous render. Re-apply
     // the cached highlight set so the spotlight survives state-poll
@@ -3494,15 +3826,24 @@
     //   * Voted       — alive (any vote) OR dead with a dead vote left.
     //   * Execute     — day phase AND player still alive.
     const isDay = engineState.phase === "day";
+    // Most daytime abilities (Slayer, Virgin, Artist) require the
+    // player to be alive. The Klutz is the canonical exception — its
+    // ability ("when you learn that you died…") is *meant* to fire
+    // post-death — so we expose ``daytime_ability_active_when_dead``
+    // on the snapshot and let those characters keep the button
+    // enabled while dead.
+    const canActWhenDead = !!p.daytime_ability_active_when_dead;
     const canUseAbility = (
-      p.alive
+      isDay
+      && (p.alive || canActWhenDead)
       && p.has_daytime_ability
       && (!p.once_per_game || !p.once_per_game_used)
     );
     seatActUseAbility.disabled = !canUseAbility;
     seatActUseAbility.title = canUseAbility
       ? "Trigger this player's daytime ability."
-      : (!p.alive ? "Dead players cannot act."
+      : (!isDay ? "Daytime abilities only fire during day."
+         : (!p.alive && !canActWhenDead) ? "Dead players cannot act."
          : !p.has_daytime_ability ? "This character has no daytime ability."
          : "Once-per-game ability already spent.");
 
@@ -3680,6 +4021,260 @@
   // right-click on empty board space doesn't pop the OS menu.
   board.addEventListener("contextmenu", (ev) => ev.preventDefault());
 
+  // ----- Lobby (joined-players) dock --------------------------------
+  //
+  // The lobby is the list of players who have hit /player on their
+  // own phones and typed in a name (POST /api/lobby/join). The dock
+  // shows the joined-but-not-yet-seated subset; once a name is dragged
+  // onto a chair, the server stamps the chair's name and the row
+  // disappears from the dock.
+  //
+  // Drag is implemented with pointer events (matching the existing
+  // status-token drag pattern). On dragstart we clone the row into a
+  // floating "ghost" copy that follows the cursor; on drop we hit-test
+  // against chair groups in the SVG and POST /api/lobby/assign.
+
+  const lobbyDockBody = document.getElementById("lobbyDockBody");
+  const lobbyDockTotal = document.getElementById("lobbyDockTotal");
+
+  // Server snapshot of the lobby. Polled on its own interval so the
+  // dock stays live without piggy-backing on the chair refresh.
+  let lobbyEntries = [];
+
+  async function fetchLobby() {
+    try {
+      const r = await fetch("/api/lobby", { cache: "no-store" });
+      if (!r.ok) return;
+      const data = await r.json();
+      lobbyEntries = Array.isArray(data.players) ? data.players : [];
+      renderLobbyDock();
+    } catch (e) {
+      // soft fail — the dock just won't update this tick
+    }
+  }
+
+  function unassignedLobbyEntries() {
+    return lobbyEntries.filter((e) => e.assigned_chair_id == null);
+  }
+  function seatedLobbyEntries() {
+    return lobbyEntries
+      .filter((e) => e.assigned_chair_id != null)
+      .sort((a, b) => a.assigned_chair_id - b.assigned_chair_id);
+  }
+
+  function renderLobbyDock() {
+    lobbyDockTotal.textContent = lobbyEntries.length
+      ? lobbyEntries.length + (lobbyEntries.length === 1 ? " joined" : " joined")
+      : "";
+    lobbyDockBody.replaceChildren();
+
+    if (lobbyEntries.length === 0) {
+      const empty = document.createElement("div");
+      empty.className = "lobby-empty";
+      empty.textContent = "No one has joined yet. Show them the player QR.";
+      lobbyDockBody.appendChild(empty);
+      return;
+    }
+
+    // ---- One unified list: pending entries first (drag-to-seat),
+    // then seated entries in seat order. Each row shows a PENDING or
+    // SEAT # tag next to the player name so the storyteller can read
+    // status at a glance. ----
+    const ordered = [
+      ...unassignedLobbyEntries(),
+      ...seatedLobbyEntries(),
+    ];
+    for (const entry of ordered) {
+      lobbyDockBody.appendChild(buildLobbyRow(entry));
+    }
+  }
+
+  function buildLobbyRow(entry) {
+    const isSeated = entry.assigned_chair_id != null;
+    const row = document.createElement("div");
+    row.className = isSeated ? "lobby-row seated" : "lobby-row";
+    row.dataset.lobbyId = entry.id;
+
+    const name = document.createElement("span");
+    name.className = "name";
+    name.textContent = entry.name;
+    row.appendChild(name);
+
+    const tag = document.createElement("span");
+    tag.className = isSeated ? "seat-tag" : "seat-tag pending";
+    tag.textContent = isSeated
+      ? "SEAT " + entry.assigned_chair_id
+      : "PENDING";
+    row.appendChild(tag);
+
+    if (isSeated) {
+      const unseat = document.createElement("button");
+      unseat.type = "button";
+      unseat.className = "unseat";
+      unseat.title = "Return this player to the waiting list";
+      unseat.textContent = "↺";
+      unseat.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        unseatLobbyEntry(entry.id);
+      });
+      row.appendChild(unseat);
+    } else {
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "remove";
+      remove.title = "Remove from lobby";
+      remove.textContent = "×";
+      remove.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        removeLobbyEntry(entry.id);
+      });
+      row.appendChild(remove);
+      attachLobbyDrag(row, entry);
+    }
+    return row;
+  }
+
+  async function unseatLobbyEntry(lobbyId) {
+    try {
+      await fetch("/api/lobby/unassign", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ lobby_id: lobbyId }),
+      });
+      await fetchLobby();
+      await refresh();
+    } catch (e) {
+      console.warn("lobby unseat failed:", e);
+    }
+  }
+
+  async function removeLobbyEntry(lobbyId) {
+    try {
+      await fetch("/api/lobby/" + encodeURIComponent(lobbyId), {
+        method: "DELETE",
+      });
+      await fetchLobby();
+      await refresh();
+    } catch (e) {
+      console.warn("lobby remove failed:", e);
+    }
+  }
+
+  // Drag a lobby row onto a chair to seat that player.
+  //
+  // We follow the same pattern as the status-token drag: pointer
+  // capture on the row; a floating ghost element pinned to the
+  // cursor; chair drop targets light up; on pointerup we hit-test
+  // against chair circles and POST /api/lobby/assign. While dragging
+  // we set a no-pointer-events flag on the ghost so elementsFromPoint
+  // sees the chair underneath.
+  function attachLobbyDrag(row, entry) {
+    row.addEventListener("pointerdown", (ev) => {
+      // Ignore non-primary buttons and clicks that started on the
+      // remove "×" button (handled by its own click listener).
+      if (ev.button !== 0 && ev.pointerType === "mouse") return;
+      if (ev.target && ev.target.closest && ev.target.closest(".remove")) return;
+      ev.preventDefault();
+
+      // Block lobby drag once the game has started — the seating is
+      // final, the lobby dock should already be hidden via
+      // ``phase-setup-only``, but be defensive in case a stale poll
+      // is mid-flight.
+      if (engineState.phase !== "setup") return;
+
+      try { row.setPointerCapture(ev.pointerId); } catch (e) {}
+
+      // Build a floating "ghost" copy of the row so the original
+      // row's slot in the dock stays visible (and stable layout).
+      const ghost = row.cloneNode(true);
+      ghost.classList.add("dragging");
+      // Ghost shouldn't have its own remove handler triggering during
+      // the drag. Just strip the button.
+      const ghostRemove = ghost.querySelector(".remove");
+      if (ghostRemove) ghostRemove.remove();
+      document.body.appendChild(ghost);
+
+      const positionGhost = (clientX, clientY) => {
+        // Center the ghost near the cursor, slightly offset so it
+        // doesn't sit directly under the pointer (which can confuse
+        // hit-testing on small chairs).
+        ghost.style.left = (clientX - 90) + "px";
+        ghost.style.top  = (clientY - 18) + "px";
+      };
+      positionGhost(ev.clientX, ev.clientY);
+
+      // Light up every chair as a drop target. Lobby drag accepts any
+      // chair regardless of its current name — drop overwrites.
+      const chairGroups = chairsG.querySelectorAll("g[data-id]");
+      chairGroups.forEach((g) => g.classList.add("chair-drop-target"));
+
+      let cleaned = false;
+      const cleanup = () => {
+        if (cleaned) return;
+        cleaned = true;
+        ghost.remove();
+        chairGroups.forEach((g) => g.classList.remove("chair-drop-target"));
+        window.removeEventListener("pointermove", onMove);
+        window.removeEventListener("pointerup", onUp);
+        window.removeEventListener("pointercancel", onCancel);
+        try { row.releasePointerCapture(ev.pointerId); } catch (e) {}
+      };
+
+      const onMove = (mev) => {
+        positionGhost(mev.clientX, mev.clientY);
+      };
+
+      const onUp = (uev) => {
+        // Geometric hit-test against chair circles in board units.
+        const drop = clientToBoard(uev.clientX, uev.clientY);
+        let bestId = null;
+        let bestDist = Infinity;
+        const limit = CHAIR_RADIUS + 28;
+        for (const c of chairs.values()) {
+          const cx = (c.x ?? 0.5) * BOARD_SIZE;
+          const cy = (c.y ?? 0.5) * BOARD_SIZE;
+          const dx = drop.x - cx;
+          const dy = drop.y - cy;
+          const d = Math.sqrt(dx * dx + dy * dy);
+          if (d <= limit && d < bestDist) {
+            bestDist = d;
+            bestId = c.id;
+          }
+        }
+        cleanup();
+        if (bestId == null) return;
+        commitLobbyAssign(entry.id, bestId);
+      };
+
+      const onCancel = () => cleanup();
+
+      window.addEventListener("pointermove", onMove);
+      window.addEventListener("pointerup", onUp);
+      window.addEventListener("pointercancel", onCancel);
+    });
+  }
+
+  async function commitLobbyAssign(lobbyId, chairId) {
+    try {
+      const r = await fetch("/api/lobby/assign", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ lobby_id: lobbyId, chair_id: chairId }),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        console.warn("lobby assign failed:", data);
+        return;
+      }
+      // Refresh both the chair view (chair name has changed) and the
+      // lobby dock (entry now seated, drops out of the unassigned set).
+      await fetchLobby();
+      await refresh();
+    } catch (e) {
+      console.warn("lobby assign failed:", e);
+    }
+  }
+
   // ----- QR-code modal -----
 
   const qrBackdrop = document.getElementById("qrBackdrop");
@@ -3690,6 +4285,27 @@
   const qrCandidates = document.getElementById("qrCandidates");
   const qrWarn = document.getElementById("qrWarn");
   const qrClose = document.getElementById("qrClose");
+  const qrSub = document.getElementById("qrSub");
+  const qrTitle = document.getElementById("qrTitle");
+
+  // Which view the QR opens. ``player`` -> /player (a player's phone
+  // joins the lobby and sees the townsquare). ``storyteller`` ->
+  // /storyteller (the Storyteller's portrait-phone mirror of the
+  // grimoire). Set by whichever toolbar button opened the modal.
+  let qrTarget = "player";
+
+  const QR_TARGET_INFO = {
+    player: {
+      path: "/player",
+      title: "Player QR",
+      sub: "Players scan this to join the game and see the townsquare.",
+    },
+    storyteller: {
+      path: "/storyteller",
+      title: "Storyteller QR",
+      sub: "Scan from the storyteller's phone to mirror the grimoire.",
+    },
+  };
 
   function baseUrlFor(ip, port) {
     // Raw LAN IPs only speak HTTP; TLS on a bare IP requires a cert.
@@ -3740,7 +4356,15 @@
     }
   }
 
-  async function openQrModal() {
+  async function openQrModal(target) {
+    // ``target`` selects which page the QR opens — ``player`` or
+    // ``storyteller``. Each toolbar button passes its own target so
+    // the modal opens already configured for the right audience.
+    if (target && QR_TARGET_INFO[target]) {
+      qrTarget = target;
+    }
+    const info = QR_TARGET_INFO[qrTarget] || QR_TARGET_INFO.player;
+    qrTitle.textContent = info.title + " — scan with a phone camera";
     // Open immediately with a placeholder, then upgrade when the
     // server tells us the LAN IP.
     qrUrlInput.value = window.location.origin;
@@ -3749,12 +4373,12 @@
     qrBackdrop.classList.add("open");
     renderQr();
 
-    const info = await detectBestUrl();
+    const detected = await detectBestUrl();
     // Only overwrite if the user hasn't already typed something.
     if (qrUrlInput.value === window.location.origin) {
-      qrUrlInput.value = info.url;
+      qrUrlInput.value = detected.url;
     }
-    renderCandidatePills(info.candidates, info.port);
+    renderCandidatePills(detected.candidates, detected.port);
     renderQr();
   }
 
@@ -3765,8 +4389,10 @@
   function renderQr() {
     const base = qrUrlInput.value.trim().replace(/\/+$/, "");
     const code = qrCodeInput.value.trim();
+    const targetInfo = QR_TARGET_INFO[qrTarget] || QR_TARGET_INFO.player;
+    qrSub.textContent = targetInfo.sub;
 
-    // Build the phone URL: base + /phone [+ ?code=...].
+    // Build the phone URL: base + target path [+ ?code=...].
     let url = base;
     if (!url) {
       qrSvgWrap.innerHTML = "";
@@ -3775,7 +4401,7 @@
       qrWarn.textContent = "Enter a base URL to generate a QR code.";
       return;
     }
-    url += "/phone";
+    url += targetInfo.path;
     if (code) url += "?code=" + encodeURIComponent(code);
 
     qrLinkWrap.textContent = url;
@@ -3838,7 +4464,13 @@
     return parts.join("");
   }
 
-  document.getElementById("btnQR").addEventListener("click", openQrModal);
+  // Two separate toolbar buttons — Player QR and Storyteller QR. Each
+  // opens the same modal but pre-configured for that audience, so the
+  // storyteller doesn't have to flip a tab inside the modal.
+  document.getElementById("btnQrPlayer")
+    .addEventListener("click", () => openQrModal("player"));
+  document.getElementById("btnQrSt")
+    .addEventListener("click", () => openQrModal("storyteller"));
   qrClose.addEventListener("click", closeQrModal);
   qrBackdrop.addEventListener("click", (ev) => {
     if (ev.target === qrBackdrop) closeQrModal();
@@ -3860,8 +4492,11 @@
   // Two toolbar buttons that streamline setup:
   //   * Auto-fill — assign random names + characters from the pool
   //                 to every existing chair.
-  //   * Quick Setup — ensure 8 chairs exist, randomize the pool from
-  //                   the current preset, then auto-fill.
+  //   * Quick Setup — respect the currently-set number of players (the
+  //                   live chairs.size, settable via the "N players"
+  //                   pill). Only when no chairs exist yet does it
+  //                   fall back to the default target. Then randomize
+  //                   the pool from the current preset and auto-fill.
   // Both buttons carry the ``phase-setup-only`` class so they vanish
   // once the game starts.
   const DEBUG_NAMES = [
@@ -3870,7 +4505,10 @@
     "Quinn", "Ruth", "Sam", "Tara", "Uma", "Vince", "Wren", "Xan",
     "Yara", "Zane",
   ];
-  const DEBUG_QUICK_SETUP_TARGET = 8;  // # chairs Quick Setup will leave you with
+  // Fallback target Quick Setup uses only when no chairs exist yet.
+  // If the storyteller has already chosen a player count (chairs.size
+  // > 0), Quick Setup respects that count instead.
+  const DEBUG_QUICK_SETUP_DEFAULT = 8;
 
   function shuffled(arr) {
     const a = arr.slice();
@@ -3881,10 +4519,16 @@
     return a;
   }
 
-  // Assign a random name + character from the pool to every chair.
-  // Names are pulled from DEBUG_NAMES (suffixed with a number if there
-  // are more chairs than names); characters are pulled from the pool
-  // without repetition (a chair gets "" once the pool is exhausted).
+  // Assign a random character from the pool to every chair, randomly
+  // distributed across seats. Joined Players (lobby entries that have
+  // been dropped onto a chair) keep their name verbatim — only their
+  // character is (re-)rolled. Empty seats get a random DEBUG_NAMES
+  // entry as well.
+  //
+  // DEBUG_NAMES are cycled with a numeric suffix once exhausted, so
+  // duplicates remain distinguishable on the board. Pool characters
+  // are dealt without repetition; a chair gets "" once the pool is
+  // exhausted.
   async function debugAutoFill() {
     const ordered = [...chairs.values()].sort((a, b) => a.id - b.id);
     if (ordered.length === 0) {
@@ -3892,15 +4536,44 @@
                    "(or use Quick Setup).");
       return;
     }
-    const names = shuffled(DEBUG_NAMES);
+    // Make sure the lobby snapshot is current so we don't trample a
+    // player who joined between polls.
+    await fetchLobby();
+    // chair_id -> seated lobby entry, for chairs claimed by a joined
+    // Player. These chairs keep their existing name.
+    const seatedByChair = new Map();
+    for (const entry of lobbyEntries) {
+      if (entry.assigned_chair_id != null) {
+        seatedByChair.set(Number(entry.assigned_chair_id), entry);
+      }
+    }
+    // Don't reissue a DEBUG name that a joined Player is already using.
+    const usedNames = new Set();
+    for (const entry of seatedByChair.values()) {
+      if (entry && entry.name) usedNames.add(entry.name.toLowerCase());
+    }
+    const debugPool = shuffled(
+      DEBUG_NAMES.filter((n) => !usedNames.has(n.toLowerCase())),
+    );
+    // Fall back to the full list if the filter wiped it out (e.g. every
+    // debug name is taken). Cycle/suffix logic below handles repeats.
+    const fallbackPool = debugPool.length > 0 ? debugPool : DEBUG_NAMES.slice();
     const poolNames = shuffled((poolState.names || []).slice());
+    let emptyCursor = 0;
     for (let i = 0; i < ordered.length; i++) {
       const chair = ordered[i];
-      // Cycle the name list and append a numeric suffix once we wrap,
-      // so duplicates remain distinguishable on the board.
-      const baseName = names[i % names.length];
-      const cycle = Math.floor(i / names.length);
-      const name = cycle === 0 ? baseName : `${baseName} ${cycle + 1}`;
+      const seated = seatedByChair.get(chair.id);
+      let name;
+      if (seated) {
+        // Joined Player — preserve their name; only the character is
+        // (re-)rolled.
+        name = seated.name;
+      } else {
+        const baseName = fallbackPool[emptyCursor % fallbackPool.length];
+        const cycle = Math.floor(emptyCursor / fallbackPool.length);
+        name = cycle === 0 ? baseName : `${baseName} ${cycle + 1}`;
+        emptyCursor++;
+      }
       const character = poolNames[i] || "";
       // Sequential await: the server applies updates in arrival order,
       // so any retries / errors stay attached to the right chair.
@@ -3909,13 +4582,26 @@
     }
   }
 
-  // Get to a runnable game state in one click: top up to N chairs,
-  // randomize a roster from the current preset, fill names/characters.
+  // Get to a runnable game state in one click: respect the currently
+  // set player count (chairs.size), randomize a roster from the
+  // current preset, fill names/characters. Joined Players are
+  // preserved — Quick Setup never relabels them, only re-rolls their
+  // character along with the rest of the table.
+  //
+  // Player-count behaviour: if the storyteller has already configured
+  // a chair count (via the "N players" pill or by adding chairs),
+  // Quick Setup leaves that count alone. Only when chairs.size is
+  // zero does it bootstrap chairs using DEBUG_QUICK_SETUP_DEFAULT so
+  // there's something to fill.
   async function debugQuickSetup() {
-    // Top up chairs.
-    while (chairs.size < DEBUG_QUICK_SETUP_TARGET) {
-      // eslint-disable-next-line no-await-in-loop
-      await addChair();
+    // Respect the current chair count if any chairs already exist;
+    // otherwise bootstrap to the default so auto-fill has something
+    // to work with.
+    if (chairs.size === 0) {
+      while (chairs.size < DEBUG_QUICK_SETUP_DEFAULT) {
+        // eslint-disable-next-line no-await-in-loop
+        await addChair();
+      }
     }
     // Randomize the pool if a preset is selected; otherwise warn but
     // proceed (auto-fill will just leave characters blank).
@@ -3929,6 +4615,46 @@
 
   document.getElementById("btnDebugFill").addEventListener("click", debugAutoFill);
   document.getElementById("btnDebugSeed").addEventListener("click", debugQuickSetup);
+
+  // ----- Reveal characters to player phones -----
+  //
+  // POSTs to /api/lobby/reveal_characters. The server flips
+  // ``character_revealed`` on every seated lobby entry. The Player UI
+  // polls /api/lobby/me, sees the flag, and renders the player's
+  // assigned character token (PNG from /assets/tokens). Each player
+  // can hit Hide on their phone, which clears their own flag; this
+  // button can be hit again at any time to re-reveal.
+  const revealBtn = document.getElementById("btnRevealCharacters");
+  if (revealBtn) {
+    revealBtn.addEventListener("click", async () => {
+      revealBtn.disabled = true;
+      const oldText = revealBtn.textContent;
+      try {
+        const r = await fetch("/api/lobby/reveal_characters", {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "Content-Type": "application/json" },
+          body: "{}",
+        });
+        if (!r.ok) throw new Error("status " + r.status);
+        const data = await r.json();
+        const n = (data && typeof data.count === "number") ? data.count : 0;
+        revealBtn.textContent = n > 0
+          ? `✓ Revealed to ${n}`
+          : "✓ No seated players";
+        setTimeout(() => {
+          revealBtn.textContent = oldText;
+          revealBtn.disabled = false;
+        }, 1400);
+      } catch (e) {
+        revealBtn.textContent = "Error";
+        setTimeout(() => {
+          revealBtn.textContent = oldText;
+          revealBtn.disabled = false;
+        }, 1400);
+      }
+    });
+  }
 
   // ----- Start Game button -----
   //
@@ -4047,76 +4773,68 @@
       _setReadinessMessage("");
       return;
     }
+    // Start Game is always enabled during setup — the storyteller is
+    // trusted to know when the table is ready. The engine still
+    // validates seat count, demon count, etc. on the actual
+    // /api/engine/start_game call, and any error comes back through
+    // setStartStatus. We surface the *would-be* blocker as an
+    // informational banner / hover-title but do not gate the click.
     const list = [...chairs.values()];
     const seatedCount = list.length;
+    let info = "";
 
-    // Step 1: every chair must have a name and a character.
-    const allFilled = list.every(c =>
-      (c.name || "").trim() !== ""
-      && (c.character || "").trim() !== ""
-    );
     if (seatedCount < 5) {
-      _blockStart(`Need 5+ players (${seatedCount}/5).`);
-      return;
-    }
-    if (!allFilled) {
+      info = `Need 5+ players (${seatedCount}/5).`;
+    } else {
       const missing = list.filter(c =>
         !(c.name || "").trim() || !(c.character || "").trim()
       ).length;
-      _blockStart(`${missing} player${missing === 1 ? "" : "s"} unassigned.`);
-      return;
-    }
-
-    // Step 2: player characters must multiset-match the pool.
-    const playerBag = new Map();
-    for (const c of list) {
-      const ch = (c.character || "").trim();
-      if (ch) playerBag.set(ch, (playerBag.get(ch) || 0) + 1);
-    }
-    const poolBag = new Map();
-    for (const n of (poolState.names || [])) {
-      poolBag.set(n, (poolBag.get(n) || 0) + 1);
-    }
-    let mismatch = null;
-    if (poolBag.size === 0) {
-      mismatch = "Pool is empty.";
-    } else if (playerBag.size !== poolBag.size) {
-      mismatch = "Players don't match pool.";
-    } else {
-      for (const [name, count] of playerBag) {
-        if (poolBag.get(name) !== count) {
-          mismatch = `${name} mismatch.`;
-          break;
+      if (missing > 0) {
+        info = `${missing} player${missing === 1 ? "" : "s"} unassigned.`;
+      } else {
+        // Pool / player multiset match.
+        const playerBag = new Map();
+        for (const c of list) {
+          const ch = (c.character || "").trim();
+          if (ch) playerBag.set(ch, (playerBag.get(ch) || 0) + 1);
         }
-      }
-      if (!mismatch) {
-        for (const [name, count] of poolBag) {
-          if (playerBag.get(name) !== count) {
-            mismatch = `${name} unassigned.`;
-            break;
+        const poolBag = new Map();
+        for (const n of (poolState.names || [])) {
+          poolBag.set(n, (poolBag.get(n) || 0) + 1);
+        }
+        if (poolBag.size === 0) {
+          info = "Pool is empty.";
+        } else if (playerBag.size !== poolBag.size) {
+          info = "Players don't match pool.";
+        } else {
+          for (const [name, count] of playerBag) {
+            if (poolBag.get(name) !== count) {
+              info = `${name} mismatch.`;
+              break;
+            }
+          }
+          if (!info) {
+            for (const [name, count] of poolBag) {
+              if (playerBag.get(name) !== count) {
+                info = `${name} unassigned.`;
+                break;
+              }
+            }
           }
         }
+        if (!info) {
+          const tokenIssue = _engineSnapshot
+            && _engineSnapshot.setup_validation_blocker;
+          if (tokenIssue) info = tokenIssue;
+        }
       }
-    }
-    if (mismatch) {
-      _blockStart(mismatch);
-      return;
-    }
-
-    // Step 3: every setup token whose owner role is in play must be
-    // assigned to a valid in-pool role. The engine emits a single
-    // ``setup_validation_blocker`` string in its snapshot — the UI
-    // shows it verbatim. No per-character validation rules in JS.
-    const tokenIssue = _engineSnapshot
-      && _engineSnapshot.setup_validation_blocker;
-    if (tokenIssue) {
-      _blockStart(tokenIssue);
-      return;
     }
 
     startBtn.disabled = false;
-    startBtn.title = "All chairs ready — click to start the game.";
-    _setReadinessMessage("");
+    startBtn.title = info
+      ? info
+      : "All chairs ready — click to start the game.";
+    _setReadinessMessage(info);
   }
 
   // Helper: mark the Start Game button as blocked with a reason,
@@ -4981,6 +5699,21 @@
   //   * For everything else → just the target_player_id.
   function collectHighlightIds(p, meta) {
     const ids = new Set();
+    // Spy / future "study the whole grimoire" abilities: every chair
+    // must stay bright so the recipient can study the full board.
+    // Returning [] here makes reapplyHighlight clear .highlight-active
+    // entirely, which leaves every chair at full opacity with no
+    // glow halo.
+    if (meta && meta.show_full_grimoire) {
+      return [];
+    }
+    // ``meta.no_highlight`` opts out of chair highlighting entirely —
+    // no explicit list, no fallback to the target_player_id. Used by
+    // info abilities (e.g. Clockmaker) where the receiving player
+    // shouldn't see any seat lit up on the SHOW THIS TO PLAYER screen.
+    if (meta && meta.no_highlight) {
+      return [];
+    }
     const explicit = Array.isArray(p.highlight_player_ids)
       && p.highlight_player_ids.length > 0;
     const isPlayerSelect =
@@ -5246,29 +5979,78 @@
     });
   }
 
-  // Start Night: only visible during the Day. POSTs
-  // /api/engine/advance_to_night so the engine flips into Night and
-  // auto-runs the next night's preset sheet.
+  // Start Night: visible during the Day (transitions Day → Night) and
+  // also during First Night before the night thread has been kicked
+  // (so the storyteller manually begins night 1 with the same button).
+  // Driven by the engine's current phase, fetched fresh on each click
+  // so a stale snapshot can't put us in the wrong branch:
+  //   * DAY:           advance_to_night (Dusk) → start_night (worker)
+  //   * FIRST_NIGHT
+  //     / NIGHT:       start_night only (skip dusk; we're already in
+  //                    night, just need to run the sheet).
   if (startNightBtn) {
     startNightBtn.addEventListener("click", async () => {
       startNightBtn.disabled = true;
+      // Use the prompt panel hint as the inline status surface — the
+      // header's startStatus span is far from the button's eyeline
+      // and gets clipped during day. promptHint sits right next to
+      // the button inside the dock.
+      promptHint.textContent = "Starting night…";
       try {
-        const r = await fetch("/api/engine/advance_to_night", {
+        // Phase-discriminating snapshot so we know whether to dusk
+        // first or jump straight into start_night.
+        const snapResp = await fetch("/api/state");
+        const snap = await snapResp.json().catch(() => ({}));
+        const phase = (snap && snap.engine && snap.engine.phase) || "";
+
+        if (phase === "day") {
+          const r = await fetch("/api/engine/advance_to_night", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: "{}",
+          });
+          if (!r.ok) {
+            const data = await r.json().catch(() => ({}));
+            promptHint.textContent =
+              data.error || "Could not advance to night.";
+            return;
+          }
+        } else if (phase !== "first_night" && phase !== "night") {
+          promptHint.textContent =
+            `Cannot start night from phase '${phase || "unknown"}'.`;
+          return;
+        }
+
+        // Kick the night thread. Surface errors here too — the old
+        // code ignored them, which left the storyteller stuck in
+        // night phase with no prompts coming through. The
+        // ``already running`` case is a no-op (the button became
+        // briefly visible between prompts; the user just clicked it
+        // — the thread is fine, don't shout at them).
+        const r2 = await fetch("/api/engine/start_night", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: "{}",
         });
-        if (!r.ok) {
-          const data = await r.json().catch(() => ({}));
-          setStartStatus(data.error || "Could not start night.", "error");
-          return;
+        if (!r2.ok) {
+          const data = await r2.json().catch(() => ({}));
+          const msg = (data && data.error) || "";
+          if (/already running/i.test(msg)) {
+            // The night thread is already up — nothing to do. Treat
+            // as success.
+          } else {
+            promptHint.textContent = msg || "Could not start night thread.";
+            return;
+          }
         }
-        // Then kick the night thread.
-        await fetch("/api/engine/start_night", { method: "POST" });
+        promptHint.textContent = "";
         await refresh();
         startPromptPolling();
+        // Force an immediate poll so the storyteller sees the first
+        // night prompt without waiting for the 400ms tick.
+        if (typeof pollPrompt === "function") pollPrompt();
       } catch (err) {
-        setStartStatus("Network error: " + err.message, "error");
+        promptHint.textContent = "Network error: " + err.message;
       } finally {
         startNightBtn.disabled = false;
       }
@@ -5469,6 +6251,7 @@
     scarlet_woman_promoted_player_ids: [],
     slayer_no_ability_player_ids: [],
     virgin_no_ability_player_ids: [],
+    artist_no_ability_player_ids: [],
   };
   let presets = [];
   let currentPreset = null;          // name string
@@ -6263,16 +7046,21 @@
   // Initial bootstrap.
   fetchPresets();
   fetchPool();
+  fetchLobby();
 
   // Initial load.
   refresh();
 
   // Light polling so another browser's changes show up here too.
   setInterval(() => {
-    // Skip polling while the user is mid-drag.
+    // Skip polling while the user is mid-drag (chair drag, status
+    // token drag, OR lobby-row drag — the lobby ghost lives on
+    // ``document.body``, not inside ``board``, so we check both).
     if (board.querySelector(".dragging")) return;
+    if (document.querySelector(".lobby-row.dragging")) return;
     refresh();
     fetchPool();
+    fetchLobby();
   }, 2000);
 })();
 </script>

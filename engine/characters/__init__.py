@@ -26,12 +26,23 @@ from engine.characters.virgin import Virgin
 from engine.characters.slayer import Slayer
 from engine.characters.soldier import Soldier
 from engine.characters.mayor import Mayor
+from engine.characters.artist import Artist
+from engine.characters.clockmaker import Clockmaker
+from engine.characters.chambermaid import Chambermaid
+from engine.characters.sage import Sage
+from engine.characters.sailor import Sailor
+from engine.characters.innkeeper import Innkeeper
+from engine.characters.courtier import Courtier
+from engine.characters.tea_lady import TeaLady
+from engine.characters.pacifist import Pacifist
+from engine.characters.fool import Fool
 
 # --- Outsiders -------------------------------------------------------
 from engine.characters.butler import Butler
 from engine.characters.drunk import Drunk
 from engine.characters.recluse import Recluse
 from engine.characters.saint import Saint
+from engine.characters.klutz import Klutz
 
 # --- Minions ---------------------------------------------------------
 from engine.characters.poisoner import Poisoner
@@ -59,11 +70,22 @@ _IMPLEMENTED: tuple = (
     Slayer,
     Soldier,
     Mayor,
+    Artist,
+    Clockmaker,
+    Chambermaid,
+    Sage,
+    Sailor,
+    Innkeeper,
+    Courtier,
+    TeaLady,
+    Pacifist,
+    Fool,
     # Outsiders
     Butler,
     Drunk,
     Recluse,
     Saint,
+    Klutz,
     # Minions
     Poisoner,
     Spy,
@@ -112,11 +134,22 @@ __all__ = [
     "Slayer",
     "Soldier",
     "Mayor",
+    "Artist",
+    "Clockmaker",
+    "Chambermaid",
+    "Sage",
+    "Sailor",
+    "Innkeeper",
+    "Courtier",
+    "TeaLady",
+    "Pacifist",
+    "Fool",
     # Outsiders
     "Butler",
     "Drunk",
     "Recluse",
     "Saint",
+    "Klutz",
     # Minions
     "Poisoner",
     "Spy",

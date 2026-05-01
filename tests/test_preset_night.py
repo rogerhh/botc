@@ -85,12 +85,13 @@ def test_first_night_preset_order_and_auto_dawn() -> None:
     e.start_game()
     assert e.phase is Phase.FIRST_NIGHT
 
-    # In the trouble_brewing first_night.txt, 5-player non-traveler
-    # count means Minion Info / Demon Info don't fire (need 7+). The
-    # preset order in this game becomes:
+    # Project rule: Minion Info and Demon Info always run, regardless
+    # of player count (deliberately diverging from the canonical 7+
+    # threshold). For this 5-player Trouble Brewing game the preset
+    # order is:
     #
-    #   Dusk → Poisoner (preset_step + character ability) → Washerwoman
-    #   (preset_step + ability) → Empath (preset_step + ability) → Dawn
+    #   Dusk → Minion Info → Demon Info (st_pre + info) → Poisoner
+    #   → Washerwoman → Empath → Dawn
     #
     # Characters that aren't seated (Librarian, Investigator, Chef,
     # Fortune Teller, Butler, Spy) are silently skipped.
@@ -101,6 +102,13 @@ def test_first_night_preset_order_and_auto_dawn() -> None:
         # still emit prompts because there's no follow-up ability to
         # absorb the rulebook line).
         ({"step_kind": "preset_step", "step_name": "Dusk"}, None),
+        # Minion Info: one consolidated prompt that wakes every Minion
+        # together (just Poisoner here).
+        ({"step_kind": "minion_info"}, None),
+        # Demon Info: ST stage 1 (bluffs), then the auto-info to player.
+        # Respond with None so the engine keeps its random defaults.
+        ({"step_kind": "demon_info", "stage": "st_pre"}, None),
+        ({"step_kind": "demon_info", "stage": "info"}, None),
         # Poisoner: no announce prompt — character steps roll the
         # rulebook description into the first ability prompt's meta
         # (engine._announce_step now dispatches a STEP_START event
@@ -138,10 +146,14 @@ def test_pending_win_night_runs_only_dusk_and_dawn() -> None:
     e = make_engine()
     e.start_game()
 
-    # Drain the first night normally so we land in DAY.
+    # Drain the first night normally so we land in DAY. Minion Info
+    # and Demon Info fire even at 5 players (project rule).
     e.start_night()
     drain(e, [
         ({"step_kind": "preset_step", "step_name": "Dusk"}, None),
+        ({"step_kind": "minion_info"}, None),
+        ({"step_kind": "demon_info", "stage": "st_pre"}, None),
+        ({"step_kind": "demon_info", "stage": "info"}, None),
         ({"character": "Poisoner", "step": "select_player"}, 4),
         ({"character": "Washerwoman", "step": "select_character"}, "Empath"),
         ({"character": "Washerwoman", "step": "select_wrong_player"}, 3),
@@ -491,10 +503,14 @@ def test_imp_self_kill_with_sw_only_minion_auto_resolves() -> None:
     sw_pid = d.id
     imp_pid = f.id
 
-    # Drain first night.
+    # Drain first night. Minion Info / Demon Info fire even at 5p
+    # (project rule).
     e.start_night()
     drain(e, [
         ({"step_kind": "preset_step", "step_name": "Dusk"}, None),
+        ({"step_kind": "minion_info"}, None),
+        ({"step_kind": "demon_info", "stage": "st_pre"}, None),
+        ({"step_kind": "demon_info", "stage": "info"}, None),
         ({"character": "Empath", "step": "information"}, None),
         ({"step_kind": "preset_step", "step_name": "Dawn"}, None),
     ])
@@ -687,10 +703,14 @@ def test_change_character_syncs_chair_and_drops_old_ability() -> None:
     poisoner_pid = d.id
     imp_pid = f.id
 
-    # Drain first night to land in DAY.
+    # Drain first night to land in DAY. Minion Info / Demon Info fire
+    # even at 5p (project rule).
     e.start_night()
     drain(e, [
         ({"step_kind": "preset_step", "step_name": "Dusk"}, None),
+        ({"step_kind": "minion_info"}, None),
+        ({"step_kind": "demon_info", "stage": "st_pre"}, None),
+        ({"step_kind": "demon_info", "stage": "info"}, None),
         ({"character": "Poisoner", "step": "select_player"}, a.id),
         ({"character": "Empath", "step": "information"}, None),
         ({"step_kind": "preset_step", "step_name": "Dawn"}, None),

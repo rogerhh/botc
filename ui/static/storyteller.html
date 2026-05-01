@@ -3,21 +3,28 @@
 <head>
 <meta charset="utf-8" />
 <title>Storyteller — Town Square</title>
-<!-- Mobile storyteller UI. Mirrors the desktop town-square + grimoire
-     view but lays it out for a portrait phone screen. Renders the
-     full grimoire (player names, characters, status reminder tokens,
-     dead shrouds) in setup view-only mode and during the game. During
-     the game tapping a chair opens the per-player side panel (and is
-     also how the storyteller answers SELECT_PLAYER prompts).
+<!-- Storyteller UI (named by its audience: the storyteller, NOT a
+     player). This is the portrait-phone mirror of the Local UI
+     (index.html), reached when the storyteller scans the
+     Storyteller QR shown on the Local UI. It renders the full
+     grimoire (player names, characters, status reminder tokens,
+     dead shrouds) in setup view-only mode and during the game.
+     During the game tapping a chair opens the per-player side panel
+     (and is also how the storyteller answers SELECT_PLAYER
+     prompts).
 
      Special "show-player" mode: when a SHOW-THIS-TO-PLAYER prompt is
      active, the grimoire collapses to just the player names (no
      tokens, no states, no alive/dead). The desktop prompt UI is
      hidden and a bottom-of-screen card displays the message the
-     player should read before the storyteller hands the phone over.
+     player should read. This mode lets the storyteller hand THIS
+     phone across the table as a fallback when the player's own
+     Player UI is unavailable.
 
-     Player phone UI (the read-only view a player gets when they scan
-     their own QR) is a *separate* file (player.html). -->
+     The Player UI — the read-only per-seat view a player gets when
+     they scan their OWN QR — is a *separate* file (player.html),
+     and unlike this surface it never displays player character
+     information during the game. -->
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="mobile-web-app-capable" content="yes" />
@@ -100,6 +107,91 @@
     border-color: #5a2e29;
   }
 
+  /* QR button in the top bar — opens a fullscreen modal showing the
+     player-join URL as a QR code so the storyteller can hand the
+     phone to a player who hasn't scanned the desktop's QR yet. */
+  header.topbar .qr-btn {
+    background: #2a2118;
+    color: var(--text);
+    border: 1px solid #00000099;
+    border-radius: 6px;
+    padding: 5px 10px;
+    font-size: 12px;
+    cursor: pointer;
+  }
+  header.topbar .qr-btn:hover { border-color: #f0c27a; }
+
+  /* QR modal — opens fullscreen, contains a single rendered QR plus
+     the resolved URL. Tap the backdrop or the close button to dismiss. */
+  #qrPlayerBackdrop {
+    position: fixed;
+    inset: 0;
+    background: #000000d8;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    z-index: 200;
+  }
+  #qrPlayerBackdrop.open { display: flex; }
+  #qrPlayerCard {
+    background: var(--panel);
+    border: 1px solid #00000099;
+    border-radius: 8px;
+    padding: 18px;
+    width: min(92vw, 380px);
+    text-align: center;
+    color: var(--text);
+  }
+  #qrPlayerCard h2 {
+    margin: 0 0 4px;
+    font-size: 15px;
+    color: #f0c27a;
+    letter-spacing: 0.02em;
+  }
+  #qrPlayerCard .sub {
+    margin: 0 0 12px;
+    font-size: 12px;
+    color: var(--muted);
+  }
+  #qrPlayerCard .qr-frame {
+    background: #fff;
+    border-radius: 6px;
+    padding: 12px;
+    margin: 0 auto 10px;
+    width: min(86vw, 280px);
+    height: min(86vw, 280px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  #qrPlayerCard .qr-frame svg {
+    width: 100%;
+    height: 100%;
+    image-rendering: pixelated;
+  }
+  #qrPlayerCard .url {
+    font-family: "SF Mono", Menlo, Consolas, monospace;
+    font-size: 11px;
+    color: #aaa;
+    word-break: break-all;
+  }
+  #qrPlayerCard .actions {
+    margin-top: 12px;
+    display: flex;
+    gap: 8px;
+    justify-content: center;
+  }
+  #qrPlayerCard button {
+    background: #2a2118;
+    color: var(--text);
+    border: 1px solid #00000099;
+    border-radius: 6px;
+    padding: 8px 14px;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  #qrPlayerCard button:hover { border-color: #f0c27a; }
+
   /* ---------------------- main board ------------------- */
   main {
     position: absolute;
@@ -130,8 +222,28 @@
     border: 2px solid var(--board-edge);
     border-radius: 6px;
     box-shadow: 0 4px 24px #00000088, inset 0 0 60px #00000077;
-    touch-action: manipulation;
+    touch-action: none; /* JS handles pinch-zoom + pan on the board */
   }
+
+  /* Floating "Reset zoom" affordance — only visible when the board
+     viewBox has been pinched in. Toggled via the .visible class from
+     the pinch-zoom code in the main IIFE. */
+  .zoom-reset {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    background: rgba(0, 0, 0, 0.65);
+    color: #ece3d3;
+    border: 1px solid var(--board-edge);
+    border-radius: 6px;
+    padding: 5px 9px;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    z-index: 5;
+    display: none;
+  }
+  .zoom-reset.visible { display: block; }
 
   /* Chair circles + text */
   .chair {
@@ -239,13 +351,18 @@
   /* In show-player mode the chairs strip down to just the name —
      no character text, no shroud, no tokens, no highlights for
      non-target chairs. The grimoire is being shown to a player; we
-     don't want to leak any state. */
-  body.show-player g[data-id].chair-dead .chair-name { opacity: 1; }
-  body.show-player .chair-shroud,
-  body.show-player .chair-character,
-  body.show-player .chair-num,
-  body.show-player .chair-status-token,
-  body.show-player .chair-status-halo {
+     don't want to leak any state. The ``:not(.show-full-grimoire)``
+     guard exempts the Spy's "study the grimoire" prompt: in that
+     case the player is *meant* to see every character and token, so
+     the chairs render normally even though show-player is set (we
+     still want the showCard at the bottom and the promptCard
+     suppressed). */
+  body.show-player:not(.show-full-grimoire) g[data-id].chair-dead .chair-name { opacity: 1; }
+  body.show-player:not(.show-full-grimoire) .chair-shroud,
+  body.show-player:not(.show-full-grimoire) .chair-character,
+  body.show-player:not(.show-full-grimoire) .chair-num,
+  body.show-player:not(.show-full-grimoire) .chair-status-token,
+  body.show-player:not(.show-full-grimoire) .chair-status-halo {
     display: none;
   }
 
@@ -548,10 +665,10 @@
   }
   #seatPanel .seat-msg.ok { color: var(--good); }
 
-  /* ----------------- floating bottom-left phase button ------ */
+  /* ----------------- floating bottom-right phase button ------ */
   #phaseFab {
     position: fixed;
-    left: 12px;
+    right: 12px;
     bottom: max(12px, env(safe-area-inset-bottom));
     z-index: 19;
     background: #3a2a22;
@@ -570,26 +687,6 @@
   }
   #phaseFab.start-night { background: #1f2c40; color: #c7d4ff; border-color: #4d6ba0; }
   #phaseFab.start-game  { background: var(--good); color: #143215; border-color: #5db056; }
-
-  /* Setup view-only banner */
-  #setupBanner {
-    position: fixed;
-    top: calc(40px + env(safe-area-inset-top) + 4px);
-    left: 50%;
-    transform: translateX(-50%);
-    background: #3a2a22cc;
-    color: var(--accent);
-    border: 1px solid #f0c27a55;
-    border-radius: 999px;
-    padding: 4px 12px;
-    font-size: 11px;
-    text-transform: uppercase;
-    letter-spacing: 0.12em;
-    z-index: 25;
-    pointer-events: none;
-  }
-  body:not(.phase-setup) #setupBanner { display: none; }
-  body.show-player #setupBanner { display: none; }
 
   /* Show-player banner (top-of-board reminder) */
   #showBanner {
@@ -636,9 +733,26 @@
 <header class="topbar">
   <h1>Storyteller — Town Square</h1>
   <span class="phase-tag" id="phaseTag">setup</span>
+  <button type="button" class="qr-btn" id="btnPlayerQr"
+          title="Show the player join QR">📱 Player QR Code</button>
 </header>
 
-<div id="setupBanner">view only · use computer to edit</div>
+<!-- Player-join QR modal. Opened from the topbar so the storyteller
+     can hand their phone to a player who hasn't scanned the desktop
+     QR yet. The QR points at /player on the LAN base URL detected
+     via /api/host_info. -->
+<div id="qrPlayerBackdrop" role="dialog" aria-modal="true">
+  <div id="qrPlayerCard">
+    <h2>Players: scan to join</h2>
+    <p class="sub">They'll be added to the lobby on the storyteller's screen.</p>
+    <div class="qr-frame" id="qrPlayerFrame"></div>
+    <div class="url" id="qrPlayerUrl"></div>
+    <div class="actions">
+      <button type="button" id="btnPlayerQrClose">Close</button>
+    </div>
+  </div>
+</div>
+
 <div id="showBanner">SHOW THIS TO PLAYER</div>
 <div id="gameEndBanner"></div>
 
@@ -648,6 +762,7 @@
       <g id="storyteller"></g>
       <g id="chairs"></g>
     </svg>
+    <button id="btnZoomReset" type="button" class="zoom-reset" title="Reset zoom">⟲ Reset</button>
   </div>
 </main>
 
@@ -695,6 +810,10 @@
 
 <button type="button" id="phaseFab" class="start-night">🌙 Start Night</button>
 
+<!-- QR encoder used by the player-join QR modal. Same library the
+     desktop QR modal uses; loaded here so the storyteller can render
+     a /player QR directly from their phone. -->
+<script src="/static/qrcodegen.js"></script>
 <script>
 (() => {
   // -----------------------------------------------------------------
@@ -709,6 +828,251 @@
 
   const SVG_NS = "http://www.w3.org/2000/svg";
   const XLINK_NS = "http://www.w3.org/1999/xlink";
+
+  // -----------------------------------------------------------------
+  // Pinch-zoom + two-finger pan on the town square.
+  //
+  // The board <svg> has touch-action: none so the browser hands every
+  // touch to JS. We track all active pointers (touch + pen) on the
+  // board element. With ≥2 pointers we treat the gesture as a pinch:
+  // mutate the SVG's viewBox so the focal point under the finger
+  // centroid stays anchored, and the camera follows the centroid as
+  // the fingers move. iOS Safari sometimes cancels multi-touch
+  // pointer events and dispatches its proprietary GestureEvent
+  // instead, so we also wire gesturestart/change/end as a fallback.
+  // -----------------------------------------------------------------
+  const _viewBox = { x: 0, y: 0, size: BOARD_SIZE };
+  const _PINCH_MIN_SIZE = BOARD_SIZE / 6; // up to 6× zoom in
+
+  function _board() { return document.getElementById("board"); }
+  function _applyViewBox() {
+    const b = _board();
+    if (!b) return;
+    b.setAttribute(
+      "viewBox",
+      `${_viewBox.x} ${_viewBox.y} ${_viewBox.size} ${_viewBox.size}`,
+    );
+    const btn = document.getElementById("btnZoomReset");
+    if (btn) {
+      btn.classList.toggle("visible", _viewBox.size < BOARD_SIZE - 0.5);
+    }
+  }
+  function _clampViewBox() {
+    _viewBox.size = Math.min(BOARD_SIZE, Math.max(_PINCH_MIN_SIZE, _viewBox.size));
+    _viewBox.x = Math.min(BOARD_SIZE - _viewBox.size, Math.max(0, _viewBox.x));
+    _viewBox.y = Math.min(BOARD_SIZE - _viewBox.size, Math.max(0, _viewBox.y));
+  }
+  function _resetViewBox() {
+    _viewBox.x = 0;
+    _viewBox.y = 0;
+    _viewBox.size = BOARD_SIZE;
+    _applyViewBox();
+  }
+  function _clientToView(cx, cy) {
+    const b = _board();
+    if (!b) return { x: 0, y: 0 };
+    const r = b.getBoundingClientRect();
+    if (r.width === 0 || r.height === 0) return { x: 0, y: 0 };
+    return {
+      x: _viewBox.x + ((cx - r.left) / r.width) * _viewBox.size,
+      y: _viewBox.y + ((cy - r.top) / r.height) * _viewBox.size,
+    };
+  }
+  // Set when a single-finger pan moves past the slop threshold; the
+  // next click event is then suppressed so a pan-release doesn't
+  // accidentally open a chair's seat panel.
+  let _suppressNextClick = false;
+  // Pixels the finger must move past before we treat a one-finger
+  // touch as a pan rather than a tap on a chair.
+  const _PAN_SLOP_PX = 8;
+
+  function _setupPinchZoom() {
+    const board = _board();
+    if (!board) return;
+    const pointers = new Map(); // pointerId -> {clientX, clientY}
+    let start = null;
+    // Single-finger pan state. Only active while pointers.size === 1
+    // and the board is zoomed in (otherwise there's nothing to pan).
+    let pan = null;
+
+    function refreshPinchStart() {
+      const pts = [...pointers.values()];
+      if (pts.length < 2) return;
+      const a = pts[0], b = pts[1];
+      const cx = (a.clientX + b.clientX) / 2;
+      const cy = (a.clientY + b.clientY) / 2;
+      start = {
+        dist: Math.max(1, Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY)),
+        size: _viewBox.size,
+        focal: _clientToView(cx, cy),
+      };
+    }
+
+    function beginPanIfPossible(pointerId) {
+      // Only meaningful when zoomed in — otherwise the viewBox
+      // already shows the whole board and there's nowhere to pan.
+      if (_viewBox.size >= BOARD_SIZE - 0.5) {
+        pan = null;
+        return;
+      }
+      const p = pointers.get(pointerId);
+      if (!p) return;
+      pan = {
+        pointerId,
+        clientX: p.clientX,
+        clientY: p.clientY,
+        viewX: _viewBox.x,
+        viewY: _viewBox.y,
+        moved: false,
+      };
+    }
+
+    board.addEventListener("pointerdown", (ev) => {
+      if (ev.pointerType === "mouse") return;
+      pointers.set(ev.pointerId, { clientX: ev.clientX, clientY: ev.clientY });
+      if (pointers.size >= 2) {
+        // Switching from pan to pinch: drop pan, start pinch.
+        pan = null;
+        refreshPinchStart();
+      } else if (pointers.size === 1) {
+        beginPanIfPossible(ev.pointerId);
+      }
+    });
+
+    board.addEventListener("pointermove", (ev) => {
+      if (!pointers.has(ev.pointerId)) return;
+      pointers.set(ev.pointerId, { clientX: ev.clientX, clientY: ev.clientY });
+
+      // ---- Single-finger pan (only when zoomed in) ----
+      if (pointers.size === 1 && pan && pan.pointerId === ev.pointerId) {
+        const dx = ev.clientX - pan.clientX;
+        const dy = ev.clientY - pan.clientY;
+        if (!pan.moved && (dx * dx + dy * dy) < _PAN_SLOP_PX * _PAN_SLOP_PX) return;
+        pan.moved = true;
+        const r = board.getBoundingClientRect();
+        if (r.width === 0 || r.height === 0) return;
+        // Convert client-pixel deltas to viewBox-unit deltas.
+        const dxView = (dx / r.width) * _viewBox.size;
+        const dyView = (dy / r.height) * _viewBox.size;
+        _viewBox.x = pan.viewX - dxView;
+        _viewBox.y = pan.viewY - dyView;
+        _clampViewBox();
+        _applyViewBox();
+        ev.preventDefault();
+        return;
+      }
+
+      // ---- Two-finger pinch ----
+      if (pointers.size < 2 || !start) return;
+      const pts = [...pointers.values()];
+      const a = pts[0], b = pts[1];
+      const cx = (a.clientX + b.clientX) / 2;
+      const cy = (a.clientY + b.clientY) / 2;
+      const newDist = Math.max(1, Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY));
+      const ratio = start.dist / newDist;
+      let newSize = start.size * ratio;
+      newSize = Math.min(BOARD_SIZE, Math.max(_PINCH_MIN_SIZE, newSize));
+      const r = board.getBoundingClientRect();
+      const fx = (cx - r.left) / r.width;
+      const fy = (cy - r.top) / r.height;
+      _viewBox.size = newSize;
+      _viewBox.x = start.focal.x - fx * newSize;
+      _viewBox.y = start.focal.y - fy * newSize;
+      _clampViewBox();
+      _applyViewBox();
+      ev.preventDefault();
+    });
+
+    function endPointer(ev) {
+      if (ev.pointerType === "mouse") return;
+      if (!pointers.has(ev.pointerId)) return;
+      pointers.delete(ev.pointerId);
+
+      // If a single-finger pan was active and the finger actually
+      // moved, swallow the click that the browser will dispatch
+      // next so we don't open a chair's seat panel by accident.
+      if (pan && pan.pointerId === ev.pointerId) {
+        if (pan.moved) {
+          _suppressNextClick = true;
+          // Clear the suppression after one event loop turn — the
+          // synthetic click fires synchronously (or very nearly so)
+          // after pointerup, so a short timeout is plenty.
+          setTimeout(() => { _suppressNextClick = false; }, 350);
+        }
+        pan = null;
+      }
+
+      if (pointers.size < 2) start = null;
+      else refreshPinchStart();
+
+      // Coming out of a pinch back to one finger: hand control over
+      // to single-finger pan with the remaining pointer so the user
+      // can keep dragging without lifting both fingers.
+      if (pointers.size === 1) {
+        const id = [...pointers.keys()][0];
+        beginPanIfPossible(id);
+        // Already in motion — don't require slop again.
+        if (pan) pan.moved = true;
+      }
+    }
+    board.addEventListener("pointerup", endPointer);
+    board.addEventListener("pointercancel", endPointer);
+
+    // Capture-phase click swallower. Fires before any chair's
+    // own click handler, so a pan-release won't accidentally
+    // open a seat panel. ``stopImmediatePropagation`` also
+    // blocks listeners on the target element itself.
+    document.addEventListener("click", (ev) => {
+      if (!_suppressNextClick) return;
+      _suppressNextClick = false;
+      ev.preventDefault();
+      ev.stopImmediatePropagation();
+    }, true);
+
+    // iOS Safari fallback: when iOS hands us a GestureEvent instead
+    // of multi-touch pointer events, drive the same viewBox math.
+    let gestStart = null;
+    board.addEventListener("gesturestart", (ev) => {
+      ev.preventDefault();
+      gestStart = {
+        size: _viewBox.size,
+        focal: _clientToView(ev.clientX, ev.clientY),
+      };
+    });
+    board.addEventListener("gesturechange", (ev) => {
+      ev.preventDefault();
+      if (!gestStart) return;
+      let newSize = gestStart.size / Math.max(0.01, ev.scale);
+      newSize = Math.min(BOARD_SIZE, Math.max(_PINCH_MIN_SIZE, newSize));
+      const r = board.getBoundingClientRect();
+      const fx = (ev.clientX - r.left) / r.width;
+      const fy = (ev.clientY - r.top) / r.height;
+      _viewBox.size = newSize;
+      _viewBox.x = gestStart.focal.x - fx * newSize;
+      _viewBox.y = gestStart.focal.y - fy * newSize;
+      _clampViewBox();
+      _applyViewBox();
+    });
+    board.addEventListener("gestureend", (ev) => {
+      ev.preventDefault();
+      gestStart = null;
+      pointers.clear();
+    });
+
+    // Reset button.
+    const btn = document.getElementById("btnZoomReset");
+    if (btn) {
+      btn.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        _resetViewBox();
+      });
+    }
+  }
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", _setupPinchZoom);
+  } else {
+    _setupPinchZoom();
+  }
 
   // Mirror of TOKEN_FILES from index.html. Maps semantic names to
   // the token PNG basename in /assets/tokens/.
@@ -725,6 +1089,7 @@
     slayer_no_ability:          "slayer_no_ability",
     undertaker_died_today:      "undertaker_died_today",
     virgin_no_ability:          "virgin_no_ability",
+    artist_no_ability:          "artist_no_ability",
     washerwoman_townsfolk:      "washerwoman_townsfolk",
     washerwoman_wrong:          "washerwoman_wrong",
     librarian_wrong:            "librarian_wrong",
@@ -888,7 +1253,13 @@
     chairsG.innerHTML = "";
     const targetSet = computeTargetChairIds(_currentHighlightPlayerIds);
     const ordered = [...chairs.values()].sort((a, b) => a.id - b.id);
-    const showPlayer = document.body.classList.contains("show-player");
+    // ``show-player`` normally collapses chairs to player-name-only.
+    // The ``show-full-grimoire`` flag (set by the Spy's grimoire
+    // prompt) opts a chair out of that collapse so the Spy can see
+    // every character and token. We treat the two classes together
+    // so the JS path matches the CSS guards above.
+    const showPlayer = document.body.classList.contains("show-player")
+      && !document.body.classList.contains("show-full-grimoire");
 
     for (const c of ordered) {
       const g = document.createElementNS(SVG_NS, "g");
@@ -981,6 +1352,7 @@
       const isScarletWomanIsDemon = inList(swPromotedIds);
       const isSlayerSpent        = inList(poolState.slayer_no_ability_player_ids);
       const isVirginSpent        = inList(poolState.virgin_no_ability_player_ids);
+      const isArtistSpent        = inList(poolState.artist_no_ability_player_ids);
 
       // Same angle assignments as desktop.
       if (isDrunk)               appendStatusToken(g, "drunk", 30);
@@ -1000,6 +1372,7 @@
       if (isUndertakerDied)      appendStatusToken(g, "undertaker_died_today", 180);
       if (isSlayerSpent)         appendStatusToken(g, "slayer_no_ability", -150);
       if (isVirginSpent)         appendStatusToken(g, "virgin_no_ability", -150);
+      if (isArtistSpent)         appendStatusToken(g, "artist_no_ability", -150);
 
       // Dead shroud.
       const linkedPlayer = (typeof c.player_id === "number")
@@ -1233,6 +1606,20 @@
 
   function collectHighlightIds(p) {
     const ids = new Set();
+    // Spy / future "study the whole grimoire" abilities: keep every
+    // chair bright so the recipient can study the full board. Mirror
+    // of the same early-return in index.html's collectHighlightIds.
+    const meta = p && p.meta;
+    if (meta && meta.show_full_grimoire) {
+      return [];
+    }
+    // ``meta.no_highlight`` opts out of chair highlighting entirely —
+    // no explicit list, no fallback to the target_player_id. Used by
+    // info abilities (e.g. Clockmaker) where the receiving player
+    // shouldn't see any seat lit up on the SHOW THIS TO PLAYER screen.
+    if (meta && meta.no_highlight) {
+      return [];
+    }
     const explicit = Array.isArray(p.highlight_player_ids)
       && p.highlight_player_ids.length > 0;
     const isPlayerSelect =
@@ -1507,7 +1894,9 @@
   function renderPrompt() {
     const p = _currentPrompt;
     if (!p) {
-      document.body.classList.remove("has-prompt", "show-player");
+      document.body.classList.remove(
+        "has-prompt", "show-player", "show-full-grimoire",
+      );
       applyHighlight([]);
       reapplyChairSelection();
       // Re-render so chairs revert from show-player layout.
@@ -1546,6 +1935,15 @@
 
     document.body.classList.add("has-prompt");
     document.body.classList.toggle("show-player", isPayload);
+    // The Spy's grimoire prompt rides on the same show-player /
+    // showCard plumbing as every other "show this to player" payload,
+    // but opts out of the chair-collapsing so the Spy sees every
+    // character and token. The CSS guards on ``show-player`` are
+    // gated on ``:not(.show-full-grimoire)``; this toggle drives them.
+    document.body.classList.toggle(
+      "show-full-grimoire",
+      isPayload && !!(meta && meta.show_full_grimoire),
+    );
 
     if (isPayload) {
       // Show-player mode. Re-render chairs to strip them down to
@@ -1813,7 +2211,9 @@
     _selectedCharacters = [];
     promptOptions.innerHTML = "";
     promptHint.textContent = "";
-    document.body.classList.remove("has-prompt", "show-player");
+    document.body.classList.remove(
+      "has-prompt", "show-player", "show-full-grimoire",
+    );
     applyHighlight([]);
     reapplyChairSelection();
     refresh();
@@ -1894,6 +2294,22 @@
     if (engineState.phase === "setup") {
       await postEngine("start_game", {});
     } else if (engineState.phase === "day") {
+      // Day → Night requires two steps: advance_to_night flips the
+      // engine into NIGHT (running dusk + win checks), then
+      // start_night spins up the night-thread worker that walks the
+      // night sheet. Calling start_night by itself fails with
+      // "start_night called in phase day" — that's the bug that
+      // made the button look broken.
+      const ok = await postEngine("advance_to_night", {});
+      if (ok) {
+        await postEngine("start_night", {});
+      }
+    } else if (engineState.phase === "first_night"
+            || engineState.phase === "night") {
+      // Engine is already in night — the worker just isn't running
+      // yet (or got interrupted). Restart it. The server treats an
+      // already-running thread as an error; postEngine will surface
+      // it inline, which is the intended UX.
       await postEngine("start_night", {});
     }
     pollPrompt();
@@ -1919,6 +2335,82 @@
     _origReflectPhase();
     syncPhaseFab();
   };
+
+  // -----------------------------------------------------------------
+  // Player-join QR modal. Opens from the topbar button. Pulls the LAN
+  // base URL from /api/host_info, builds the same /player URL the
+  // desktop QR builds, and renders it via qrcodegen (already loaded
+  // for completeness via /static/qrcodegen.js).
+  // -----------------------------------------------------------------
+  const qrPlayerBackdrop = document.getElementById("qrPlayerBackdrop");
+  const qrPlayerFrame = document.getElementById("qrPlayerFrame");
+  const qrPlayerUrl = document.getElementById("qrPlayerUrl");
+  const btnPlayerQr = document.getElementById("btnPlayerQr");
+  const btnPlayerQrClose = document.getElementById("btnPlayerQrClose");
+
+  async function _detectPlayerQrUrl() {
+    try {
+      const r = await fetch("/api/host_info", { cache: "no-store" });
+      if (r.ok) {
+        const info = await r.json();
+        if (info && info.lan_ip) {
+          const port = info.port || window.location.port;
+          const portPart = port ? ":" + port : "";
+          return "http://" + info.lan_ip + portPart + "/player";
+        }
+      }
+    } catch (e) {
+      // fall through to origin-based URL
+    }
+    return window.location.origin + "/player";
+  }
+
+  function _qrToSvgString(qr, border) {
+    const n = qr.size + border * 2;
+    let d = "";
+    for (let y = 0; y < qr.size; y++) {
+      for (let x = 0; x < qr.size; x++) {
+        if (qr.getModule(x, y)) d += `M${x + border},${y + border}h1v1h-1z`;
+      }
+    }
+    return (
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${n} ${n}" ` +
+      `shape-rendering="crispEdges">` +
+      `<rect width="100%" height="100%" fill="#ffffff"/>` +
+      `<path d="${d}" fill="#000000"/></svg>`
+    );
+  }
+
+  async function openPlayerQrModal() {
+    qrPlayerFrame.innerHTML = "<span style='color:#888;font-size:13px'>Loading…</span>";
+    qrPlayerUrl.textContent = "";
+    qrPlayerBackdrop.classList.add("open");
+    let url;
+    try {
+      url = await _detectPlayerQrUrl();
+    } catch (e) {
+      url = window.location.origin + "/player";
+    }
+    qrPlayerUrl.textContent = url;
+    try {
+      const QRC = qrcodegen.QrCode;
+      const qr = QRC.encodeText(url, QRC.Ecc.QUARTILE);
+      qrPlayerFrame.innerHTML = _qrToSvgString(qr, 4);
+    } catch (e) {
+      qrPlayerFrame.innerHTML =
+        "<span style='color:#a55;font-size:12px'>Couldn't render QR.</span>";
+    }
+  }
+
+  function closePlayerQrModal() {
+    qrPlayerBackdrop.classList.remove("open");
+  }
+
+  btnPlayerQr.addEventListener("click", openPlayerQrModal);
+  btnPlayerQrClose.addEventListener("click", closePlayerQrModal);
+  qrPlayerBackdrop.addEventListener("click", (ev) => {
+    if (ev.target === qrPlayerBackdrop) closePlayerQrModal();
+  });
 
   // -----------------------------------------------------------------
   // Init: kick off polling loops.

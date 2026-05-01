@@ -45,6 +45,7 @@ from engine import preset as preset_module
 from engine import script as script_data
 from engine.chairs import ChairStore
 from engine.character import Character
+from engine.lobby import Lobby
 from engine.pool import CharacterPool
 from engine.enums import Alignment, CharType, DeathCause, Phase, SetupMode
 from engine.event import Event, EventType
@@ -116,6 +117,12 @@ class Engine:
         # wrong). Auto-fills dependent slots when the relevant owner
         # role enters the pool.
         self.pool = CharacterPool()
+
+        # Joined-but-not-yet-seated players (the "lobby"). Players hit
+        # ``/player`` on their own phones, type a name, and end up here.
+        # The Storyteller drags lobby names onto chairs in the Local UI
+        # to seat them — see ``ui/static/index.html`` lobby panel.
+        self.lobby = Lobby()
 
         # Selected preset name (e.g. "trouble_brewing"). Stored on the
         # engine so resets / reloads don't lose the operator's choice.
@@ -580,9 +587,29 @@ class Engine:
     # ------------------------------------------------------------------
 
     def all_character_names(self) -> List[str]:
+        """Every character name legal on the active script.
+
+        Prefers the installed preset's roster (loaded from
+        ``assets/presets/<name>/characters.csv``) so info abilities
+        don't enumerate roles from a different edition. Falls back to
+        the global :mod:`engine.script` lookup when no preset is
+        installed (used by tests that don't set one) or when the
+        preset shipped without a roster file.
+        """
+        if self._preset is not None and self._preset.has_roster():
+            return self._preset.all_names()
         return script_data.all_names()
 
     def all_character_names_by_type(self, char_type: CharType) -> List[str]:
+        """Names of ``char_type`` legal on the active script.
+
+        See :meth:`all_character_names` for the preset-vs-fallback
+        rationale; this is the per-type variant used by every info
+        ability that needs e.g. "all Townsfolk on the script" or
+        "every Minion on the script".
+        """
+        if self._preset is not None and self._preset.has_roster():
+            return self._preset.names_by_type(char_type)
         return script_data.names_by_type(char_type)
 
     def char_type_of(self, name: str) -> CharType:
@@ -1600,10 +1627,14 @@ class Engine:
                         )
                         break
                     char = order[self._completed_step_index]
+                    perceived = self._perceived_night_for(char)
+                    fired_first_night = char._first_night_pending and char.first_night_order > 0
                     try:
-                        char.ability(self, self._night_number)
+                        char.ability(self, perceived)
                     except Exception as exc:  # pragma: no cover (defensive)
                         self.log(f"Error in {char.name} ability: {exc!r}")
+                    if fired_first_night:
+                        char.mark_first_night_fired()
                     self._completed_step_index += 1
                     self._save_history_checkpoint(
                         f"after {char.name} (night "
@@ -1789,7 +1820,8 @@ class Engine:
             # on a no-execution day, …) we skip the storyteller-facing
             # announcement *and* the ability call, so the storyteller
             # doesn't see a wake-up prompt for nothing.
-            if not char.would_act_tonight(self, night_number):
+            perceived = self._perceived_night_for(char)
+            if not char.would_act_tonight(self, perceived):
                 self.log(
                     f"Skipping {char.name}: trigger condition not met "
                     f"tonight."
@@ -1797,10 +1829,13 @@ class Engine:
                 self._completed_step_index += 1
                 continue
             self._announce_step(step, character=char)
+            fired_first_night = char._first_night_pending and char.first_night_order > 0
             try:
-                char.ability(self, night_number)
+                char.ability(self, perceived)
             except Exception as exc:  # pragma: no cover (defensive)
                 self.log(f"Error in {char.name} ability: {exc!r}")
+            if fired_first_night:
+                char.mark_first_night_fired()
             self._completed_step_index += 1
             # Per the project rule: after each ability, save the game
             # state. The checkpoint is what the Back button restores.
@@ -1897,8 +1932,14 @@ class Engine:
         )
 
     def _run_minion_info(self, step: "preset_module.NightStep") -> None:
-        """Show the evil Minions who their Demon is. Only fires in
-        games of 7+ players (per the rule).
+        """Show the evil Minions who their Demon is.
+
+        Project rule: Minion Info always runs in this engine,
+        regardless of player count — every game with at least one
+        seated Minion and Demon gets the reveal. (The canonical
+        Trouble Brewing rulebook gates this step at 7+ players;
+        we deliberately don't, so 5- and 6-player Teensyville games
+        still get it.)
 
         Project rule: all Minions are presumed to wake up at the same
         time, so the engine emits a single consolidated prompt that
@@ -1907,12 +1948,6 @@ class Engine:
         same room and can already see each other, so the
         ``THESE ARE YOUR MINIONS`` token is redundant.)
         """
-        non_traveler_count = len([
-            p for p in self._players
-            if p.char_type not in (CharType.TRAVELER, CharType.FABLED)
-        ])
-        if non_traveler_count < 7:
-            return
         minions = [p for p in self._players if p.char_type is CharType.MINION]
         demons = [p for p in self._players if p.char_type is CharType.DEMON]
         if not minions or not demons:
@@ -1963,7 +1998,14 @@ class Engine:
 
     def _run_demon_info(self, step: "preset_module.NightStep") -> None:
         """Show the Demon their Minions and 3 not-in-play good roles to
-        bluff as. Only fires in games of 7+ players.
+        bluff as.
+
+        Project rule: Demon Info always runs in this engine,
+        regardless of player count — every game with at least one
+        seated Demon gets the reveal. (The canonical Trouble Brewing
+        rulebook gates this step at 7+ players; we deliberately don't,
+        so 5- and 6-player Teensyville games still get the bluff
+        list.)
 
         Prompt flow (matches the standard 6-section panel layout used
         by every other character ability):
@@ -1983,12 +2025,6 @@ class Engine:
              ``stage="info"`` carrying the (possibly Storyteller-edited)
              bluffs plus the Demon's Minion list.
         """
-        non_traveler_count = len([
-            p for p in self._players
-            if p.char_type not in (CharType.TRAVELER, CharType.FABLED)
-        ])
-        if non_traveler_count < 7:
-            return
         minions = [p for p in self._players if p.char_type is CharType.MINION]
         demons = [p for p in self._players if p.char_type is CharType.DEMON]
         if not demons:
@@ -1996,15 +2032,21 @@ class Engine:
 
         # Pre-pick three good (Townsfolk/Outsider) characters that are
         # NOT in play, as the default bluff set the Storyteller will
-        # confirm in ST input stage 1. The pool is the full script
-        # minus everyone seated; if the script is unusually thin we
-        # fall back to whatever is left.
+        # confirm in ST input stage 1. The pool is the full *script*
+        # (i.e. the active preset's roster) minus everyone seated; if
+        # the script is unusually thin we fall back to whatever is
+        # left. Going through ``self.all_character_names_by_type``
+        # (rather than ``script_data.names_by_type`` directly) is what
+        # keeps the bluff list scoped to this edition — e.g. on
+        # No Greater Joy the Demon won't be told to bluff as
+        # Washerwoman or Slayer because those roles aren't on the
+        # script.
         in_play_names = {
             p.character.name for p in self._players if p.character is not None
         }
         all_good_names = (
-            script_data.names_by_type(CharType.TOWNSFOLK)
-            + script_data.names_by_type(CharType.OUTSIDER)
+            self.all_character_names_by_type(CharType.TOWNSFOLK)
+            + self.all_character_names_by_type(CharType.OUTSIDER)
         )
         bluff_pool = [n for n in all_good_names if n not in in_play_names]
         import random as _rand
@@ -2210,6 +2252,13 @@ class Engine:
             return
         if self._phase is not Phase.FINISHED:
             self._dispatch(Event(EventType.DAY_START))
+            # Persistent-effect recheck for dawn — some abilities have
+            # durations that end at dawn ("tonight only", "until
+            # dawn"), and some characters may need to clean up state
+            # whose source no longer has the ability to maintain it
+            # (e.g. a source who died overnight). Runs after DAY_START
+            # so reactions to the day boundary fire first.
+            self._recheck_persistent_effects("dawn")
 
     def _run_setup_actions(self) -> None:
         """Drive every in-play character's on-setup ability in IN_GAME mode.
@@ -2246,6 +2295,24 @@ class Engine:
                     )
         self._dispatch(Event(EventType.SETUP_END))
 
+    def _perceived_night_for(self, char: Character) -> int:
+        """Return the night number ``char.ability`` should be told it is.
+
+        Characters whose first-night ability slot hasn't fired yet —
+        either at game start or after a revive — are treated as if
+        tonight were their first night, so any ``if night_number == 1``
+        gate inside their ``ability`` runs the first-night branch.
+        Otherwise the engine's actual ``self._night_number`` is
+        passed through unchanged.
+        """
+        try:
+            pending = bool(getattr(char, "_first_night_pending", False))
+        except Exception:  # pragma: no cover (defensive)
+            pending = False
+        if pending and char.first_night_order > 0:
+            return 1
+        return self._night_number
+
     def _build_action_order(self, night_number: int) -> List[Character]:
         """Order of characters acting this night.
 
@@ -2257,6 +2324,12 @@ class Engine:
         Drunk-style impersonators contribute the impersonated role's
         slot too, so the Drunk-as-Empath wakes up at the Empath's
         order and walks through the (drunk) Empath ability.
+
+        Note: ``Character.night_order`` / ``acts_on_night`` now key
+        off the per-character ``_first_night_pending`` flag, so a
+        revived character with a first-night ability slot still due
+        sorts at their first-night order even when the actual game
+        clock is on a later night.
         """
         chars: List[Character] = []
         for p in self._players:
@@ -2317,6 +2390,13 @@ class Engine:
         # it now.
         if self._pending_winner is not None:
             self._finalize_pending_win()
+            return deaths
+        # Persistent-effect recheck for dawn (parallel of the
+        # ``_auto_dawn`` path used when ``_auto_advance_to_day`` is
+        # off and the storyteller's UI thread drives the dawn
+        # transition itself).
+        if self._phase is not Phase.FINISHED:
+            self._recheck_persistent_effects("dawn")
         return deaths
 
     def advance_to_night(self) -> None:
@@ -2331,14 +2411,18 @@ class Engine:
         # actions (see :meth:`_run_night`) and the next dawn will
         # finalize the win.
         self._dispatch(Event(EventType.DAY_END))
+        # Persistent-effect recheck for dusk: every character whose
+        # ability has placed a duration-bound state on the table gets
+        # a chance to clean it up before night begins. Canonical case:
+        # the Poisoner's "tonight and tomorrow day" poison expires
+        # here, even when the Poisoner is dead and won't act again to
+        # clear it themselves.
+        self._recheck_persistent_effects("dusk")
         self._check_win_conditions(at_dusk=True)
         # Defensive: storyteller-driven _end_game could already have
         # marked the game finished. Don't try to advance past it.
         if self._phase is Phase.FINISHED:
             return
-        # Cure any one-day-only poisoning here; the Poisoner unpoisons
-        # its previous target on its next ability, which serves the
-        # same purpose, so this is a no-op for now.
         self._phase = Phase.NIGHT
         self._night_number += 1
         for p in self._players:
@@ -2465,6 +2549,28 @@ class Engine:
         # are alive again and the DEAD reminder no longer applies.
         if player.id in self._demon_killed_player_ids:
             self._demon_killed_player_ids.remove(player.id)
+        # Refresh per-character ability state. The base hook resets
+        # the first-night-ability slot and the conventional ``_used``
+        # / ``_triggered`` once-per-game flags; subclasses with extra
+        # state override ``on_revive`` to handle their own fields.
+        # Drunk-style impersonators delegate to their perceived role
+        # too so a revived Drunk-as-Slayer also gets its slot back.
+        if player.character is not None:
+            try:
+                player.character.on_revive(self)
+            except Exception as exc:  # pragma: no cover (defensive)
+                self.log(
+                    f"Error in {player.character.name} on_revive: {exc!r}"
+                )
+            perceived = player.character.acting_perceived_character()
+            if perceived is not None:
+                try:
+                    perceived.on_revive(self)
+                except Exception as exc:  # pragma: no cover (defensive)
+                    self.log(
+                        f"Error in perceived {perceived.name} on_revive: "
+                        f"{exc!r}"
+                    )
         self.log(f"{player.name!r} is revived.")
         self._dispatch(Event(EventType.REVIVE, targets=[player]))
         char_name = player.character.name if player.character else None
@@ -2547,6 +2653,20 @@ class Engine:
         keys off that, not chair.character.
         """
         player = self.get_player(player_id)
+        # CHARACTER_CHANGE fires *before* the swap so the OUTGOING
+        # character (still wired to ``player``) can clean up any
+        # persistent effects it has placed on the table — e.g. the
+        # Poisoner's POISONED flag on its previous target. Without
+        # this hook, swapping out a Poisoner (Scarlet Woman promotion,
+        # storyteller-driven role change, etc.) would discard the
+        # only handle on ``_last_target`` and leak the poison forever.
+        self._dispatch(
+            Event(
+                EventType.CHARACTER_CHANGE,
+                targets=[player],
+                data={"new_character": character_name},
+            )
+        )
         # ``build_character`` returns a freshly-constructed instance —
         # the source of "all conditions reset" for the new role.
         char = script_data.build_character(character_name)
@@ -2560,31 +2680,64 @@ class Engine:
         self.log(f"{player.name!r} is now the {character_name}.")
 
     def execute_player(self, player_id: int) -> Player:
+        """Execute ``player_id`` during the day.
+
+        Flow:
+          1. Latch ``_executed_today = True`` — read by the Mayor's
+             3-alive-no-execution win check at dusk. Per the wiki
+             Pacifist rule "If a player is executed and remains alive,
+             that still counts as the execution for today" the latch
+             fires *before* any cancellation check, so a Pacifist /
+             Tea Lady / Sailor / Fool save still consumes today's
+             execution slot.
+          2. Dispatch :class:`EventType.PRE_DEATH` — a reaction may
+             cancel the death by setting ``event.data["cancelled"] =
+             True``. This is the same channel the Mayor's night-death
+             redirect uses; consolidating here lets the four
+             "executed-but-alive" abilities (Pacifist, Tea Lady,
+             Sailor, Fool) all share one cancellation path.
+          3. If cancelled: log the save, *do not* dispatch
+             ``EXECUTION`` / ``DEATH``. Reactions tied to actual death
+             (Saint loss, Undertaker info, Scarlet Woman promotion)
+             correctly do not fire — the player did not die.
+          4. Otherwise: kill the player, dispatch ``EXECUTION`` first
+             (so the Saint's pending-loss reaction lands before the
+             broader ``DEATH`` reactions), then ``DEATH``. The
+             ``DEATH`` event drives the Scarlet Woman's takeover and
+             every other death reaction.
+        """
         if self._phase is not Phase.DAY:
             raise RuntimeError("Executions only happen during day.")
         player = self.get_player(player_id)
-        player.kill(DeathCause.EXECUTION)
-        # Latch "an execution happened today" — read by the Mayor's
-        # 3-alive-no-execution win check at dusk.
+
         self._executed_today = True
         self.log(f"{player.name!r} is executed.")
-        # EXECUTION is the execution-specific signal (Saint, Undertaker,
-        # Mayor's no-execution latch). It fires first so an executed
-        # Saint can register a pending evil win before the broader
-        # DEATH reactions run.
+
+        pre_event = Event(
+            EventType.PRE_DEATH,
+            targets=[player],
+            data={"cause": DeathCause.EXECUTION, "cancelled": False},
+        )
+        self._dispatch(pre_event)
+        if pre_event.data.get("cancelled"):
+            char_name = player.character.name if player.character else None
+            self._console_log(
+                "execution",
+                f"{player.name} is executed but remains alive",
+                player_id=player.id,
+                player_name=player.name,
+                character=char_name,
+                cancelled=True,
+            )
+            # No EXECUTION / DEATH dispatch — the player did not die.
+            self._check_win_conditions()
+            return player
+
+        player.kill(DeathCause.EXECUTION)
         self._dispatch(
             Event(EventType.EXECUTION, targets=[player],
                   data={"cause": DeathCause.EXECUTION})
         )
-        # An execution IS a death, so the broader DEATH event must
-        # also fire — otherwise reactions that listen for DEATH
-        # (notably the Scarlet Woman's Demon takeover, which only
-        # promotes when the Demon dies) silently miss executed-Demon
-        # kills, and a 5+-alive table that executes the Demon would
-        # incorrectly end the game with good winning. Dispatched after
-        # EXECUTION so per-event ordering matches engine.kill (kill →
-        # dispatch DEATH) and so any pending win Saint already
-        # registered isn't reordered.
         self._dispatch(
             Event(EventType.DEATH, targets=[player],
                   data={"cause": DeathCause.EXECUTION})
@@ -2708,7 +2861,9 @@ class Engine:
         player = self.get_player(player_id)
         if player.character is None:
             raise RuntimeError(f"{player.name!r} has no character.")
-        if not player.alive:
+        if not player.alive and not getattr(
+            player.character, "daytime_ability_active_when_dead", False
+        ):
             raise RuntimeError(f"{player.name!r} is dead.")
         if self._night_thread and self._night_thread.is_alive():
             raise RuntimeError(
@@ -2780,6 +2935,48 @@ class Engine:
                     self.log(
                         f"Reaction in {char.name} (perceived "
                         f"{perceived.name}) crashed: {exc!r}"
+                    )
+
+    def _recheck_persistent_effects(self, phase: str) -> None:
+        """Run :meth:`Character.recheck_persistent_effects` on every seat.
+
+        Called at the start of each dawn (NIGHT -> DAY) and each dusk
+        (DAY -> NIGHT). Visits every seated character — alive or dead,
+        sober or drunk/poisoned — plus any
+        :meth:`Character.acting_perceived_character` (Drunk-style
+        impersonators), giving each a chance to expire any persistent
+        effect it has applied to the table whose duration ends at the
+        current phase boundary, or whose source character can no
+        longer maintain the effect (typically because the source has
+        died or lost its ability).
+
+        Most BotC abilities have a stated duration (e.g. the Poisoner's
+        "tonight and tomorrow day"); without this pass an effect would
+        leak forever if the source died before next acting. Each
+        character decides for itself which phase(s) trigger cleanup
+        and what cleanup means; the engine just calls the hook.
+
+        ``phase`` is ``"dawn"`` or ``"dusk"``.
+        """
+        for p in self._players:
+            char = p.character
+            if char is None:
+                continue
+            try:
+                char.recheck_persistent_effects(self, phase)
+            except Exception as exc:  # pragma: no cover (defensive)
+                self.log(
+                    f"recheck_persistent_effects in {char.name} "
+                    f"crashed: {exc!r}"
+                )
+            perceived = char.acting_perceived_character()
+            if perceived is not None:
+                try:
+                    perceived.recheck_persistent_effects(self, phase)
+                except Exception as exc:  # pragma: no cover (defensive)
+                    self.log(
+                        f"recheck_persistent_effects in {char.name} "
+                        f"(perceived {perceived.name}) crashed: {exc!r}"
                     )
 
     # ==================================================================
@@ -3487,13 +3684,26 @@ class Engine:
                 if role and char == role:
                     kinds.append(kind)
 
+            # IS-THE-DRUNK marker. Special-cased because the Drunk's
+            # setup_pick has ``triggers_seat_swap=True`` (so it's
+            # filtered out of ``_setup_token_getters``) and because
+            # the per-seat path below depends on a seated engine
+            # Player — which doesn't exist until Start Game wires
+            # ``_sync_chairs_to_engine``. Keying off chair.character
+            # mirrors the storyteller-phone UI's logic so the Local
+            # UI shows the badge the moment a chair becomes the
+            # Drunk, both during setup and in-game.
+            if char == "Drunk":
+                kinds.append("drunk")
+
             # Runtime per-seat tokens key off chair.player_id. The
             # ``seat`` dict is now ``{kind: [player_id, ...]}`` for
             # every kind across every contributor.
             if pid is not None:
                 for kind, holders in seat.items():
                     if pid in holders:
-                        kinds.append(kind)
+                        if kind not in kinds:
+                            kinds.append(kind)
 
             display = char
             if char == "Drunk" and drunk_fake_role:

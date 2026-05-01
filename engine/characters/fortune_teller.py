@@ -338,9 +338,9 @@ class FortuneTeller(Character):
             else (names[0] if names else "(no one)")
         )
         info_text = (
-            f"Yes — one of {names_text} registers as a Demon."
+            f"Yes — one of {names_text} is the Demon."
             if ans
-            else f"No — neither {names_text} registers as a Demon."
+            else f"No — neither {names_text} is the Demon."
         )
         engine.send_prompt(
             InformationPrompt(
@@ -355,14 +355,11 @@ class FortuneTeller(Character):
                     "character": self.name,
                     "step": "information",
                     "stage": "info",
-                    # YES / NO label, with the picked players' names
-                    # alongside as the body. Render directive avoids
-                    # the UI's character-name switch.
+                    # Show the player a single full sentence (no separate
+                    # YES/NO label) — empty label tells the UI to skip
+                    # the label slot and just render the body sentence.
                     "render": {
-                        "tokens": [{
-                            "label": "YES" if ans else "NO",
-                            "body": names_text,
-                        }],
+                        "tokens": [{"label": "", "body": info_text}],
                     },
                 },
             )

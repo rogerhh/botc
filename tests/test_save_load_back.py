@@ -190,6 +190,10 @@ def test_history_grows_during_night() -> None:
     _drain_night(e, [
         # Dusk announce.
         ({"step_kind": "preset_step", "step_name": "Dusk"}, None),
+        # Minion Info + Demon Info fire even at 5 players (project rule).
+        ({"step_kind": "minion_info"}, None),
+        ({"step_kind": "demon_info", "stage": "st_pre"}, None),
+        ({"step_kind": "demon_info", "stage": "info"}, None),
         # Poisoner picks a player.
         ({"character": "Poisoner", "step": "select_player"}, 4),
         # Washerwoman: pick the seen TF, then the WRONG player, then info.
@@ -236,6 +240,27 @@ def test_back_within_ability_redoes_selections() -> None:
     p = _wait_for_prompt(e)
     assert p is not None
     assert p.meta.get("step_name") == "Dusk"
+    last_id = p.id
+    e.respond(p.id, None)
+
+    # Minion Info (consolidated wake of all Minions). Project rule:
+    # fires even at 5 players.
+    p = _wait_for_prompt(e, different_from=last_id)
+    assert p is not None and p.meta.get("step_kind") == "minion_info"
+    last_id = p.id
+    e.respond(p.id, None)
+
+    # Demon Info: ST stage 1 (bluff selection).
+    p = _wait_for_prompt(e, different_from=last_id)
+    assert p is not None and p.meta.get("step_kind") == "demon_info"
+    assert p.meta.get("stage") == "st_pre"
+    last_id = p.id
+    e.respond(p.id, None)
+
+    # Demon Info: auto info to player.
+    p = _wait_for_prompt(e, different_from=last_id)
+    assert p is not None and p.meta.get("step_kind") == "demon_info"
+    assert p.meta.get("stage") == "info"
     last_id = p.id
     e.respond(p.id, None)
 
@@ -305,6 +330,25 @@ def test_back_across_abilities_walks_history() -> None:
 
     # Dusk
     p = _wait_for_prompt(e)
+    last_id = p.id
+    e.respond(p.id, None)
+
+    # Minion Info (project rule: fires even at 5 players).
+    p = _wait_for_prompt(e, different_from=last_id)
+    assert p is not None and p.meta.get("step_kind") == "minion_info"
+    last_id = p.id
+    e.respond(p.id, None)
+
+    # Demon Info: ST bluff selection, then auto info.
+    p = _wait_for_prompt(e, different_from=last_id)
+    assert p is not None and p.meta.get("step_kind") == "demon_info"
+    assert p.meta.get("stage") == "st_pre"
+    last_id = p.id
+    e.respond(p.id, None)
+
+    p = _wait_for_prompt(e, different_from=last_id)
+    assert p is not None and p.meta.get("step_kind") == "demon_info"
+    assert p.meta.get("stage") == "info"
     last_id = p.id
     e.respond(p.id, None)
 

@@ -2,10 +2,26 @@
 
 A self-hosted server that runs a Blood on the Clocktower game (currently the
 Trouble Brewing edition). The server is the source of truth for game state.
-The Storyteller drives it from a local browser GUI, and players connect their
-phones to a separate page that shows them whatever the engine wants them to
-see at night — Empath count, Washerwoman tokens, Fortune Teller answer, and
-so on.
+
+The server presents three UI surfaces, named by who their audience is:
+
+- **Local UI** (`index.html`) — the Storyteller's full instrument panel,
+  served on the Storyteller's machine.
+- **Storyteller UI** (currently `phone.html`) — a portable mirror of the
+  Local UI for the Storyteller's phone. Audience is the Storyteller; it
+  is not the page a player loads.
+- **Player UI** (`player.html`) — the page each player loads on their
+  own phone after scanning a per-seat QR code. Audience is one player.
+  The Player UI never displays player character information during the
+  game (see "Information hiding rules" below); a player's character at
+  the table is established by the physical token they were dealt, not
+  by the Player UI.
+
+The Storyteller drives the engine from the Local UI (or the
+Storyteller UI). Players connect their own phones to the Player UI to
+receive whatever the engine wants them to see at night — Empath count,
+Washerwoman tokens, Fortune Teller answer, and so on — never their
+own character.
 
 The point is a calm, in-person Storytelling experience: the rulebook is in
 the engine, the bookkeeping is on the screen, and the table is free to focus
@@ -34,9 +50,11 @@ botc/
     preset.py      Loads a per-edition preset (night sheets, etc.).
     runner.py      Out-of-process engine mirror (subprocess foundation).
     README.md      Engine design notes.
-  ui/              The local web UI — a thin renderer over engine state.
+  ui/              The web UI — a thin renderer over engine state.
     ui.py          stdlib HTTP server, JSON API, and request handlers.
-    static/        index.html (Storyteller GUI), phone.html (mobile view),
+    static/        index.html (Local UI — Storyteller's machine),
+                   phone.html (Storyteller UI — Storyteller's phone),
+                   player.html (Player UI — per-player phone),
                    enter.html (access-code gate), QR-code library.
     README.md      UI design notes.
   logger/          End-of-game narration / audit trail (design doc).
@@ -80,8 +98,12 @@ default engine and forwards to the same server).
 
 Then visit:
 
-- **Storyteller GUI:** `http://localhost:8000/`
-- **Player phone:** `http://<lan-ip>:8000/phone` (the GUI shows a QR code)
+- **Local UI (Storyteller's machine):** `http://localhost:8000/`
+- **Storyteller UI (Storyteller's phone):** `http://<lan-ip>:8000/phone`
+  (the Local UI shows a QR code for the Storyteller to scan).
+- **Player UI (each player's phone):** `http://<lan-ip>:8000/player`
+  (each seat has its own per-player QR code; this surface never
+  displays the player's character during the game).
 
 
 ## How the pieces talk
@@ -174,16 +196,22 @@ Ravenkeeper) and to any future info ability.
 
 ## Information hiding rules (binding)
 
-Enforced by the UI:
+These rules apply to the **Player UI** — the only surface a player
+ever looks at. The Local UI and the Storyteller UI are both
+Storyteller-audience surfaces and may show the full Grimoire.
 
-- The phone never displays a character to its player by name. Identity at
+- The Player UI never displays player character information during the
+  game — not the player's own character, not anyone else's. Identity at
   the table is established with physical tokens.
-- Highlighting on the phone shows only the prompt's eligible set, nothing
-  else.
-- State tokens (the grimoire) are visible only on the local UI.
-- Player taps on the phone are advisory; the Storyteller's transcription on
-  the local UI is authoritative.
-- The Spy is the one exception: their phone shows the grimoire verbatim.
+- Highlighting on the Player UI shows only the prompt's eligible set,
+  nothing else.
+- State tokens (the Grimoire) are visible only on the Storyteller's
+  surfaces (the Local UI and the Storyteller UI). The Player UI never
+  sees the Grimoire.
+- Player taps on the Player UI are advisory; the Storyteller's
+  transcription on the Local UI is authoritative.
+- The Spy is the one exception: their Player UI shows the Grimoire
+  verbatim.
 
 
 ## Tests

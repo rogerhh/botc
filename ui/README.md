@@ -1,50 +1,70 @@
 # UI Design
 
 The UI is the only thing the engine talks to. Its job is to faithfully
-present what the engine asks for and to relay decisions back. There are two
-surfaces:
+present what the engine asks for and to relay decisions back. There are
+three surfaces, named by *who the audience is* (not by what device they
+happen to run on):
 
-- **Local UI** — runs on the same machine as the engine. This is the
-  Storyteller's instrument panel. Almost all interaction happens here.
-- **Mobile UI** — runs in a phone browser on the same local network. Each
-  player can connect to it (via QR code) when they need to be shown
-  information privately during the night.
+- **Local UI** (`index.html`) — runs on the same machine as the engine.
+  This is the Storyteller's full instrument panel. Almost all
+  interaction happens here.
+- **Storyteller UI** (`storyteller.html`, served at `/storyteller`) — a second Storyteller
+  surface, designed to fit on a phone the Storyteller carries. It
+  mirrors the Local UI's grimoire and prompt panel in a portrait
+  layout. **Audience: the Storyteller.** It is *not* handed to
+  players — the Storyteller uses it to keep an eye on the game when
+  they're away from the laptop, and (for in-game info reveals) to
+  display player-facing prompts that the player then reads off the
+  Storyteller's screen.
+- **Player UI** (`player.html`) — runs in each player's own phone
+  browser, paired to a specific seat. **Audience: that one player.**
+  By design, the Player UI never displays a player's character
+  information during the game (see "Information hiding rules" below).
 
 The UI never decides anything on its own. It renders Prompts the engine
 sends, and posts decisions back. State is owned by the engine.
 
 
-## Two-surface model
+## Three-surface model
 
-| What                                           | Local UI | Mobile UI |
-|------------------------------------------------|:--------:|:---------:|
-| Setup: seats, names, character selection       | yes      | no        |
-| Town square (state tokens, seat panels)        | yes      | no        |
-| Day: nominations, votes, executions, day abilities | yes  | no        |
-| Storyteller arbitrations                       | yes      | no        |
-| Wake / select prompts to a player              | yes (entry) | yes (display) |
-| Show information privately to a player        | yes (entry) | yes (display) |
-| Replay / end-of-game summary                   | yes      | no        |
+| What                                           | Local UI | Storyteller UI | Player UI |
+|------------------------------------------------|:--------:|:--------------:|:---------:|
+| Setup: seats, names, character selection       | yes      | view-only      | no        |
+| Town square (state tokens, seat panels)        | yes      | yes (full grimoire) | no   |
+| Day: nominations, votes, executions, day abilities | yes  | yes            | no        |
+| Storyteller arbitrations                       | yes      | yes            | no        |
+| Wake / select prompts to a player              | yes (entry) | yes (entry, hand-over) | yes (display) |
+| Show information privately to a player        | yes (entry) | yes (display, hand-over) | yes (display) |
+| Replay / end-of-game summary                   | yes      | yes            | no        |
+| Player's own character name                    | yes      | yes            | **never** |
+| Other players' characters / Grimoire           | yes      | yes            | **never** (Spy excepted) |
 
-Anything the player needs to *see* privately goes to the Mobile UI.
-Everything else stays on the Local UI.
+The Storyteller UI is just a portable mirror of the Local UI. The
+Player UI is the only surface designed to be looked at by a player.
 
-The Local UI displays a QR code so a phone can join. The Mobile UI is
-shown on the player's phone (or on the Storyteller's spare phone passed to
-the player) when their turn comes up at night.
+The Local UI displays QR codes so phones can join: one for the
+Storyteller's own phone (Storyteller UI) and one per seat for the
+players (Player UI). Each player's QR is tied to their seat.
 
 
 ## Communication
 
 - Engine <-> Local UI: a local socket (HTTP + WebSocket on a localhost
-  port). The Local UI subscribes to a stream of Prompts and emits decisions.
-- Local UI <-> Mobile UI: same server, on the same port, accessible from
-  the LAN. The Mobile UI is paired via QR code to a specific player seat.
+  port). The Local UI subscribes to a stream of Prompts and emits
+  decisions.
+- Local UI <-> Storyteller UI: same server, accessible from the LAN.
+  The Storyteller UI is just another view onto the same engine state;
+  it can answer Storyteller prompts the same way the Local UI does.
+- Local UI <-> Player UI: same server, accessible from the LAN. Each
+  Player UI is paired via per-seat QR to a specific player.
 
-The engine does not address the Mobile UI directly. When a Prompt is
-flagged as `target_audience = mobile`, the Local UI relays it to the
-correct phone and shows a thin local mirror with a "Next" button so the
-Storyteller can advance once the player has seen it.
+The engine does not address the Player UI directly. When a Prompt is
+flagged as `target_audience = player`, the Local UI relays it to the
+correct seat's Player UI and shows a thin local mirror with a "Next"
+button so the Storyteller can advance once the player has seen it. The
+same prompt also surfaces on the Storyteller UI, which is what the
+Storyteller can hand to the player as a fallback if the player's own
+phone isn't available.
 
 
 ## Local UI
@@ -76,10 +96,12 @@ Storyteller can advance once the player has seen it.
 The main view is the **Town Square**: a ring of seat tokens in seating
 order. Each seat shows:
 
-- Player name (always visible to the Storyteller, never sent to other
-  players' phones).
-- The Character token (only visible on the Local UI, this is the
-  Storyteller's Grimoire).
+- Player name (always visible to the Storyteller; a player's own name
+  also appears on their Player UI, but no player ever sees another
+  player's name on the Player UI).
+- The Character token (visible only on the Storyteller's surfaces —
+  the Local UI and the Storyteller UI. This is the Grimoire and is
+  never shown on the Player UI; see "Information hiding rules" below).
 - **State tokens** stacked next to the seat: alive/dead, drunk, poisoned,
   dead-vote remaining, character-specific reminders ("Townsfolk" /
   "Wrong" for Washerwoman, "Red Herring" for Fortune Teller, "Master" for
@@ -122,8 +144,9 @@ engine-driven step that talks to a player (Minion Info, Demon Info):
    CHARACTERS ARE NOT IN PLAY*, the Washerwoman's character token
    alongside the two highlighted chairs). Driven by an
    `InformationPrompt` with `shown_to_player = True` and
-   `meta["stage"] = "info"`. The Storyteller hands the phone to the
-   player and clicks Next to dismiss.
+   `meta["stage"] = "info"`. Reaches the player either on their own
+   Player UI, or — as a fallback — on the Storyteller UI handed
+   physically across the table. The Storyteller clicks Next to dismiss.
 
 UI language note (per the project rules in `CLAUDE.md`): never use
 the words "confirm" or "override" on any prompt the Storyteller
@@ -140,7 +163,8 @@ Prompt sub-types and the controls they render:
   picking which Townsfolk the Washerwoman sees).
 - For YesNo prompts, two large buttons.
 - For ShowInformation prompts targeted at a player, the Storyteller sees
-  a description of what is being shown to which phone and a "Next" button.
+  a description of what is being shown on which Player UI (and on the
+  Storyteller UI mirror) and a "Next" button.
 - For Arbitrate prompts, a free-form choice with the relevant option set
   (e.g. "Recluse registers as: [Imp / Poisoner / Spy / Baron / Scarlet
   Woman / Recluse]").
@@ -228,68 +252,104 @@ narrate from at end of game. It is also useful mid-game to undo a misclick
 (supported via "rewind to event N").
 
 
-## Mobile UI
+## Storyteller UI
 
-A phone connects via QR code to a specific seat. From that point on, the
-phone speaks for that one player.
+The Storyteller UI (`storyteller.html`, served at `/storyteller`) is a portrait-phone mirror
+of the Local UI for the Storyteller's own use. **Audience: the
+Storyteller.** It is reached by the Storyteller scanning the
+Storyteller QR shown on the Local UI; it is *not* the page a player's
+phone lands on.
+
+It shows the same town square, the same per-seat side panel, and the
+same Storyteller prompt panel as the Local UI, restyled for a portrait
+phone screen. Tapping a chair on the Storyteller UI opens the same
+side panel; selecting a player answers the active SELECT_PLAYER
+prompt. The Storyteller can hand this phone *physically* to a player
+during an Information step (the prompt panel collapses to a clean
+"show this to the player" card so the surrounding Grimoire is hidden
+during the hand-over) — but the Storyteller UI is not paired to that
+player and reverts to the full grimoire view as soon as it returns to
+the Storyteller.
+
+Because the audience is the Storyteller, the Storyteller UI is allowed
+to display the full Grimoire (player names, characters, status
+reminder tokens, dead shrouds). The information hiding rules below
+apply only to the Player UI.
+
+
+## Player UI
+
+The Player UI (`player.html`) is the page a single player loads on
+their own phone after scanning their per-seat QR. **Audience: that one
+player.** It speaks for one seat for the rest of the game.
 
 ### When the engine is silent
 
-The phone is dim with a placeholder ("Eyes closed.") and listens for
-prompts. Most of the time it shows nothing — players are awake during the
-day, in which case talk happens around the table, not on the phone.
+The Player UI is dim with a placeholder ("Eyes closed.") and listens
+for prompts. Most of the time it shows nothing — players are awake
+during the day, in which case talk happens around the table, not on the
+phone.
 
 ### When a Prompt arrives for this player
 
-The phone shows:
+The Player UI shows:
 
-- **The player's name.** Never the player's character. Even the player's
-  own phone never displays "You are the Empath." Players know their
-  character from the physical token.
+- **The player's name.** Never the player's character. Even the
+  player's own Player UI never displays "You are the Empath." Players
+  know their own character from the physical token they were dealt.
 - **Question or information.** Plain language, written from the
   Storyteller's perspective ("You learn that one of these two players is
   the Imp", "Pick a player to protect").
-- **Eligible selections** (when applicable). For Select prompts, the seat
-  list is shown with eligibles highlighted and non-eligibles greyed out.
-  Tapping is illustrative only — the player physically points at the
-  table; the Storyteller transcribes the choice on the Local UI.
+- **Eligible selections** (when applicable). For Select prompts, the
+  seat list is shown with eligibles highlighted and non-eligibles
+  greyed out. Tapping is illustrative only — the player physically
+  points at the table; the Storyteller transcribes the choice on the
+  Local UI.
 - **No "I don't know my character" reveal.** Even Information prompts
   that *come from* a character ability ("Empath: 1") never spell the
-  character name on the phone. They show the data only.
+  source character name on the Player UI. They show the data only.
 
-The Mobile UI does not have decision-making controls. The Storyteller is
-the gatekeeper. The phone exists to display secret information privately.
-The Storyteller's "Next" on the Local UI dismisses the phone display.
+The Player UI has no decision-making controls. The Storyteller is the
+gatekeeper. The Player UI exists to display secret information
+privately. The Storyteller's "Next" on the Local UI dismisses the
+Player UI display.
 
 ### Drunk / poisoned source players
 
 When the prompt's source player is drunk or poisoned, the engine first
-issues an Arbitrate prompt to the Storyteller on the Local UI to compose
-the false information. Only that constructed information is sent to the
-phone. The phone has no idea anything is different.
+issues an Arbitrate prompt to the Storyteller on the Local UI to
+compose the false information. Only that constructed information is
+sent to the Player UI. The Player UI has no idea anything is different.
 
 
 ## Information hiding rules (binding)
 
-These are absolute rules the UI must enforce:
+These rules apply to the **Player UI** — the only surface a player
+ever looks at. The Local UI and the Storyteller UI are both
+Storyteller-audience surfaces and are allowed to show the full
+Grimoire.
 
-1. The Mobile UI never displays a character to its player by name. Player
+1. **The Player UI never displays a player's character information
+   during the game.** Not their own character, not anyone else's. Even
+   the player's own Player UI never says "You are the Empath." Player
    identity at the table is established via physical tokens, not the
    phone.
-2. Highlighting on the Mobile UI shows only the Prompt's eligible set,
+2. Highlighting on the Player UI shows only the Prompt's eligible set,
    not extra context. If the Washerwoman is shown two players and a
-   Townsfolk token, the eligible set is exactly those two players plus
-   the one token; nothing else is highlighted, nothing else is even
-   listed.
-3. State tokens are visible only on the Local UI. The Mobile UI never
-   sees the Grimoire.
-4. Player decisions made on the Mobile UI (if we ever choose to allow
-   them as a convenience) are advisory only; the Storyteller's
-   transcription on the Local UI is authoritative.
-5. The Spy is the only character whose Mobile UI ever shows the
-   Grimoire. That is a deliberate feature, not a leak — it is rendered
-   exactly as the Storyteller's local Grimoire so the Spy player can
-   memorise what they need.
+   Townsfolk token, the eligible set on her Player UI is exactly those
+   two players plus that one token; nothing else is highlighted,
+   nothing else is even listed.
+3. State tokens (the Grimoire) are visible only on the Storyteller's
+   surfaces — the Local UI and the Storyteller UI. The Player UI
+   never sees the Grimoire.
+4. Player taps on the Player UI (if we ever choose to allow them as a
+   convenience) are advisory only; the Storyteller's transcription on
+   the Local UI is authoritative.
+5. The Spy is the only character whose Player UI ever shows the
+   Grimoire. That is a deliberate feature, not a leak — it is
+   rendered exactly as the Storyteller's local Grimoire so the Spy
+   player can memorise what they need. This is the *only* exception
+   to rules 1 and 3.
 
 
 ## Replay

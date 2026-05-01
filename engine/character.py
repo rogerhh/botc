@@ -57,6 +57,15 @@ class Character:
     # True for Slayer-style "once a game" abilities.
     once_per_game: bool = False
 
+    # True for daytime abilities that remain usable after the seated
+    # player has died. The canonical case is the Klutz, whose ability
+    # ("when you learn that you died, publicly choose 1 alive player…")
+    # only triggers post-death. The base ``use_daytime_ability`` path
+    # in :class:`engine.engine.Engine` and the storyteller side panel
+    # both gate the "Use ability" button on ``alive`` by default; this
+    # flag relaxes that gate for roles that need to act after dying.
+    daytime_ability_active_when_dead: bool = False
+
     # Setup-time deltas (Baron: outsider +2, townsfolk -2).
     setup_outsider_delta: int = 0
     setup_townsfolk_delta: int = 0
@@ -135,6 +144,13 @@ class Character:
         # they are not seated, they are carried by the picking
         # Character.
         self.members: List["Character"] = []
+        # First-night-ability tracking. True until the character has
+        # actually fired their first-night ability slot. The engine's
+        # night loop uses this — not the global ``night_number`` — to
+        # decide which slot the character acts on. ``on_revive`` resets
+        # this to True so a revived character's first-night ability is
+        # available again on the next night.
+        self._first_night_pending: bool = True
 
     # ------------------------------------------------------------------
     # Lifecycle hooks.
@@ -432,6 +448,38 @@ class Character:
         """For abilities triggered during the day (Slayer, Virgin)."""
         return None
 
+    def recheck_persistent_effects(
+        self, engine: "Engine", phase: str
+    ) -> None:
+        """Re-evaluate any persistent effects this character has applied.
+
+        Called by the engine on **every seated character** (alive or
+        dead, sober or drunk/poisoned, including any
+        ``acting_perceived_character``) at the start of each dawn and
+        each dusk. Most BotC abilities have a stated duration ("tonight
+        and tomorrow day", "until dawn", "tonight only"…) and the
+        ability stops working once its source can no longer maintain it
+        (the source dies, becomes drunk/poisoned, or simply reaches
+        the natural end of the duration).
+
+        Default: no-op. Override on any character that has applied a
+        persistent state to another seat (or to itself) and that state
+        needs cleaning up at a phase boundary even when the source
+        won't act again — e.g. the Poisoner's POISONED token must
+        clear at the next dusk regardless of whether the Poisoner is
+        still alive to do it themselves.
+
+        Parameters
+        ----------
+        engine:
+            The :class:`Engine` instance.
+        phase:
+            ``"dawn"`` (transition NIGHT -> DAY, after DAY_START
+            dispatch) or ``"dusk"`` (transition DAY -> NIGHT, after
+            DAY_END dispatch).
+        """
+        return None
+
     # ------------------------------------------------------------------
     # Registration.
     # ------------------------------------------------------------------
@@ -724,13 +772,79 @@ class Character:
         return self.other_night_order > 0
 
     def night_order(self, night_number: int) -> int:
-        """Order at which this character acts on a given night."""
-        if night_number == 1:
+        """Order at which this character acts on the upcoming night.
+
+        The decision is now keyed off the per-character
+        ``_first_night_pending`` flag rather than the global
+        ``night_number``. A character whose first-night ability hasn't
+        fired yet (a freshly-seated role on night 1, or a role that
+        was revived) sorts at its first-night order; once the slot
+        has been spent, subsequent nights use ``other_night_order``.
+        ``night_number`` is kept on the signature for back-compat with
+        callers who still pass it, but it is no longer consulted.
+        """
+        if self._first_night_pending and self.first_night_order > 0:
             return self.first_night_order
         return self.other_night_order
 
     def acts_on_night(self, night_number: int) -> bool:
         return self.night_order(night_number) > 0
+
+    @property
+    def is_first_night_pending(self) -> bool:
+        """Has the first-night ability slot been spent yet?
+
+        True for newly-seated characters (game start) and for any
+        character who has been revived since last firing their
+        first-night ability. Characters whose ``ability`` branches on
+        "first night vs other night" should consult this rather than
+        the engine-supplied ``night_number`` argument so their
+        first-night branch fires again after revive.
+        """
+        return self._first_night_pending
+
+    def mark_first_night_fired(self) -> None:
+        """Mark the first-night ability slot as spent.
+
+        Called by the engine after the character's ability has run on
+        a night where it acted at its first-night order. After this,
+        the character moves to its ``other_night_order`` slot until
+        :meth:`on_revive` resets the flag.
+        """
+        self._first_night_pending = False
+
+    def on_revive(self, engine: "Engine") -> None:
+        """Refresh per-character ability state on revive.
+
+        Called by :meth:`engine.engine.Engine.revive` whenever this
+        character's seated player comes back to life. The default
+        refreshes the first-night ability slot — a revived character
+        will act at their ``first_night_order`` again on their next
+        night — and clears any per-character once-per-game flag the
+        subclass tracks via the ``_used`` / ``_triggered`` convention.
+
+        Subclasses that store once-per-game state under a different
+        attribute name should override this method, call
+        ``super().on_revive(engine)`` first, and reset their own
+        attribute. Drunk-style impersonators delegate the reset to
+        the perceived character automatically — the engine walks
+        ``acting_perceived_character()`` after invoking this hook.
+        """
+        # Refresh the first-night slot.
+        self._first_night_pending = True
+        # Clear the two conventional once-per-game flags so subclasses
+        # that follow the Slayer / Virgin / Artist / Klutz pattern get
+        # their slot back automatically.
+        if hasattr(self, "_used"):
+            try:
+                self._used = False
+            except Exception:  # pragma: no cover (defensive)
+                pass
+        if hasattr(self, "_triggered"):
+            try:
+                self._triggered = False
+            except Exception:  # pragma: no cover (defensive)
+                pass
 
     def would_act_tonight(self, engine: "Engine", night_number: int) -> bool:
         """Will this character actually do something tonight?

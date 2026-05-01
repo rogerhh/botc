@@ -50,3 +50,39 @@ The first win condition to fire wins; subsequent triggers don't
 overwrite it. This applies to every win/loss condition (Demon
 killed, two players left, Saint executed, Mayor's
 three-alive-no-execution, etc.).
+
+## Minion Info / Demon Info always run
+
+The engine deliberately diverges from the canonical Trouble Brewing
+"7 or more players" gate on these two first-night steps:
+
+- **Minion Info** runs in every game that has at least one seated
+  Minion and one seated Demon, regardless of player count. The
+  consolidated prompt wakes every Minion together and shows them
+  the `THIS IS THE DEMON` token.
+- **Demon Info** runs in every game that has at least one seated
+  Demon, regardless of player count. The Demon sees their Minion
+  list (which may be a single name on smaller scripts) plus 3
+  not-in-play good roles to bluff as.
+
+This means 5- and 6-player Teensyville games still get the reveal
+and the bluff list. The preset description text in
+`assets/presets/*/first_night.txt` no longer says "If there are 7 or
+more players"; the engine ignores that wording either way.
+
+## Bluff pool / "all roles on the script" come from the preset
+
+When an info ability needs the list of "every Townsfolk on the
+script", "every Minion on the script", etc. (Demon Info bluff pool,
+Washerwoman / Librarian / Investigator misregistration candidates,
+Drunk's pretend role pool, Spy / Recluse misregistration list, …),
+the engine sources that list from the **active preset's
+`characters.csv` roster**, not from the global Trouble Brewing
+constants in `engine/script.py`.
+
+Implementation: `Engine.all_character_names()` /
+`all_character_names_by_type(...)` consult `self._preset` first and
+only fall back to `engine.script` when no preset is installed (used
+by tests that don't set one) or when the preset shipped without a
+roster file. Every character-side caller (`engine.characters.*`)
+goes through those engine helpers, so the scoping happens once.
