@@ -41,13 +41,38 @@ class DrunkSelfDrunkEffect(Effect):
     Persists post-mortem (``purge_on_source_death = False``) since the
     state of "this seat is the Drunk" is permanent. Purges on
     character change (the new role doesn't inherit the Drunk's
-    drunkness)."""
+    drunkness).
+
+    Special case — survives source death
+    ------------------------------------
+    The engine resolver normally deactivates an effect the moment its
+    source player's ``alive`` flag flips to False (see
+    ``Engine.resolve_droison_state``). For the Drunk's self-effect
+    that's wrong: the seat must remain drunk for the entire game,
+    including the night the Drunk is killed and every night after.
+    Without this, a Drunk-as-Sage killed by the Demon would have its
+    ``Player.drunk`` flag cleared between the kill and the Sage's
+    night-order slot, and the Sage's ability would mistakenly run its
+    sober branch (a 1-player select for "the other player besides the
+    Demon") instead of the drunk/poisoned wrong-default branch
+    required by CLAUDE.md.
+
+    To opt out of the resolver's source-death deactivation, this class
+    declares ``survives_source_death = True``. The resolver consults
+    this attribute via ``getattr(eff, "survives_source_death", False)``
+    so the engine stays generic — the special case lives entirely
+    here. Combined with ``purge_on_source_death = False`` (the effect
+    also stays in the registry past death), this gives the Drunk's
+    seat permanent drunkness for the full game."""
 
     kind = "drunk"
     contributes_to_state = "drunk"
     purge_on_source_death = False
     purge_on_source_character_change = True
     deactivate_on_source_droisoned = False
+    # Bypass the resolver's "source dead → effect inactive" gate.
+    # The Drunk's seat is permanently drunk (alive or dead).
+    survives_source_death = True
 
 
 class Drunk(Character):

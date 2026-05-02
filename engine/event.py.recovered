@@ -1,0 +1,76 @@
+# uncompyle6 version 3.9.3
+# Python bytecode version base 3.8.0 (3413)
+# Decompiled from: Python 3.8.10 (default, Mar 18 2025, 20:04:55) 
+# [GCC 9.4.0]
+# Embedded file name: /sessions/fervent-bold-cray/mnt/botc/engine/event.py
+# Compiled at: 2026-05-01 19:14:30
+# Size of source mod 2**32: 4052 bytes
+"""Event objects.
+
+An ``Event`` is anything that can trigger a character's reaction. The
+engine dispatches events to every Character's ``reaction(event)`` method.
+
+A character's ability is implemented as a sequence of events, conceptually
+of five types:
+
+    1. CHECK_CONDITION  — does the character's ability trigger this night?
+    2. WAKEUP           — the storyteller wakes the player.
+    3. SELECT           — the player makes a selection (or the ST does).
+    4. INFORMATION      — the storyteller gives information to the player.
+    5. RESOLUTION       — the ability's effect lands (poisoning, killing, etc).
+
+Not every ability uses all five (e.g. the Poisoner has no INFORMATION;
+day-time abilities have no WAKEUP). Other event types describe non-ability
+state changes (death, execution, nomination, etc.) so any character can
+react to them.
+"""
+from __future__ import annotations
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
+if TYPE_CHECKING:
+    from engine.character import Character
+    from engine.player import Player
+
+class EventType(str, Enum):
+    __doc__ = "Types of events that can be dispatched."
+    CHECK_CONDITION = "check_condition"
+    WAKEUP = "wakeup"
+    SELECT = "select"
+    INFORMATION = "information"
+    RESOLUTION = "resolution"
+    PRE_DEATH = "pre_death"
+    DEATH = "death"
+    EXECUTION = "execution"
+    NOMINATION = "nomination"
+    POISON = "poison"
+    DRUNK = "drunk"
+    REVIVE = "revive"
+    NIGHT_START = "night_start"
+    NIGHT_END = "night_end"
+    DAY_START = "day_start"
+    DAY_END = "day_end"
+    CHARACTER_CHANGE = "character_change"
+    STEP_START = "step_start"
+    SETUP_START = "setup_start"
+    SETUP_END = "setup_end"
+    SETUP_PICK = "setup_pick"
+
+
+@dataclass
+class Event:
+    __doc__ = 'An action/state-change in the game.\n\n    Attributes\n    ----------\n    type:\n        The kind of event (see :class:`EventType`).\n    source:\n        The Character whose ability produced this event (``None`` for\n        engine-level events like ``NIGHT_START``).\n    targets:\n        The Player(s) the event acts on (e.g. the player being woken or\n        selected). May be empty.\n    data:\n        Free-form data the event carries (e.g. ``{"info": "..."}`` for\n        INFORMATION events, or ``{"cause": DeathCause.DEMON_KILL}`` for\n        DEATH events).\n    '
+    type: "EventType"
+    source = None
+    source: "Optional['Character']"
+    targets = field(default_factory=list)
+    targets: "List['Player']"
+    data = field(default_factory=dict)
+    data: "Dict[str, Any]"
+
+    def __repr__(self) -> "str":
+        src = self.source.name if self.source else "—"
+        tgt = ", ".join((p.name for p in )) or "—"
+        return f"<Event {self.type.value} src={src} tgt={tgt} data={self.data}>"
+
+# okay decompiling engine/__pycache__/event.cpython-38.pyc

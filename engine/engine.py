@@ -3444,7 +3444,17 @@ class Engine:
                 new_active[eff.id] = False
                 continue
             src_player = eff.source.player
-            if not src_player.alive:
+            if not src_player.alive and not getattr(
+                eff, "survives_source_death", False
+            ):
+                # Source player has died. By default this deactivates
+                # the effect. Subclasses may opt out by declaring
+                # ``survives_source_death = True`` — the special case
+                # is the Drunk character's permanent self-drunkness
+                # (see ``DrunkSelfDrunkEffect`` in
+                # ``engine/characters/drunk.py``). Effects that opt out
+                # fall through to the ordinary droison-based active /
+                # inactive decision below.
                 new_active[eff.id] = False
                 continue
             if not eff.deactivate_on_source_droisoned:
