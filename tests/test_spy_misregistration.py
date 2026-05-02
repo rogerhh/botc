@@ -801,6 +801,114 @@ def test_seen_token_only_checks_seen_chair_no_spy_prompt() -> None:
     e.advance_to_day()
 
 
+# ---------------------------------------------------------------------------
+# Drunk / poisoned Spy: the misregistration ability fails — the Spy
+# registers as the Spy (a Minion), no spy_registers_as prompt fires.
+# ---------------------------------------------------------------------------
+
+
+def test_poisoned_spy_does_not_misregister_no_prompt() -> None:
+    """A poisoned Spy's misregistration ability does not work. The
+    detection-side check sees the Spy as the Spy (a Minion → evil),
+    and the engine never emits a ``spy_registers_as`` prompt.
+
+    Scenario: Empath next to the Spy. With the Spy poisoned the
+    Empath's alignment check on the Spy falls through to the base
+    ``Character.registers_as``, which returns ``"Spy"`` (Minion → evil).
+    Combined with the Imp on the other side, the Empath sees count=2.
+    """
+    e = Engine()
+    a = e.add_seat("Alice")    # 1 — Empath
+    b = e.add_seat("Bob")      # 2 — Spy   (Empath's clockwise neighbour)
+    c = e.add_seat("Cara")     # 3 — Mayor
+    d = e.add_seat("Dan")      # 4 — Soldier
+    f = e.add_seat("Eve")      # 5 — Imp   (Empath's ccw neighbour)
+
+    e.assign_character(a.id, "Empath")
+    e.assign_character(b.id, "Spy")
+    e.assign_character(c.id, "Mayor")
+    e.assign_character(d.id, "Soldier")
+    e.assign_character(f.id, "Imp")
+
+    e.start_game()
+    # Storyteller-poison the Spy directly (no Poisoner needed in
+    # this scenario — we just want the Spy to lack ability when the
+    # Empath check runs).
+    e.poison(b.id)
+    # Capture prompt texts so we can confirm the Empath count without
+    # a meta key. (Empath InformationPrompt has no shown_count.)
+    seen_texts: List[str] = []
+
+    def collect(engine: Engine, scripted: List[Tuple[dict, Any]]) -> None:
+        deadline = time.time() + 5.0
+        answered = 0
+        while engine._night_thread and engine._night_thread.is_alive():
+            if time.time() > deadline:
+                raise TimeoutError("night thread didn't finish")
+            p = engine.pending_prompt()
+            if p is None:
+                time.sleep(0.01)
+                continue
+            if answered >= len(scripted):
+                raise AssertionError(
+                    f"Unexpected extra prompt: {p.text!r} meta={p.meta}"
+                )
+            matcher, response = scripted[answered]
+            for k, v in matcher.items():
+                assert p.meta.get(k) == v, (
+                    f"Prompt #{answered+1} mismatch: {p.meta!r}"
+                )
+            seen_texts.append(p.text)
+            engine.respond(p.id, response)
+            answered += 1
+            time.sleep(0.01)
+        assert answered == len(scripted)
+
+    e.start_night()
+    collect(e, [
+        # NO spy_registers_as prompt — the override no-ops on a
+        # droisoned Spy. Empath info shows count=2 (Bob the Spy
+        # registers as Minion → evil; Eve the Imp counts as evil).
+        ({"character": "Empath", "step": "information"}, None),
+        # Spy still gets the grimoire reveal — that's an exposure,
+        # not an ability, so droisoning doesn't suppress it.
+        ({"character": "Spy",    "step": "grimoire"}, None),
+    ])
+    e.advance_to_day()
+    assert any("2 of your alive neighbours are evil" in t for t in seen_texts), (
+        f"Empath should see count=2 (Spy registers as Spy → Minion → "
+        f"evil); texts={seen_texts!r}"
+    )
+
+
+def test_drunk_spy_does_not_misregister_no_prompt() -> None:
+    """Same as the poisoned case, but with a drunk Spy. ``has_ability``
+    fails for both drunk and poisoned, so the override no-ops the
+    same way."""
+    e = Engine()
+    a = e.add_seat("Alice")    # 1 — Empath
+    b = e.add_seat("Bob")      # 2 — Spy
+    c = e.add_seat("Cara")     # 3 — Mayor
+    d = e.add_seat("Dan")      # 4 — Soldier
+    f = e.add_seat("Eve")      # 5 — Imp
+
+    e.assign_character(a.id, "Empath")
+    e.assign_character(b.id, "Spy")
+    e.assign_character(c.id, "Mayor")
+    e.assign_character(d.id, "Soldier")
+    e.assign_character(f.id, "Imp")
+
+    e.start_game()
+    e.make_drunk(b.id)
+    e.start_night()
+    drain_prompts(e, [
+        # No misregistration prompt; Empath sees count=2.
+        ({"character": "Empath", "step": "information"}, None),
+        ({"character": "Spy",    "step": "grimoire"}, None),
+    ])
+    e.advance_to_day()
+
+
 if __name__ == "__main__":
     test_spy_picks_preferred_good_character_at_setup()
     print("test 1 passed.")
@@ -836,4 +944,8 @@ if __name__ == "__main__":
     print("test 16 passed.")
     test_seen_token_only_checks_seen_chair_no_spy_prompt()
     print("test 17 passed.")
+    test_poisoned_spy_does_not_misregister_no_prompt()
+    print("test 18 passed.")
+    test_drunk_spy_does_not_misregister_no_prompt()
+    print("test 19 passed.")
     print("All Spy misregistration tests passed.")

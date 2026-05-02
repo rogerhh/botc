@@ -7,13 +7,23 @@ Reaction-based daytime ability. The Virgin's "trigger" is the first
 nomination targeted at them. We listen for ``NOMINATION`` events on
 ourselves; on the first hit, if the nominator registers as a Townsfolk
 (via :meth:`Character.registers_as` with categories=(TOWNSFOLK,)) the
-nominator is executed. So a Spy nominator may register as a Townsfolk
-and trigger the Virgin's execute; the Recluse override does not fire
-for a TOWNSFOLK-only check. Once consumed (success or not), the
-ability is spent.
+nominator is killed by the Virgin's ability. So a Spy nominator may
+register as a Townsfolk and trigger the Virgin's kill; the Recluse
+override does not fire for a TOWNSFOLK-only check. Once consumed
+(success or not), the ability is spent.
+
+The flavour text says "executed", but mechanically this kill uses
+``DeathCause.ABILITY``: the engine reserves ``DeathCause.EXECUTION``
+for deaths produced by the Storyteller's Execute button
+(``Engine.execute_player``). The Virgin therefore does NOT dispatch
+an ``EXECUTION`` event and does NOT set ``Engine._executed_today``.
+Saint loss, Mastermind extension, Pacifist / Devil's Advocate saves,
+Undertaker info, Minstrel drunkness, etc. all key off the EXECUTION
+event or ``DeathCause.EXECUTION`` and so do not fire on the Virgin's
+kill.
 
 Drunkenness / poisoning: a drunk or poisoned Virgin still consumes
-their trigger but does NOT execute the nominator.
+their trigger but does NOT kill the nominator.
 """
 
 from __future__ import annotations
@@ -21,11 +31,23 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from engine.character import Character
+from engine.effect import Effect
 from engine.enums import CharType, DeathCause
 from engine.event import Event, EventType
 
 if TYPE_CHECKING:
     from engine.engine import Engine
+
+
+class VirginNoAbilityEffect(Effect):
+    """NO ABILITY marker on the Virgin's seat once the trigger fires."""
+
+    kind = "virgin_no_ability"
+    contributes_to_state = None
+    purge_on_source_death = False
+    purge_on_source_character_change = True
+    deactivate_on_source_droisoned = False
+
 
 class Virgin(Character):
     name = "Virgin"
@@ -47,11 +69,8 @@ class Virgin(Character):
         # Tracks whether the first-nomination trigger has been spent.
         self._triggered: bool = False
 
-    def compute_reminder_tokens(self, engine: "Engine") -> "dict[str, list[int]]":
-        """Persistent NO ABILITY marker once the trigger has fired."""
-        if self.player is None or not self._triggered:
-            return {}
-        return {"virgin_no_ability": [self.player.id]}
+    # NO ABILITY marker emitted via VirginNoAbilityEffect when the
+    # trigger fires; rendered via the registry.
 
     def reaction(self, event: Event, engine: "Engine") -> None:
         if self.player is None:
@@ -67,6 +86,9 @@ class Virgin(Character):
         # Always consume the trigger on first nomination, even when the
         # ability has no effect (drunk/poisoned, evil nominator, …).
         self._triggered = True
+        engine.add_effect(VirginNoAbilityEffect(
+            source=self, targets=[self.player.id],
+        ))
 
         nominator_id = event.data.get("nominator_id")
         nominator = None
@@ -121,26 +143,24 @@ class Virgin(Character):
             )
             return super().reaction(event, engine)
 
-        # Execute the nominator on the spot.
+        # Kill the nominator on the spot. This is an ability-driven
+        # death, not an execution: ``DeathCause.EXECUTION`` is reserved
+        # for deaths that originate from the Storyteller's Execute
+        # button (``Engine.execute_player``). The Virgin's own kill
+        # therefore uses ``DeathCause.ABILITY`` and does NOT dispatch
+        # an ``EXECUTION`` event — only ``Engine.kill``'s standard
+        # ``PRE_DEATH`` / ``DEATH`` flow runs.
         engine.log_reaction(
             "Virgin",
             (
-                f"{self.player.name} executes {nominator.name} "
+                f"{self.player.name}'s ability kills {nominator.name} "
                 f"(first-nomination ability)."
             ),
             target=self.player,
             trigger="nomination",
-            effect="execute_nominator",
+            effect="kill_nominator",
             nominator_id=nominator.id,
             nominator_name=nominator.name,
         )
-        engine.kill(nominator.id, DeathCause.EXECUTION)
-        engine.dispatch(
-            Event(
-                EventType.EXECUTION,
-                source=self,
-                targets=[nominator],
-                data={"cause": DeathCause.EXECUTION},
-            )
-        )
+        engine.kill(nominator.id, DeathCause.ABILITY, source=self)
         return super().reaction(event, engine)

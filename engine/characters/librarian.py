@@ -32,6 +32,7 @@ import random as _rand
 from typing import TYPE_CHECKING, List, Optional
 
 from engine.character import Character
+from engine.effect import SetupEffect
 from engine.enums import CharType, SetupMode
 from engine.event import Event, EventType
 from engine.prompt import (
@@ -44,6 +45,55 @@ from engine.prompt import (
 if TYPE_CHECKING:
     from engine.engine import Engine
     from engine.player import Player
+
+
+class LibrarianOutsiderEffect(SetupEffect):
+    """Marker on the seat the Librarian's first-night info will
+    point at as the Outsider-of-interest.
+
+    Setup-only, mutex with the WRONG marker. Higher autofill
+    priority than WRONG."""
+
+    kind = "librarian_outsider"
+    contributes_to_state = None
+    setup_only = True
+    mutex_kinds = ("librarian_wrong",)
+    autofill_priority = 10
+    purge_on_source_death = True
+    purge_on_source_character_change = True
+    deactivate_on_source_droisoned = False
+
+    @classmethod
+    def can_target(cls, engine: "Engine", chair_id: int) -> bool:
+        try:
+            p = engine.get_player(chair_id)
+        except KeyError:
+            return False
+        if p.character is None:
+            return False
+        # Outsider role (Spy can also register).
+        return p.character.char_type is CharType.OUTSIDER
+
+
+class LibrarianWrongEffect(SetupEffect):
+    """Marker on the WRONG seat for the Librarian's pair info."""
+
+    kind = "librarian_wrong"
+    contributes_to_state = None
+    setup_only = True
+    mutex_kinds = ("librarian_outsider",)
+    autofill_priority = 5
+    purge_on_source_death = True
+    purge_on_source_character_change = True
+    deactivate_on_source_droisoned = False
+
+    @classmethod
+    def can_target(cls, engine: "Engine", chair_id: int) -> bool:
+        try:
+            p = engine.get_player(chair_id)
+        except KeyError:
+            return False
+        return p.character is not None
 
 
 class Librarian(Character):
@@ -155,6 +205,43 @@ class Librarian(Character):
                 f"{self.player.name} (Librarian) WRONG token "
                 f"placed on the {librarian_wrong} (pre-set)."
             )
+        self._refresh_registry_effects(engine)
+
+    def _refresh_registry_effects(self, engine: "Engine") -> None:
+        """Synchronise the registry's Librarian seen + wrong effects
+        with the current pool/character state. Bridges legacy pool
+        storage with the registry-effect model. Idempotent."""
+        if self.player is None:
+            return
+        seen_chair: Optional[int] = None
+        wrong_chair: Optional[int] = None
+        if self._chosen_outsider:
+            for p in engine.players:
+                if (
+                    p.character is not None
+                    and p.character.name == self._chosen_outsider
+                ):
+                    seen_chair = p.id
+                    break
+        if self._chosen_wrong:
+            for p in engine.players:
+                if (
+                    p.character is not None
+                    and p.character.name == self._chosen_wrong
+                ):
+                    wrong_chair = p.id
+                    break
+        for old in list(engine.effects_sourced_by(self)):
+            if isinstance(old, (LibrarianOutsiderEffect, LibrarianWrongEffect)):
+                engine.purge_effect(old)
+        if seen_chair is not None:
+            engine.add_effect(LibrarianOutsiderEffect(
+                source=self, targets=[seen_chair],
+            ))
+        if wrong_chair is not None:
+            engine.add_effect(LibrarianWrongEffect(
+                source=self, targets=[wrong_chair],
+            ))
 
     def on_setup_ability(
         self,
@@ -170,6 +257,7 @@ class Librarian(Character):
                 self._chosen_outsider = outsider
             if wrong:
                 self._chosen_wrong = wrong
+            self._refresh_registry_effects(engine)
             return
         self.setup_ability(engine)
 
@@ -217,6 +305,9 @@ class Librarian(Character):
         # slots so the grimoire stops rendering the OUTSIDER / WRONG
         # tokens — display always matches state.
         engine.pool.clear_librarian_token_slots()
+        for old in list(engine.effects_sourced_by(self)):
+            if isinstance(old, (LibrarianOutsiderEffect, LibrarianWrongEffect)):
+                engine.purge_effect(old)
 
     def _find_player_with_role(
         self,
@@ -702,3 +793,6 @@ class Librarian(Character):
         # rendering the reminder tokens — display always matches
         # state, with no separate "first-night only" flag.
         engine.pool.clear_librarian_token_slots()
+        for old in list(engine.effects_sourced_by(self)):
+            if isinstance(old, (LibrarianOutsiderEffect, LibrarianWrongEffect)):
+                engine.purge_effect(old)

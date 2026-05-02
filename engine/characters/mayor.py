@@ -117,6 +117,7 @@ class Mayor(Character):
             # — the Mayor doesn't get an unnecessary ST decision and
             # the death is already prevented.
             and not event.data.get("cancelled")
+            and not event.data.get("force")
         ):
             self._maybe_redirect_night_kill(engine, event)
 
@@ -207,6 +208,10 @@ class Mayor(Character):
             # redirected target is the last evil player, good wins
             # without ever counting the Mayor as dead).
             event.data["cancelled"] = True
+            event.data["cancelled_by_character"] = "Mayor"
+            event.data["cancelled_reason"] = (
+                f"Mayor's death redirected to {target.name}"
+            )
             engine.log_reaction(
                 "Mayor",
                 (

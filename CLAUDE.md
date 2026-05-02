@@ -86,3 +86,35 @@ only fall back to `engine.script` when no preset is installed (used
 by tests that don't set one) or when the preset shipped without a
 roster file. Every character-side caller (`engine.characters.*`)
 goes through those engine helpers, so the scoping happens once.
+
+## Mutex tokens share an angle in the chair-token layout
+
+In `ui/static/index.html`, the `TOKEN_VIEW` table assigns each
+reminder-token kind a chair-relative angle (0° = up, +clockwise,
+30° spacing). **Mutually-exclusive token pairs must occupy the same
+relative position (same angle) to minimize chances of overlap with
+other tokens on the same chair.**
+
+A pair is "mutex" when the engine declares them so via
+`mutex_with` in the character's token spec (see
+`engine/characters/*.py`) — i.e. a chair can only ever carry one
+half of the pair at a time. Collapsing both kinds onto one angular
+slot is safe (they cannot co-occur) and frees the neighbouring
+slots for unrelated tokens, which widens the visual spread and
+reduces icon overlap on chairs that carry many tokens.
+
+Examples already in place:
+
+- `washerwoman_townsfolk` / `washerwoman_wrong` — both at -60°
+- `investigator_minion`   / `investigator_wrong`   — both at -90°
+- `librarian_outsider`    / `librarian_wrong`      — both at -120°
+
+When adding a new info ability that emits a SEEN/WRONG mutex pair
+(or any other engine-declared mutex pair), give both kinds the same
+`angle` value in `TOKEN_VIEW`, and update the angle map in the
+comment block above the table to list them on a single line marked
+`(mutex)`. Non-mutex tokens that happen to rarely co-occur (e.g.
+`imp_dead` / `scarlet_woman_is_demon` / `zombuul_dead` at 150°) may
+share an angle as a soft optimisation, but those cases need an
+overflow rule documented in the same comment block — they are not
+governed by this rule.

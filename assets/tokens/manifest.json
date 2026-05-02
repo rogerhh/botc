@@ -295,7 +295,7 @@
     "slug": "po"
   },
   "Poisoner": {
-    "icon": null,
+    "icon": "poisoner.png",
     "reminders": [
       {
         "icon": "poisoner_poisoned.png",
@@ -310,13 +310,22 @@
       {
         "icon": "professor_alive.png",
         "name": "ALIVE"
+      },
+      {
+        "icon": "professor_no_ability.png",
+        "name": "NO ABILITY"
       }
     ],
     "slug": "professor"
   },
   "Pukka": {
     "icon": "pukka.png",
-    "reminders": [],
+    "reminders": [
+      {
+        "icon": "pukka_poisoned.png",
+        "name": "POISONED"
+      }
+    ],
     "slug": "pukka"
   },
   "Ravenkeeper": {
@@ -331,7 +340,12 @@
   },
   "Sailor": {
     "icon": "sailor.png",
-    "reminders": [],
+    "reminders": [
+      {
+        "icon": "sailor_drunk.png",
+        "name": "DRUNK"
+      }
+    ],
     "slug": "sailor"
   },
   "Saint": {
@@ -376,7 +390,12 @@
   },
   "Tea Lady": {
     "icon": "tea_lady.png",
-    "reminders": [],
+    "reminders": [
+      {
+        "icon": "tea_lady_cannot_die.png",
+        "name": "CANNOT DIE"
+      }
+    ],
     "slug": "tea_lady"
   },
   "Tinker": {
@@ -419,8 +438,21 @@
     "slug": "washerwoman"
   },
   "Zombuul": {
-    "icon": null,
-    "reminders": [],
+    "icon": "zombuul.png",
+    "reminders": [
+      {
+        "icon": "zombuul_dead.png",
+        "name": "DEAD"
+      },
+      {
+        "icon": "zombuul_died_today.png",
+        "name": "DIED TODAY"
+      },
+      {
+        "icon": "life_token_back.png",
+        "name": "FLIPPED"
+      }
+    ],
     "slug": "zombuul"
   }
 }

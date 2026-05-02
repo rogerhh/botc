@@ -209,10 +209,19 @@ def test_poisoner_retarget_still_works_on_night_two() -> None:
 
 
 def _poisoner_token_seats(e: Engine) -> list:
-    """Return the player ids the Poisoner's POISONED reminder token is on."""
+    """Return the player ids the Poisoner's POISONED reminder token is on.
+
+    Post-Layer-2 the source of truth is the engine effect registry —
+    walk active ``PoisonerPoisonEffect``s sourced by the Poisoner.
+    """
+    from engine.characters.poisoner import PoisonerPoisonEffect
     poisoner = e.get_player(4).character
-    tokens = poisoner.compute_reminder_tokens(e)
-    return tokens.get("poisoned", [])
+    return [
+        tgt
+        for eff in e.effects_sourced_by(poisoner)
+        if isinstance(eff, PoisonerPoisonEffect) and eff.is_active
+        for tgt in eff.targets
+    ]
 
 
 def test_token_and_flag_clear_together_on_poisoner_death() -> None:

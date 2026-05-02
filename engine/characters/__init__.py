@@ -36,6 +36,12 @@ from engine.characters.courtier import Courtier
 from engine.characters.tea_lady import TeaLady
 from engine.characters.pacifist import Pacifist
 from engine.characters.fool import Fool
+from engine.characters.grandmother import Grandmother
+from engine.characters.exorcist import Exorcist
+from engine.characters.gambler import Gambler
+from engine.characters.gossip import Gossip
+from engine.characters.professor import Professor
+from engine.characters.minstrel import Minstrel
 
 # --- Outsiders -------------------------------------------------------
 from engine.characters.butler import Butler
@@ -43,15 +49,27 @@ from engine.characters.drunk import Drunk
 from engine.characters.recluse import Recluse
 from engine.characters.saint import Saint
 from engine.characters.klutz import Klutz
+from engine.characters.goon import Goon
+from engine.characters.lunatic import Lunatic
+from engine.characters.tinker import Tinker
+from engine.characters.moonchild import Moonchild
 
 # --- Minions ---------------------------------------------------------
 from engine.characters.poisoner import Poisoner
 from engine.characters.spy import Spy
 from engine.characters.scarlet_woman import ScarletWoman
 from engine.characters.baron import Baron
+from engine.characters.godfather import Godfather
+from engine.characters.devils_advocate import DevilsAdvocate
+from engine.characters.assassin import Assassin
+from engine.characters.mastermind import Mastermind
 
 # --- Demons ----------------------------------------------------------
 from engine.characters.imp import Imp
+from engine.characters.zombuul import Zombuul
+from engine.characters.pukka import Pukka
+from engine.characters.shabaloth import Shabaloth
+from engine.characters.po import Po
 
 
 # Add new implementations here as they're written.
@@ -80,19 +98,37 @@ _IMPLEMENTED: tuple = (
     TeaLady,
     Pacifist,
     Fool,
+    Grandmother,
+    Exorcist,
+    Gambler,
+    Gossip,
+    Professor,
+    Minstrel,
     # Outsiders
     Butler,
     Drunk,
     Recluse,
     Saint,
     Klutz,
+    Goon,
+    Lunatic,
+    Tinker,
+    Moonchild,
     # Minions
     Poisoner,
     Spy,
     ScarletWoman,
     Baron,
+    Godfather,
+    DevilsAdvocate,
+    Assassin,
+    Mastermind,
     # Demons
     Imp,
+    Zombuul,
+    Pukka,
+    Shabaloth,
+    Po,
 )
 
 
@@ -144,17 +180,35 @@ __all__ = [
     "TeaLady",
     "Pacifist",
     "Fool",
+    "Grandmother",
+    "Exorcist",
+    "Gambler",
+    "Gossip",
+    "Professor",
+    "Minstrel",
     # Outsiders
     "Butler",
     "Drunk",
     "Recluse",
     "Saint",
     "Klutz",
+    "Goon",
+    "Lunatic",
+    "Tinker",
+    "Moonchild",
     # Minions
     "Poisoner",
     "Spy",
     "ScarletWoman",
     "Baron",
+    "Godfather",
+    "DevilsAdvocate",
+    "Assassin",
+    "Mastermind",
     # Demons
     "Imp",
+    "Zombuul",
+    "Pukka",
+    "Shabaloth",
+    "Po",
 ]

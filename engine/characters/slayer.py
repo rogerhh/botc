@@ -25,6 +25,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from engine.character import Character
+from engine.effect import Effect
 from engine.enums import CharType, DeathCause
 from engine.event import Event, EventType
 from engine.prompt import (
@@ -34,6 +35,18 @@ from engine.prompt import (
 
 if TYPE_CHECKING:
     from engine.engine import Engine
+
+
+class SlayerNoAbilityEffect(Effect):
+    """Once-per-game NO ABILITY marker on the Slayer's seat.
+    Persists post-mortem; only purged on character change."""
+
+    kind = "slayer_no_ability"
+    contributes_to_state = None
+    purge_on_source_death = False
+    purge_on_source_character_change = True
+    deactivate_on_source_droisoned = False
+
 
 class Slayer(Character):
     name = "Slayer"
@@ -55,15 +68,9 @@ class Slayer(Character):
         super().__init__(player)
         self._used: bool = False
 
-    def compute_reminder_tokens(self, engine: "Engine") -> "dict[str, list[int]]":
-        """Persistent NO ABILITY marker once the Slayer has used their shot.
-
-        Survives the Slayer's own death — the marker tracks the seat,
-        not the source's current ability state.
-        """
-        if self.player is None or not self._used:
-            return {}
-        return {"slayer_no_ability": [self.player.id]}
+    # NO ABILITY marker emitted via ``SlayerNoAbilityEffect`` once
+    # ``_used`` is set; rendering goes through the registry's
+    # token_kind_for_target. No legacy compute_reminder_tokens.
 
     def daytime_ability(self, engine: "Engine") -> None:
         if self.player is None or self.player.dead:
@@ -104,6 +111,9 @@ class Slayer(Character):
         self._used = True
         if self.player is not None:
             self.player.once_per_game_used = True
+            engine.add_effect(SlayerNoAbilityEffect(
+                source=self, targets=[self.player.id],
+            ))
 
         engine.dispatch(
             Event(EventType.SELECT, source=self, targets=[target])

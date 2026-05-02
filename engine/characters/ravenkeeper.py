@@ -3,8 +3,13 @@
     "If you die at night, you are woken to choose a player: you learn
      their character."
 
-The Ravenkeeper acts in the other-nights order, but only triggers if
-they died THIS night (Demon kill, ability, anything except execution).
+The Ravenkeeper acts in the other-nights order, but only triggers
+when they died this night — i.e. the player is in the engine's
+``pending_night_deaths`` list. Cause does not matter: a Demon kill,
+an ability-cause death (Grandmother grief, Tinker, etc.), or a
+storyteller-attributed night death all arm the ability.
+``DeathCause.EXECUTION`` cannot reach this branch because executions
+land during the day and are never appended to ``pending_night_deaths``.
 
 The Ravenkeeper uses :meth:`Character.registers_as` (with all four
 character-type categories) to learn the chosen player's *registered*
@@ -22,7 +27,7 @@ import random as _rand
 from typing import TYPE_CHECKING
 
 from engine.character import Character
-from engine.enums import CharType, DeathCause
+from engine.enums import CharType
 from engine.event import Event, EventType
 from engine.prompt import (
     InformationPrompt,
@@ -57,10 +62,12 @@ class Ravenkeeper(Character):
             return False
         if self.player is None:
             return False
+        # Any death at night arms the Ravenkeeper. The
+        # ``pending_night_deaths`` membership is the canonical
+        # "died this night" gate — executions never appear there
+        # (engine.kill skips appending when cause is EXECUTION,
+        # and engine.execute_player runs only during day anyway).
         if self.player not in engine.pending_night_deaths:
-            return False
-        from engine.enums import DeathCause as _DC
-        if self.player.death_cause is _DC.EXECUTION:
             return False
         return True
 
@@ -70,8 +77,6 @@ class Ravenkeeper(Character):
         if self.player is None or self.player.alive:
             return
         if self.player not in engine.pending_night_deaths:
-            return
-        if self.player.death_cause is DeathCause.EXECUTION:
             return
 
         engine.dispatch(

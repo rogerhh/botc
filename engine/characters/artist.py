@@ -27,10 +27,21 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from engine.character import Character
+from engine.effect import Effect
 from engine.enums import CharType
 
 if TYPE_CHECKING:
     from engine.engine import Engine
+
+
+class ArtistNoAbilityEffect(Effect):
+    """NO ABILITY marker on the Artist's seat once the question is asked."""
+
+    kind = "artist_no_ability"
+    contributes_to_state = None
+    purge_on_source_death = False
+    purge_on_source_character_change = True
+    deactivate_on_source_droisoned = False
 
 
 class Artist(Character):
@@ -51,16 +62,8 @@ class Artist(Character):
         super().__init__(player)
         self._used: bool = False
 
-    def compute_reminder_tokens(self, engine: "Engine") -> "dict[str, list[int]]":
-        """Persistent NO ABILITY marker once the Artist has asked their question.
-
-        Survives the Artist's own death — the marker tracks the seat,
-        not the source's current ability state, so a revived Artist
-        can't ask a second question.
-        """
-        if self.player is None or not self._used:
-            return {}
-        return {"artist_no_ability": [self.player.id]}
+    # NO ABILITY emitted via ArtistNoAbilityEffect once ``_used`` is set;
+    # rendered through the registry.
 
     def daytime_ability(self, engine: "Engine") -> None:
         """Mark the Artist's once-per-game question as spent.
@@ -86,6 +89,9 @@ class Artist(Character):
         self._used = True
         if self.player is not None:
             self.player.once_per_game_used = True
+            engine.add_effect(ArtistNoAbilityEffect(
+                source=self, targets=[self.player.id],
+            ))
 
         engine.log(
             f"Artist {self.player.name} asked their once-per-game "

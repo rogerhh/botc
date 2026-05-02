@@ -3,20 +3,28 @@
     "The 1st time you die, you don't."
 
 A passive once-per-game survival ability. The Fool watches every
-:class:`engine.event.EventType.PRE_DEATH` event targeting their seat;
-the *first* one that would actually land is cancelled, and the slot
-is consumed (``self._used = True``). After that, the Fool dies
-normally.
+:class:`engine.event.EventType.PRE_DEATH_LAST_RESORT` event targeting
+their seat; the *first* one that would actually land is cancelled,
+and the slot is consumed (``self._used = True``). After that, the
+Fool dies normally.
 
 Per the wiki: "If another character's ability protects the Fool from
-death, the Fool does not use their ability." This falls out of the
-PRE_DEATH cancellation chain naturally — Monk-style demon protection
-is checked *before* PRE_DEATH dispatch in :meth:`Engine.kill`, and
-other PRE_DEATH-cancelling protectors (Tea Lady, Sailor, Innkeeper
-SAFE marker) react first or are checked separately. By the time
-control reaches the Fool's reaction, ``event.data["cancelled"]`` is
-already True if any other protector saved them, and we skip without
-spending the slot.
+death, the Fool does not use their ability." The Fool listens on the
+**last-resort** PRE_DEATH pass rather than the standard one so this
+rule holds independent of seat order. The engine only fires
+``PRE_DEATH_LAST_RESORT`` when no standard protector
+(Innkeeper SAFE, Tea Lady, Sailor, Soldier, Mayor redirect, Pacifist,
+Devil's Advocate, …) cancelled the kill on the first pass. By the
+time the Fool's reaction is invoked here, the death is genuinely
+about to land — so the once-per-game slot is spent only on actual
+deaths, never wasted on a death somebody else was already preventing.
+
+Earlier versions of this docstring claimed the standard PRE_DEATH
+chain handled this "naturally" because the cancellation flag would
+be set before the Fool's reaction fired. That was incorrect — the
+engine dispatches reactions in seat order, so a Fool seated *before*
+their protector would burn the slot first. The last-resort pass
+removes that ordering hazard.
 
 Drunkenness / poisoning
 -----------------------
@@ -38,11 +46,23 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from engine.character import Character
+from engine.effect import Effect
 from engine.enums import CharType
 from engine.event import Event, EventType
 
 if TYPE_CHECKING:
     from engine.engine import Engine
+
+
+class FoolNoAbilityEffect(Effect):
+    """NO ABILITY marker on the Fool's seat once their first-death
+    save has been consumed."""
+
+    kind = "fool_no_ability"
+    contributes_to_state = None
+    purge_on_source_death = False
+    purge_on_source_character_change = True
+    deactivate_on_source_droisoned = False
 
 
 class Fool(Character):
@@ -63,17 +83,23 @@ class Fool(Character):
         # ``_used`` attribute matching the conventional flag name).
         self._used: bool = False
 
-    def compute_reminder_tokens(self, engine: "Engine") -> "dict[str, list[int]]":
-        """Surface the NO ABILITY token once the slot has been spent."""
-        if self.player is None or self.player.character is None:
-            return {}
-        if not self._used:
-            return {}
-        return {"fool_no_ability": [self.player.id]}
+    # NO ABILITY rendered via FoolNoAbilityEffect emitted when the
+    # save fires (in ``reaction``). Per Q4: the marker persists
+    # post-mortem.
 
     def reaction(self, event: Event, engine: "Engine") -> None:
+        # Listens on ``PRE_DEATH_LAST_RESORT`` — see the module
+        # docstring above for the full rationale. In short: the
+        # engine only fires the last-resort pass when no standard
+        # protector (Innkeeper SAFE, Tea Lady, Sailor, Soldier, Mayor,
+        # Pacifist, Devil's Advocate, …) cancelled the kill, so the
+        # Fool's once-per-game slot is spent only when the death
+        # would otherwise actually land. This makes the wiki's "If
+        # another character's ability protects the Fool from death,
+        # the Fool does not use their ability" hold regardless of
+        # seat order.
         if (
-            event.type is EventType.PRE_DEATH
+            event.type is EventType.PRE_DEATH_LAST_RESORT
             and self.player is not None
             and not self._used
             and self.player.has_ability
@@ -87,6 +113,9 @@ class Fool(Character):
             # the engine's standard once-per-game machinery both see the
             # slot as consumed.
             self.player.once_per_game_used = True
+            engine.add_effect(FoolNoAbilityEffect(
+                source=self, targets=[self.player.id],
+            ))
             engine.log_reaction(
                 "Fool",
                 (

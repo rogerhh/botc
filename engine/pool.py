@@ -9,6 +9,7 @@ Owned by the engine post-refactor. The pool tracks:
   * The Washerwoman's WRONG role (in-bag).
   * The Librarian's seen-Outsider role (in-bag).
   * The Investigator's seen-Minion role (in-bag).
+  * The Grandmother's grandchild role (in-bag, good only).
 
 Auto-fill rules ensure that whenever the FT / WW / Librarian /
 Investigator are in the pool their dependent slots are non-None as long
@@ -83,6 +84,7 @@ class CharacterPool:
         self._librarian_wrong: Optional[str] = None
         self._investigator_minion: Optional[str] = None
         self._investigator_wrong: Optional[str] = None
+        self._grandmother_grandchild: Optional[str] = None
         self._lock = threading.Lock()
 
     # ------------------------------------------------------------------
@@ -138,6 +140,10 @@ class CharacterPool:
     def investigator_wrong(self) -> Optional[str]:
         with self._lock:
             return self._investigator_wrong
+
+    def grandmother_grandchild(self) -> Optional[str]:
+        with self._lock:
+            return self._grandmother_grandchild
 
     # ------------------------------------------------------------------
     # Internal helpers (assume self._lock is held).
@@ -378,6 +384,44 @@ class CharacterPool:
             random.choice(candidates) if candidates else None
         )
 
+    def _autofill_grandmother_grandchild(self) -> None:
+        """Pick the grandchild role for the Grandmother.
+
+        The grandchild is "a good player" — any Townsfolk or Outsider
+        role currently in the pool. Self-avoidance: the Grandmother
+        is not eligible to be her own grandchild. With no eligible
+        chair the slot stays ``None`` (degenerate setup; the
+        Grandmother ability has nothing to point at).
+
+        Self-avoidance: if the slot is currently sitting on
+        ``"Grandmother"`` (a degenerate auto-pick from a moment when
+        the Grandmother was the only Good role in the pool) and another
+        good role has since been added, switch to it immediately.
+        """
+        if "Grandmother" not in self._names:
+            self._grandmother_grandchild = None
+            return
+        good = self._good_in_pool()
+        non_self = [n for n in good if n != "Grandmother"]
+        if self._grandmother_grandchild == "Grandmother" and non_self:
+            self._grandmother_grandchild = random.choice(non_self)
+            return
+        if self._grandmother_grandchild in self._names and (
+            self._grandmother_grandchild != "Grandmother"
+            or not non_self
+        ):
+            spec = script_data.SCRIPT_BY_NAME.get(
+                self._grandmother_grandchild
+            )
+            if spec is not None and spec.char_type in (
+                CharType.TOWNSFOLK, CharType.OUTSIDER
+            ):
+                return
+        candidates = non_self or good
+        self._grandmother_grandchild = (
+            random.choice(candidates) if candidates else None
+        )
+
     def _autofill_investigator_wrong(self) -> None:
         """If the Investigator is in the pool but no WRONG-role is
         set, pick one uniformly at random from the in-pool roles that
@@ -423,6 +467,7 @@ class CharacterPool:
             self._autofill_librarian_wrong()
             self._autofill_investigator_minion()
             self._autofill_investigator_wrong()
+            self._autofill_grandmother_grandchild()
             return True
 
     def remove(self, name: str) -> bool:
@@ -443,6 +488,8 @@ class CharacterPool:
             if name == "Investigator":
                 self._investigator_minion = None
                 self._investigator_wrong = None
+            if name == "Grandmother":
+                self._grandmother_grandchild = None
             if name == self._ft_red_herring:
                 self._ft_red_herring = None
                 self._autofill_ft_red_herring()
@@ -467,6 +514,9 @@ class CharacterPool:
             if name == self._investigator_wrong:
                 self._investigator_wrong = None
                 self._autofill_investigator_wrong()
+            if name == self._grandmother_grandchild:
+                self._grandmother_grandchild = None
+                self._autofill_grandmother_grandchild()
             return True
 
     def clear(self) -> None:
@@ -480,6 +530,7 @@ class CharacterPool:
             self._librarian_wrong = None
             self._investigator_minion = None
             self._investigator_wrong = None
+            self._grandmother_grandchild = None
 
     def set_many(self, names: List[str]) -> List[str]:
         seen: set = set()
@@ -530,6 +581,12 @@ class CharacterPool:
                 or self._investigator_wrong == "Investigator"
             ):
                 self._investigator_wrong = None
+            if (
+                "Grandmother" not in deduped
+                or self._grandmother_grandchild not in deduped
+                or self._grandmother_grandchild == "Grandmother"
+            ):
+                self._grandmother_grandchild = None
             self._autofill_ft_red_herring()
             self._autofill_washerwoman_townsfolk()
             if (
@@ -552,6 +609,7 @@ class CharacterPool:
             ):
                 self._investigator_wrong = None
             self._autofill_investigator_wrong()
+            self._autofill_grandmother_grandchild()
             return list(self._names)
 
     def set_drunk_fake(self, name: Optional[str]) -> Optional[str]:
@@ -803,3 +861,32 @@ class CharacterPool:
                 raise ValueError(f"unknown character {name!r}")
             self._investigator_wrong = name
             return self._investigator_wrong
+
+    def set_grandmother_grandchild(self, name: Optional[str]) -> Optional[str]:
+        """Set the Grandmother's grandchild role, or pass None to clear it.
+
+        Raises ValueError if the pool doesn't contain the Grandmother,
+        if ``name`` isn't already in the pool, if ``name`` is the
+        Grandmother herself, or if ``name`` is not a Townsfolk or
+        Outsider role (the grandchild is "a good player").
+        """
+        with self._lock:
+            if name is None:
+                self._grandmother_grandchild = None
+                return None
+            if "Grandmother" not in self._names:
+                raise ValueError("Grandmother is not in the pool")
+            if name not in self._names:
+                raise ValueError(
+                    "Grandmother's grandchild role must already be in the pool")
+            if name == "Grandmother":
+                raise ValueError(
+                    "Grandmother's grandchild can't be the Grandmother herself")
+            spec = script_data.SCRIPT_BY_NAME.get(name)
+            if spec is None:
+                raise ValueError(f"unknown character {name!r}")
+            if spec.char_type not in (CharType.TOWNSFOLK, CharType.OUTSIDER):
+                raise ValueError(
+                    "Grandmother's grandchild must be a Townsfolk or Outsider")
+            self._grandmother_grandchild = name
+            return self._grandmother_grandchild

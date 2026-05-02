@@ -8,34 +8,31 @@ clockwise, skipping past dead seats. While both of those neighbours
 are good, neither can die from any cause (Demon kill, Godfather,
 Gossip, execution, etc.).
 
-The implementation listens on :class:`EventType.PRE_DEATH` and
-cancels the death whenever the dying seat is one of the Tea Lady's
-two alive neighbours and both of those neighbours are currently good.
-The cancellation channel is the same ``event.data["cancelled"]``
-flag used by Mayor / Pacifist / Sailor / Fool.
+Implementation (registry-managed)
+---------------------------------
+The Tea Lady emits one :class:`TeaLadyCannotDieEffect` per protected
+neighbour (Option B from the design doc). The set of effects is
+*refreshed* whenever the seating-ring composition could change:
 
-The two CANNOT DIE reminder tokens surface continuously through
-:meth:`compute_reminder_tokens` — visibility is purely a function of
-state, so the moment a neighbour dies and a new neighbour cycles into
-view, the tokens reposition automatically without any per-character
-event reaction.
+  * SETUP_END — initial computation when the game starts.
+  * DEATH / REVIVE on any seat — neighbours may shift.
+  * ALIGNMENT_CHANGE on any seat — Goon flip, etc.
 
-Drunkenness / poisoning
------------------------
-A drunk or poisoned Tea Lady does not protect her neighbours.
-Reaction and reminder-token visibility both gate on
-``self.player.has_ability``.
+A refresh purges all currently-emitted Tea Lady effects and re-emits
+fresh ones for the current good-neighbour pair. The effect's
+``resolve_event`` cancels any PRE_DEATH on its target (any cause —
+Tea Lady's protection is broad), respecting the ``force`` flag for
+Assassin's bypass.
 
-Alignment scoping
------------------
-We compare each alive neighbour's actual ``Player.alignment`` to
-:class:`Alignment.GOOD`. The wiki says "currently good" — a Recluse
-seated next to the Tea Lady is alignment=GOOD even if they may
-register as evil for *detection* abilities elsewhere; the protection
-follows the seat's true alignment. If the storyteller wants to flip
-a Recluse's effective alignment for a specific ruling, the existing
-:meth:`Engine.set_alignment` mutator handles it and the Tea Lady's
-state-driven reminder updates accordingly.
+The standard Effect lifecycle handles the easy cases:
+
+  * ``purge_on_source_death = True`` — dead Tea Lady purges all her
+    effects, so subsequent kills on former neighbours land normally.
+  * ``deactivate_on_source_droisoned = True`` — drunk/poisoned Tea
+    Lady's effects deactivate, so neighbours lose protection.
+
+Alignment scoping follows the seat's true ``Player.alignment`` —
+Recluse misregistration doesn't apply (the wiki ruling).
 """
 
 from __future__ import annotations
@@ -43,12 +40,55 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, List, Optional
 
 from engine.character import Character
+from engine.effect import Effect
 from engine.enums import Alignment, CharType
-from engine.event import Event, EventType
+from engine.event import Event, EventOutcome, EventType
 
 if TYPE_CHECKING:
     from engine.engine import Engine
     from engine.player import Player
+
+
+class TeaLadyCannotDieEffect(Effect):
+    """Tea Lady's per-neighbour cannot-die protection.
+
+    Cancels any PRE_DEATH on the target unless ``force=True``.
+    Lifetime is until-source-death (no phase boundary expiry); the
+    Tea Lady's ``reaction()`` refreshes the effect list when the
+    seating ring changes."""
+
+    kind = "tea_lady_cannot_die"
+    contributes_to_state = None
+
+    def resolve_event(
+        self, engine: "Engine", event: Event
+    ) -> Optional[EventOutcome]:
+        if (
+            event.type is EventType.PRE_DEATH
+            and not event.data.get("cancelled")
+            and not event.data.get("force")
+        ):
+            event.data["cancelled_by_character"] = "Tea Lady"
+            event.data["cancelled_reason"] = (
+                "Tea Lady protects good neighbours"
+            )
+            try:
+                tgt = event.targets[0] if event.targets else None
+                tgt_name = tgt.name if tgt else "?"
+                engine.log_reaction(
+                    "Tea Lady",
+                    (
+                        f"{tgt_name} cannot die "
+                        f"(Tea Lady protects good neighbours)."
+                    ),
+                    target=tgt,
+                    trigger="pre_death",
+                    effect="tea_lady_neighbour_protected",
+                )
+            except Exception:  # pragma: no cover (defensive)
+                pass
+            return EventOutcome.CANCEL
+        return None
 
 
 class TeaLady(Character):
@@ -70,10 +110,9 @@ class TeaLady(Character):
     def _alive_neighbours(self, engine: "Engine") -> List["Player"]:
         """Return the Tea Lady's two alive neighbours, skipping dead seats.
 
-        The seating ring is read off ``engine.players`` (already sorted
-        by seat). Neighbours are computed dynamically every call so any
-        seat-state change (someone dies, someone is revived, alignment
-        flip) is immediately reflected without bookkeeping.
+        The seating ring is read off ``engine.players``. Neighbours
+        are computed dynamically every call so any seat-state change
+        is immediately reflected without bookkeeping.
         """
         if self.player is None:
             return []
@@ -82,11 +121,12 @@ class TeaLady(Character):
         if n == 0:
             return []
         try:
-            idx = next(i for i, p in enumerate(ring) if p.id == self.player.id)
+            idx = next(
+                i for i, p in enumerate(ring) if p.id == self.player.id
+            )
         except StopIteration:
             return []
-        # Walk clockwise, then counter-clockwise, picking the first alive
-        # seat we land on that isn't the Tea Lady herself.
+
         def walk(step: int) -> Optional["Player"]:
             for k in range(1, n):
                 p = ring[(idx + step * k) % n]
@@ -104,63 +144,48 @@ class TeaLady(Character):
                 out.append(p)
         return out
 
-    def _both_neighbours_good(self, engine: "Engine") -> bool:
+    def _refresh_effects(self, engine: "Engine") -> None:
+        """Purge all Tea Lady-sourced effects and re-emit for the
+        current good-neighbour pair (if both neighbours are good and
+        the Tea Lady is alive + has-ability).
+
+        Idempotent and cheap: called from every event that could
+        change the relevant state (DEATH, REVIVE, ALIGNMENT_CHANGE,
+        and at SETUP_END for the initial population).
+        """
+        # Purge any existing Tea Lady effects.
+        for eff in list(engine.effects_sourced_by(self)):
+            if isinstance(eff, TeaLadyCannotDieEffect):
+                engine.purge_effect(eff)
+
+        # Conditions for protection: Tea Lady alive + has-ability,
+        # both alive neighbours good (i.e. exactly two of them and
+        # both good).
+        if self.player is None or not self.player.alive or not self.player.has_ability:
+            return
         neighbours = self._alive_neighbours(engine)
         if len(neighbours) < 2:
-            # With only 0 or 1 alive neighbour, the rulebook's "both
-            # alive neighbours" condition cannot be met: in a 3-player
-            # endgame this is the corner case where the Tea Lady has
-            # only one distinct alive neighbour, so we treat it as not
-            # protecting.
-            return False
-        return all(p.alignment is Alignment.GOOD for p in neighbours)
+            return
+        if not all(p.alignment is Alignment.GOOD for p in neighbours):
+            return
+
+        for p in neighbours:
+            engine.add_effect(TeaLadyCannotDieEffect(
+                source=self, targets=[p.id],
+            ))
 
     # ------------------------------------------------------------------
-    # Reminder tokens.
-    # ------------------------------------------------------------------
-
-    def compute_reminder_tokens(self, engine: "Engine") -> "dict[str, list[int]]":
-        """Place the CANNOT DIE token on each protected neighbour.
-
-        Visibility is purely state-driven: the Tea Lady must be alive
-        and have her ability, and both alive neighbours must currently
-        be good. Otherwise no tokens.
-        """
-        if self.player is None or not self.player.has_ability:
-            return {}
-        if not self._both_neighbours_good(engine):
-            return {}
-        ids = [p.id for p in self._alive_neighbours(engine)]
-        if not ids:
-            return {}
-        return {"tea_lady_cannot_die": ids}
-
-    # ------------------------------------------------------------------
-    # Reaction.
+    # Reaction — refresh trigger.
     # ------------------------------------------------------------------
 
     def reaction(self, event: Event, engine: "Engine") -> None:
-        if (
-            event.type is EventType.PRE_DEATH
-            and self.player is not None
-            and self.player.has_ability
-            and not event.data.get("cancelled")
-            and event.targets
+        # Refresh on ring-shape or alignment changes. Cheap: O(N) per
+        # event, called only on the relevant kinds.
+        if event.type in (
+            EventType.SETUP_END,
+            EventType.DEATH,
+            EventType.REVIVE,
+            EventType.ALIGNMENT_CHANGE,
         ):
-            target = event.targets[0]
-            neighbours = self._alive_neighbours(engine)
-            if any(p.id == target.id for p in neighbours):
-                if self._both_neighbours_good(engine):
-                    event.data["cancelled"] = True
-                    engine.log_reaction(
-                        "Tea Lady",
-                        (
-                            f"{target.name} cannot die "
-                            f"(Tea Lady protects good neighbours)."
-                        ),
-                        target=target,
-                        trigger="pre_death",
-                        effect="tea_lady_neighbour_protected",
-                    )
-                    return
+            self._refresh_effects(engine)
         return super().reaction(event, engine)

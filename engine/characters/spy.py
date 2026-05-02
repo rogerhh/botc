@@ -35,10 +35,11 @@ Two pieces:
 
 Drunkenness / poisoning: a drunk or poisoned Spy still sees the
 grimoire (the rule isn't really an "ability", it's just exposure).
-We pass through the prompt regardless. Misregistration is always a
-Storyteller call regardless of the Spy's drunk/poisoned state — the
-override fires the same way (``has_ability`` is irrelevant to
-registration).
+We pass through the prompt regardless. **Misregistration, by
+contrast, IS an ability** — when the Spy is drunk or poisoned the
+``registers_as`` override no-ops and the Spy registers as the Spy
+(a Minion). The Spy ability text says "even if dead", so death
+does NOT disable the override; only drunk / poisoned does.
 """
 
 from __future__ import annotations
@@ -255,6 +256,14 @@ class Spy(Character):
         flow.
         """
         from engine.characters.stubs import GoodStub, TownsfolkStub, OutsiderStub
+
+        # Misregistration IS an ability. A drunk or poisoned Spy
+        # registers as the Spy (a Minion) — no Storyteller prompt,
+        # no eligible-list construction. Death does NOT disable the
+        # override (ability text: "even if dead"); only drunk /
+        # poisoned does.
+        if self.player and (self.player.drunk or self.player.poisoned):
+            return self.name
 
         # Pull the per-check restriction (if any). Used by the
         # Lib/WW seen-on-Spy paths to pin the registration to a

@@ -1302,19 +1302,46 @@
         continue;
       }
 
-      appendChairNumber(g, c.id);
+      // Evil chairs flip: seat number drops to the bottom, character
+      // row mirrors above the player name. Driven by the *live*
+      // alignment on the chair (``c.alignment``), not the static
+      // ``char_type`` — alignment is mutable (e.g. the Goon flips
+      // its own alignment with its ability), and the chair has to
+      // follow that runtime state without a client-side allowlist
+      // of "always-evil" characters.
+      const isEvil = (c.alignment === "evil");
+
+      appendChairNumber(g, c.id, isEvil);
 
       if (name) {
-        const tName = svgText("chair-name", name, 0, -5);
-        g.appendChild(tName);
-        textsToFit.push(tName);
-        if (character) {
-          const tChar = svgText("chair-character", characterDisplay, 0, 22);
+        if (character && isEvil) {
+          // Mirrored across the chair center: character at y=-22
+          // (above), player name at y=+5 (below). These are the
+          // negatives of the good-side y=22 / y=-5 positions, so the
+          // evil chair reads as the top-to-bottom reflection of a
+          // good chair.
+          const tChar = svgText("chair-character", characterDisplay, 0, -22);
           g.appendChild(tChar);
           textsToFit.push(tChar);
+          const tName = svgText("chair-name", name, 0, 5);
+          g.appendChild(tName);
+          textsToFit.push(tName);
+        } else {
+          const tName = svgText("chair-name", name, 0, -5);
+          g.appendChild(tName);
+          textsToFit.push(tName);
+          if (character) {
+            const tChar = svgText("chair-character", characterDisplay, 0, 22);
+            g.appendChild(tChar);
+            textsToFit.push(tChar);
+          }
         }
       } else if (character) {
-        const tChar = svgText("chair-character", characterDisplay, 0, 10);
+        // No player name yet — good chairs offset the character
+        // slightly below center (y=10) so the seat number above
+        // breathes; evil chairs mirror that to y=-10.
+        const tChar = svgText(
+          "chair-character", characterDisplay, 0, isEvil ? -10 : 10);
         g.appendChild(tChar);
         textsToFit.push(tChar);
       }
@@ -1413,11 +1440,14 @@
     }
   }
 
-  function appendChairNumber(g, num) {
+  // Evil chairs (Minion / Demon) flip the seat number to the bottom
+  // of the chair so the chair reads as the inverted twin of a good
+  // chair. ``evil`` is derived from ``c.char_type`` in render().
+  function appendChairNumber(g, num, evil) {
     const t = document.createElementNS(SVG_NS, "text");
     t.setAttribute("class", "chair-num");
     t.setAttribute("x", "0");
-    t.setAttribute("y", "-37");
+    t.setAttribute("y", evil ? "37" : "-37");
     t.setAttribute("dominant-baseline", "central");
     t.textContent = String(num);
     g.appendChild(t);
@@ -2054,11 +2084,24 @@
       const correctIds = Array.isArray(correctRaw)
         ? correctRaw.map(Number)
         : (typeof correctRaw === "number" ? [correctRaw] : []);
+      // Sentinel ``meta.decline_id`` (Po / Professor / Assassin) is
+      // mixed into ``eligible_player_ids`` to offer a "decline" choice;
+      // render it as a labeled button instead of a phantom Player #0.
+      const declineId = (typeof meta.decline_id === "number")
+        ? meta.decline_id
+        : null;
+      const declineLabel = meta.decline_label || "Decline (no target)";
       eligible.forEach(pid => {
         const opt = document.createElement("button");
         opt.type = "button";
         opt.className = "option";
-        opt.textContent = (namesById.get(pid) || ("Player " + pid)) + " (#" + pid + ")";
+        const isDecline = (declineId !== null && pid === declineId);
+        if (isDecline) {
+          opt.textContent = declineLabel;
+          opt.classList.add("decline-option");
+        } else {
+          opt.textContent = (namesById.get(pid) || ("Player " + pid)) + " (#" + pid + ")";
+        }
         if (_selectedPlayerIds.includes(pid)) opt.classList.add("default-hint");
         if (correctIds.includes(pid)) opt.classList.add("correct-hint");
         opt.dataset.pid = String(pid);

@@ -20,10 +20,35 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Optional
 
 from engine.character import Character
+from engine.effect import Effect
 from engine.enums import CharType, SetupMode
 
 if TYPE_CHECKING:
     from engine.engine import Engine
+
+
+class DrunkSelfDrunkEffect(Effect):
+    """The Drunk character's permanent self-drunkness.
+
+    Self-source effect (source == target). The unique exemption to the
+    droison-deactivation rule per the design doc:
+    ``deactivate_on_source_droisoned = False``. This means the Drunk
+    character is always drunk regardless of any other droison source —
+    being additionally poisoned by a Poisoner doesn't deactivate this
+    effect (the Drunk stays drunk; the Poisoner's effect adds the
+    ``poisoned`` flag on top).
+
+    Persists post-mortem (``purge_on_source_death = False``) since the
+    state of "this seat is the Drunk" is permanent. Purges on
+    character change (the new role doesn't inherit the Drunk's
+    drunkness)."""
+
+    kind = "drunk"
+    contributes_to_state = "drunk"
+    purge_on_source_death = False
+    purge_on_source_character_change = True
+    deactivate_on_source_droisoned = False
+
 
 class Drunk(Character):
     name = "Drunk"
@@ -94,11 +119,21 @@ class Drunk(Character):
             f"{drunk_fake} (pre-set from setup)."
         )
 
-    def compute_reminder_tokens(self, engine: "Engine") -> "dict[str, list[int]]":
-        """Place the IS THE DRUNK token on the Drunk's own seat."""
+    def _ensure_self_drunk_effect(self, engine: "Engine") -> None:
+        """Add the DrunkSelfDrunkEffect to the registry if not already
+        present. Idempotent: multiple calls add at most one effect.
+        """
         if self.player is None:
-            return {}
-        return {"drunk": [self.player.id]}
+            return
+        existing = [
+            e for e in engine.effects_sourced_by(self)
+            if isinstance(e, DrunkSelfDrunkEffect)
+        ]
+        if existing:
+            return
+        engine.add_effect(DrunkSelfDrunkEffect(
+            source=self, targets=[self.player.id],
+        ))
 
     def on_assign_to_seat(self, engine: "Engine") -> None:
         """Mark the Drunk seat drunk; seed the perceived-TF placeholder.
@@ -109,7 +144,7 @@ class Drunk(Character):
         """
         if self.player is None:
             return
-        self.player.set_drunk(True)
+        self._ensure_self_drunk_effect(engine)
         if self.player.perceived_character_name is None:
             self.player.perceived_character_name = "Townsfolk"
 
@@ -176,7 +211,7 @@ class Drunk(Character):
         if self.player is None:
             return
         # Mark the Drunk as drunk in either mode.
-        self.player.set_drunk(True)
+        self._ensure_self_drunk_effect(engine)
         if mode is SetupMode.SETUP_PHASE:
             # Already populated (e.g. by a previous token-drag) —
             # ensure perceived_character_name is in sync, then return.
@@ -233,7 +268,7 @@ class Drunk(Character):
         # ``assign_character`` for "Drunk", but doing it again here
         # makes the Drunk behave correctly even if the engine path
         # changes later.
-        self.player.set_drunk(True)
+        self._ensure_self_drunk_effect(engine)
 
         # Already pre-populated from the UI's setup data? Nothing to
         # ask the storyteller — fast-forward.

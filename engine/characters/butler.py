@@ -26,6 +26,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Optional
 
 from engine.character import Character
+from engine.effect import Effect
 from engine.enums import CharType
 from engine.event import Event, EventType
 from engine.prompt import SelectPlayerPrompt
@@ -33,6 +34,22 @@ from engine.prompt import SelectPlayerPrompt
 if TYPE_CHECKING:
     from engine.engine import Engine
     from engine.player import Player
+
+
+class ButlerMasterEffect(Effect):
+    """MASTER marker on the seat the Butler picked tonight. Refreshed
+    each night by the Butler's ability."""
+
+    kind = "butler_master"
+    contributes_to_state = None
+    purge_on_source_death = True
+    purge_on_source_character_change = True
+    deactivate_on_source_droisoned = True
+
+    def on_phase_boundary(self, engine: "Engine", phase: str) -> None:
+        if phase == "dusk":
+            engine.purge_effect(self)
+
 
 class Butler(Character):
     name = "Butler"
@@ -56,16 +73,7 @@ class Butler(Character):
     def master(self) -> Optional["Player"]:
         return self._master
 
-    def compute_reminder_tokens(self, engine: "Engine") -> "dict[str, list[int]]":
-        """Place the MASTER token on the chosen Master's seat."""
-        if (
-            self.player is None
-            or not self.player.has_ability
-            or self._master is None
-            or getattr(self._master, "character", None) is None
-        ):
-            return {}
-        return {"butler_master": [self._master.id]}
+    # MASTER rendered via ButlerMasterEffect emitted in ``ability()``.
 
     def ability(self, engine: "Engine", night_number: int) -> None:
         if self.player is None or self.player.dead:
@@ -113,7 +121,14 @@ class Butler(Character):
         # RESOLUTION: record the Master. Restriction is enforced at
         # vote time by the storyteller / UI, not here.
         self._master = target
+        # Purge any previous Master effect, emit fresh.
+        for old in list(engine.effects_sourced_by(self)):
+            if isinstance(old, ButlerMasterEffect):
+                engine.purge_effect(old)
         if self.player.has_ability:
+            engine.add_effect(ButlerMasterEffect(
+                source=self, targets=[target.id],
+            ))
             engine.log(
                 f"Butler {self.player.name} chose {target.name} as Master."
             )

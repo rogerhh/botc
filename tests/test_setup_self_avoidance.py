@@ -28,34 +28,25 @@ from ui.ui import CharacterPool
 # ---------------------------------------------------------------------------
 
 
-def test_ww_self_picked_only_when_no_other_townsfolk() -> None:
-    """If the WW is the only Townsfolk in the pool, the autofill
-    falls back to the WW herself — there is literally no other
-    candidate."""
-    pool = CharacterPool()
-    pool.add("Imp")
-    pool.add("Poisoner")
-    pool.add("Washerwoman")
-    # Only Townsfolk in the pool is the Washerwoman herself.
-    assert pool.washerwoman_townsfolk() == "Washerwoman"
+def test_ww_self_avoidance_via_add() -> None:
+    """If the WW is the only Townsfolk in the pool the autofill
+    falls back to the WW herself; as soon as a non-self Townsfolk
+    joins the pool the slot switches to it.
 
-
-def test_ww_switches_off_self_when_another_townsfolk_added() -> None:
-    """As soon as a non-self Townsfolk joins the pool, the WW's
-    seen-role slot switches off the WW herself.
-
-    This is the recurring guard: a degenerate self-pick should never
-    survive once a real candidate exists.
+    This is the recurring guard: a degenerate self-pick may exist as
+    a forced fallback, but it must never survive once a real
+    candidate appears.
     """
     pool = CharacterPool()
     pool.add("Imp")
     pool.add("Poisoner")
     pool.add("Washerwoman")
+    # Only Townsfolk in the pool is the Washerwoman herself → forced
+    # self-pick.
     assert pool.washerwoman_townsfolk() == "Washerwoman"
 
     pool.add("Empath")
     assert pool.washerwoman_townsfolk() == "Empath"
-    assert pool.washerwoman_townsfolk() != "Washerwoman"
 
 
 def test_ww_self_avoidance_via_set_many() -> None:
@@ -76,19 +67,10 @@ def test_ww_self_avoidance_via_set_many() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_ft_self_picked_only_when_no_other_good() -> None:
-    """If the FT is the only Good role in the pool, the autofill
-    falls back to the FT herself."""
-    pool = CharacterPool()
-    pool.add("Imp")
-    pool.add("Poisoner")
-    pool.add("Fortune Teller")
-    assert pool.ft_red_herring() == "Fortune Teller"
-
-
-def test_ft_switches_off_self_when_another_good_added() -> None:
-    """As soon as a non-self Good role joins the pool, the FT's red
-    herring slot switches off the FT herself.
+def test_ft_self_avoidance_via_add() -> None:
+    """If the FT is the only Good role in the pool the autofill
+    falls back to the FT herself; as soon as a non-self Good role
+    joins the pool the slot switches to it.
 
     Recurring guard: same shape as the WW test above.
     """
@@ -96,12 +78,11 @@ def test_ft_switches_off_self_when_another_good_added() -> None:
     pool.add("Imp")
     pool.add("Poisoner")
     pool.add("Fortune Teller")
+    # Only Good role in the pool is the FT herself → forced self-pick.
     assert pool.ft_red_herring() == "Fortune Teller"
 
-    # Adding a Townsfolk switches the slot.
     pool.add("Empath")
     assert pool.ft_red_herring() == "Empath"
-    assert pool.ft_red_herring() != "Fortune Teller"
 
 
 def test_ft_self_avoidance_with_outsider_added() -> None:
@@ -309,26 +290,22 @@ def test_ft_in_game_prompt_default_is_non_self() -> None:
 
 
 if __name__ == "__main__":
-    test_ww_self_picked_only_when_no_other_townsfolk()
+    test_ww_self_avoidance_via_add()
     print("test 1 passed.")
-    test_ww_switches_off_self_when_another_townsfolk_added()
-    print("test 2 passed.")
     test_ww_self_avoidance_via_set_many()
+    print("test 2 passed.")
+    test_ft_self_avoidance_via_add()
     print("test 3 passed.")
-    test_ft_self_picked_only_when_no_other_good()
-    print("test 4 passed.")
-    test_ft_switches_off_self_when_another_good_added()
-    print("test 5 passed.")
     test_ft_self_avoidance_with_outsider_added()
-    print("test 6 passed.")
+    print("test 4 passed.")
     test_ft_self_avoidance_via_set_many()
-    print("test 7 passed.")
+    print("test 5 passed.")
     test_ww_explicit_self_pick_is_allowed()
-    print("test 8 passed.")
+    print("test 6 passed.")
     test_ft_explicit_self_pick_is_allowed()
-    print("test 9 passed.")
+    print("test 7 passed.")
     test_ww_in_game_prompt_default_is_non_self()
-    print("test 10 passed.")
+    print("test 8 passed.")
     test_ft_in_game_prompt_default_is_non_self()
-    print("test 11 passed.")
+    print("test 9 passed.")
     print("All self-avoidance tests passed.")

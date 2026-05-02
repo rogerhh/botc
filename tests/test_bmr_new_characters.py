@@ -428,6 +428,61 @@ def test_fool_first_death_saved() -> None:
     assert e.get_player(1).dead, "Fool dies on second attempt."
 
 
+def test_innkeeper_protected_fool_keeps_first_life() -> None:
+    """Innkeeper SAFE protects the Fool's once-per-game slot.
+
+    Per the wiki: "If another character's ability protects the Fool
+    from death, the Fool does not use their ability." When the
+    Innkeeper has marked the Fool SAFE, the Innkeeper is the
+    canceller — the Fool's slot must NOT be spent. Driven directly
+    through the engine (rather than the night-loop + prompt drainer)
+    so the test is isolated to the cancellation pipeline. Pinning
+    the Fool to seat 0 (before the Innkeeper) is the seat-ordering
+    that used to produce the bug — with the fix in place the order
+    no longer matters; the assertion holds either way.
+    """
+    e = Engine()
+    a = e.add_seat("Alice")    # 1 — Fool (deliberately seated FIRST)
+    b = e.add_seat("Bob")      # 2 — Innkeeper
+    c = e.add_seat("Cara")     # 3 — Mayor
+    d = e.add_seat("Dan")      # 4 — Soldier
+    f = e.add_seat("Eve")      # 5 — Imp
+
+    e.assign_character(a.id, "Fool")
+    e.assign_character(b.id, "Innkeeper")
+    e.assign_character(c.id, "Mayor")
+    e.assign_character(d.id, "Soldier")
+    e.assign_character(f.id, "Imp")
+    e.start_game()
+
+    # Hand-set the Innkeeper's SAFE pair to include the Fool. The
+    # Innkeeper now uses the engine effect registry (post-Layer-2
+    # migration) — add an InnkeeperSafeEffect directly so the test
+    # doesn't depend on running the night-loop / prompt drainer.
+    from engine.characters.innkeeper import InnkeeperSafeEffect
+    inn = b.character
+    fool_char = a.character
+    e.add_effect(InnkeeperSafeEffect(source=inn, targets=[a.id, c.id]))
+
+    # Demon kills the Fool at night.
+    e._phase = Phase.NIGHT
+    e._night_number = 2
+    e.kill(a.id, DeathCause.DEMON_KILL, source=f.character)
+
+    # Innkeeper cancels in the standard PRE_DEATH pass. The
+    # last-resort pass is therefore never dispatched, and the Fool's
+    # slot is intact.
+    assert a.alive, "Innkeeper SAFE should keep the Fool alive."
+    assert fool_char._used is False, (
+        "Innkeeper saved the Fool; the once-per-game slot must NOT "
+        "have been consumed."
+    )
+    assert a.once_per_game_used is False, (
+        "Player.once_per_game_used should also be unconsumed when "
+        "the save was provided by another protector."
+    )
+
+
 def test_fool_drunk_dies_normally() -> None:
     """A drunk Fool dies normally — ability does not fire."""
     e = Engine()

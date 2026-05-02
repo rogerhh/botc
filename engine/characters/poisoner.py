@@ -6,41 +6,30 @@ A poisoned player has no ability — their abilities are simulated by the
 storyteller (woken at the right time, given false info if applicable),
 but no game state is altered.
 
-Implementation
---------------
+Implementation (registry-managed)
+---------------------------------
 The Poisoner acts every night (first night and beyond). The natural
-duration of the poison is "tonight and tomorrow day", so it expires at
+duration of the poison is "tonight and tomorrow day", which expires at
 the next **dusk**.
 
-Single source of truth
-~~~~~~~~~~~~~~~~~~~~~~
-The POISONED reminder token's visibility and the target's actual
-``Player.poisoned`` flag are both driven by exactly one piece of
-state: ``self._last_target`` plus that target's ``poisoned`` flag.
-:meth:`compute_reminder_tokens` reads the flag directly, and the
-flag is cleared the moment the Poisoner can no longer maintain the
-poison. So there is never a window where the token is gone but the
-target is "secretly still poisoned" (or vice versa).
+The poison is emitted as a :class:`PoisonerPoisonEffect` in the engine
+effect registry. All cleanup paths fall out of the standard Effect
+lifecycle:
 
-Cleanup paths
-~~~~~~~~~~~~~
-The poison is cleared in any of the following cases:
-
-  * **Natural dusk boundary** (``recheck_persistent_effects``) — the
-    "tonight and tomorrow day" duration ends.
-  * **Poisoner dies** (DEATH reaction on self) — a dead Poisoner
-    cannot maintain the poison.
-  * **Poisoner becomes drunk or poisoned** (DRUNK / POISON reaction
-    on self) — Poisoner without ability cannot maintain.
-  * **Poisoner's character class changes** (CHARACTER_CHANGE reaction
-    on self, fired by ``Engine.change_character`` *before* the swap)
-    — e.g. the Scarlet Woman promoting to Demon and discarding the
-    old Minion role; or storyteller-arbitrated role swaps.
+  * **Natural dusk boundary** —
+    :meth:`PoisonerPoisonEffect.on_phase_boundary` purges at dusk.
+  * **Poisoner dies** — ``purge_on_source_death=True`` (default) →
+    purge.
+  * **Poisoner becomes drunk or poisoned** — resolver deactivates
+    the effect; the target sobers. (If the Poisoner sobers again
+    before dusk, the effect re-activates.)
+  * **Poisoner's character class changes** —
+    ``purge_on_source_character_change=True`` (default) → purge.
 
 If the Poisoner is themselves drunk or poisoned at the moment of the
-night-time SELECT, they go through the motions but no poisoning takes
-effect (so ``_last_target`` stays None and there's nothing to clean
-up later).
+night-time SELECT, they go through the motions but no
+:class:`PoisonerPoisonEffect` is added (registry contract: source must
+have ability at application time).
 """
 
 from __future__ import annotations
@@ -48,6 +37,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Optional
 
 from engine.character import Character
+from engine.effect import Effect
 from engine.enums import CharType
 from engine.event import Event, EventType
 from engine.prompt import SelectPlayerPrompt
@@ -55,6 +45,24 @@ from engine.prompt import SelectPlayerPrompt
 if TYPE_CHECKING:
     from engine.engine import Engine
     from engine.player import Player
+
+
+class PoisonerPoisonEffect(Effect):
+    """Per-source poison effect, lasting tonight + tomorrow day.
+
+    Distinct from :class:`PukkaPoisonEffect` — same
+    ``contributes_to_state="poisoned"`` (so ``Player.poisoned`` is
+    the union of any active poison effects regardless of source) but
+    distinct ``kind`` for per-source token rendering.
+    """
+
+    kind = "poisoner_poisoned"
+    contributes_to_state = "poisoned"
+
+    def on_phase_boundary(self, engine: "Engine", phase: str) -> None:
+        if phase == "dusk":
+            engine.purge_effect(self)
+
 
 class Poisoner(Character):
     name = "Poisoner"
@@ -68,118 +76,6 @@ class Poisoner(Character):
         {"name": 'POISONED', "icon": 'poisoner_poisoned.png'},
     ]
 
-    def __init__(self, player: Optional["Player"] = None) -> None:
-        super().__init__(player)
-        # The seat this Poisoner has currently poisoned, or ``None``
-        # if no live poisoning is being maintained. Both the
-        # POISONED reminder token and the storyteller-visible
-        # ``Player.poisoned`` flag key off this — they are two
-        # views of the same state, and they go stale or fresh
-        # together.
-        self._last_target: Optional["Player"] = None
-
-    # ------------------------------------------------------------------
-    # Display.
-    # ------------------------------------------------------------------
-
-    def compute_reminder_tokens(self, engine: "Engine") -> "dict[str, list[int]]":
-        """Place the POISONED token on the currently-poisoned target.
-
-        The token's visibility is driven *purely* by the actual
-        ``poisoned`` flag on ``_last_target`` — the same flag the rest
-        of the engine consults via ``Player.has_ability``. When the
-        Poisoner can no longer maintain the poison, the cleanup paths
-        below clear that flag (and ``_last_target``); both the token
-        and the flag disappear at the same moment.
-
-        Note: we deliberately do NOT gate on ``self.player.has_ability``
-        here. The Poisoner's own state controls *whether the cleanup
-        paths fire*, not *whether the existing poison shows up*.
-        """
-        if (
-            self._last_target is None
-            or getattr(self._last_target, "character", None) is None
-            or not self._last_target.poisoned
-        ):
-            return {}
-        return {"poisoned": [self._last_target.id]}
-
-    # ------------------------------------------------------------------
-    # Cleanup helper.
-    # ------------------------------------------------------------------
-
-    def _clear_poison(self, engine: "Engine", reason: str) -> None:
-        """Clear the poison this Poisoner has placed, if any.
-
-        Idempotent: safe to call when no target is currently set.
-        """
-        if self._last_target is None:
-            return
-        target = self._last_target
-        self._last_target = None
-        if target.poisoned:
-            target.set_poisoned(False)
-            engine.log(
-                f"{target.name} is no longer poisoned ({reason})."
-            )
-
-    # ------------------------------------------------------------------
-    # Cleanup path 1: natural dusk expiry.
-    # ------------------------------------------------------------------
-
-    def recheck_persistent_effects(
-        self, engine: "Engine", phase: str
-    ) -> None:
-        """Expire the Poisoner's poison at the natural dusk boundary.
-
-        The Poisoner's ability is "poisoned tonight and tomorrow day",
-        so the poison ends at the next dusk regardless of the
-        Poisoner's state. The reactive cleanup paths
-        (:meth:`reaction`) handle the early-expiry cases; this just
-        handles the natural duration end.
-        """
-        if phase == "dusk":
-            self._clear_poison(engine, "Poisoner expired")
-
-    # ------------------------------------------------------------------
-    # Cleanup path 2: reactive — Poisoner can no longer maintain.
-    # ------------------------------------------------------------------
-
-    def reaction(self, event: Event, engine: "Engine") -> None:
-        """Clear the poison the moment the Poisoner can no longer maintain.
-
-        Trigger conditions, all keyed on the **Poisoner's own seat**:
-
-          * ``DEATH``           — Poisoner died.
-          * ``POISON``          — Poisoner just became poisoned.
-          * ``DRUNK``           — Poisoner just became drunk.
-          * ``CHARACTER_CHANGE`` — Poisoner is being swapped to a
-            different role (e.g. Scarlet Woman promotes a Minion to
-            Demon, then this Poisoner instance is discarded). The
-            engine fires this event *before* the swap so we still
-            have access to ``self._last_target`` and the cleanup
-            takes effect under the right name.
-
-        After cleanup, defer to ``super().reaction`` so the standard
-        drunk/poisoned RESOLUTION-blocking still applies to anything
-        downstream.
-        """
-        if self.player is not None and event.targets:
-            target_self = event.targets[0].id == self.player.id
-            if target_self:
-                if event.type is EventType.DEATH:
-                    self._clear_poison(engine, "Poisoner died")
-                elif event.type is EventType.POISON:
-                    self._clear_poison(engine, "Poisoner is poisoned")
-                elif event.type is EventType.DRUNK:
-                    self._clear_poison(engine, "Poisoner is drunk")
-                elif event.type is EventType.CHARACTER_CHANGE:
-                    new_name = event.data.get("new_character") if event.data else "?"
-                    self._clear_poison(
-                        engine, f"Poisoner became the {new_name}"
-                    )
-        return super().reaction(event, engine)
-
     # ------------------------------------------------------------------
     # Nightly ability.
     # ------------------------------------------------------------------
@@ -187,14 +83,6 @@ class Poisoner(Character):
     def ability(self, engine: "Engine", night_number: int) -> None:
         if self.player is None or self.player.dead:
             return
-
-        # Defensive belt-and-braces cleanup. The dusk recheck and
-        # reactive cleanup paths should already have cleared
-        # ``_last_target`` by the time the Poisoner acts again; if
-        # something bypassed both (a save/load path, a manual
-        # storyteller mutator), we still want to start the night with
-        # a clean slate.
-        self._clear_poison(engine, "Poisoner expired")
 
         engine.dispatch(
             Event(EventType.CHECK_CONDITION, source=self, targets=[self.player])
@@ -234,11 +122,14 @@ class Poisoner(Character):
 
         # No INFORMATION step — the Poisoner does not learn anything.
 
-        # RESOLUTION: poison the target, but only if the Poisoner has
-        # their ability working (sober, healthy, alive).
+        # RESOLUTION: emit the PoisonerPoisonEffect via the registry.
+        # A drunk/poisoned Poisoner goes through the motions but no
+        # effect lands (registry contract: source must have ability
+        # at application time).
         if self.player.has_ability:
-            target.set_poisoned(True)
-            self._last_target = target
+            engine.add_effect(PoisonerPoisonEffect(
+                source=self, targets=[target.id],
+            ))
             engine.log(f"{target.name} is poisoned by the Poisoner.")
         else:
             engine.log(

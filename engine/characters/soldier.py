@@ -41,8 +41,13 @@ class Soldier(Character):
             and event.data.get("cause") is DeathCause.DEMON_KILL
             and self.player.has_ability
             and not event.data.get("cancelled")
+            and not event.data.get("force")
         ):
             event.data["cancelled"] = True
+            event.data["cancelled_by_character"] = "Soldier"
+            event.data["cancelled_reason"] = (
+                "Soldier is safe from the Demon"
+            )
             engine.log_reaction(
                 "Soldier",
                 f"{self.player.name} cannot be killed by the Demon.",

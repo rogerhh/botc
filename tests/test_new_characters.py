@@ -345,9 +345,14 @@ def test_virgin_first_nomination() -> None:
     # No prompt should have been emitted for a sober Virgin.
     assert e.pending_prompt() is None
 
-    # Mayor (Townsfolk) should now be dead by execution.
+    # Mayor (Townsfolk) should now be dead by the Virgin's ability.
+    # ``DeathCause.EXECUTION`` is reserved for the Storyteller's
+    # Execute button — the Virgin uses ``DeathCause.ABILITY``.
     assert e.get_player(2).dead
-    assert e.get_player(2).death_cause is DeathCause.EXECUTION
+    assert e.get_player(2).death_cause is DeathCause.ABILITY
+    # The Virgin must NOT have latched the day's execution flag —
+    # only ``Engine.execute_player`` does that.
+    assert e._executed_today is False
 
 
 def test_mayor_dusk_win_three_alive_no_execution() -> None:

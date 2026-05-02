@@ -242,6 +242,7 @@ class Player:
         has_day_ability = False
         once_per_game = False
         daytime_active_when_dead = False
+        daytime_active_at_night = False
         if self.character is not None:
             from engine.character import Character as _Char
             try:
@@ -257,6 +258,9 @@ class Player:
             once_per_game = bool(getattr(self.character, "once_per_game", False))
             daytime_active_when_dead = bool(getattr(
                 self.character, "daytime_ability_active_when_dead", False
+            ))
+            daytime_active_at_night = bool(getattr(
+                self.character, "daytime_ability_active_at_night", False
             ))
 
         return {
@@ -287,4 +291,5 @@ class Player:
             "has_daytime_ability": has_day_ability,
             "once_per_game": once_per_game,
             "daytime_ability_active_when_dead": daytime_active_when_dead,
+            "daytime_ability_active_at_night": daytime_active_at_night,
         }

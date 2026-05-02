@@ -1,5 +1,8 @@
-7. Local UI, Storyteller UI (phone.html), and Player UI (player.html).
-8. Spy grimoire UI.
-9. Add a backup debug panel that can add or modify any character property
-12. Back button can be enabled now. Just make it [back] [next] but make [back] smaller
-13. Player can add themselves to the game and be assigned by ST to a player circle
+1. Godfather +-1 outsider
+2. default token locations
+3. Innkeeper token name
+4. Tinker ability. can be used any time
+5. Back button needs to reset nomination and execution status
+6. Zombuul tokens on working
+7. Lunatic not working
+8. Tea lady protected target does not get executed after tea lady dies

@@ -2176,29 +2176,34 @@ def _character_pool_snapshot() -> dict:
         if not p.has_ability:
             continue
         if char.name == "Poisoner":
-            target = getattr(char, "_last_target", None)
-            if (target is not None
-                    and getattr(target, "character", None) is not None
-                    and target.poisoned):
-                poisoned_player_id = target.id
+            # Post-Layer-2 Poisoner: query the registry for an active
+            # PoisonerPoisonEffect sourced by this Poisoner.
+            from engine.characters.poisoner import PoisonerPoisonEffect
+            try:
+                effs = ENGINE.effects_sourced_by(char)
+            except Exception:
+                effs = []
+            for eff in effs:
+                if isinstance(eff, PoisonerPoisonEffect) and eff.is_active and eff.targets:
+                    poisoned_player_id = eff.targets[0]
+                    break
         elif char.name == "Butler":
             master = getattr(char, "_master", None)
             if (master is not None
                     and getattr(master, "character", None) is not None):
                 butler_master_player_id = master.id
         elif char.name == "Monk":
-            # The Monk's chosen target is the player whose
-            # ``protected_from_demon`` flag is set. The Monk's ability
-            # only sets the flag when the Monk has ability, so a
-            # drunk/poisoned Monk never has a real SAFE chair (the
-            # outer ``if not p.has_ability`` gate already filters that
-            # case out, but be defensive).
-            target = getattr(char, "_target", None)
-            if (target is not None
-                    and target.alive
-                    and getattr(target, "protected_from_demon", False)
-                    and getattr(target, "character", None) is not None):
-                monk_safe_player_id = target.id
+            # Post-Layer-2 Monk: query the registry for an active
+            # MonkSafeEffect sourced by this Monk.
+            from engine.characters.monk import MonkSafeEffect
+            try:
+                effs = ENGINE.effects_sourced_by(char)
+            except Exception:
+                effs = []
+            for eff in effs:
+                if isinstance(eff, MonkSafeEffect) and eff.is_active and eff.targets:
+                    monk_safe_player_id = eff.targets[0]
+                    break
 
     # Once-per-game / spent-ability tokens. These persist regardless of
     # the source player's current state (a dead Slayer who already
@@ -2216,14 +2221,18 @@ def _character_pool_snapshot() -> dict:
         elif char.name == "Artist" and getattr(char, "_used", False):
             artist_no_ability_player_ids.append(p.id)
         elif char.name == "Undertaker":
-            # Undertaker's "DIED TODAY" reminder marks the seat of the
-            # player executed today. The Undertaker character resets
-            # ``_last_executed`` on DAY_START, so this naturally
-            # disappears the next morning.
-            executed = getattr(char, "_last_executed", None)
-            if (executed is not None
-                    and getattr(executed, "character", None) is not None):
-                undertaker_died_today_player_id = executed.id
+            # Post-Layer-2 Undertaker: query the registry for an
+            # active UndertakerDiedTodayEffect sourced by this
+            # Undertaker.
+            from engine.characters.undertaker import UndertakerDiedTodayEffect
+            try:
+                effs = ENGINE.effects_sourced_by(char)
+            except Exception:
+                effs = []
+            for eff in effs:
+                if isinstance(eff, UndertakerDiedTodayEffect) and eff.targets:
+                    undertaker_died_today_player_id = eff.targets[0]
+                    break
 
     # Imp's DEAD reminder tokens. Per the rulebook, the DEAD reminder
     # is placed on every player the Imp's nightly ability actually

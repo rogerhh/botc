@@ -4,29 +4,82 @@
      are safe from the Demon tonight."
 
 Protection ability. The Monk picks a target each night (other nights),
-and that player gets ``protected_from_demon = True`` for the rest of
-the night. The flag is cleared on the next NIGHT_START via
-``Player.reset_night_flags`` (called by the engine).
+and that player is safe from the Demon for the rest of the night.
 
-The Demon's kill resolution checks ``protected_from_demon`` (see
-``Engine.kill``) and skips the death if set, so the Monk's ability
-is realised with a single state mutation rather than a reaction.
+Implementation (registry-managed)
+---------------------------------
+The Monk emits a :class:`MonkSafeEffect` on the chosen target. The
+effect's ``resolve_event`` cancels :class:`EventType.PRE_DEATH` events
+whose ``cause`` is :class:`DeathCause.DEMON_KILL`. The effect is purged
+at the next dawn — Monk's protection is night-only.
 
 Drunkenness / poisoning: a drunk or poisoned Monk goes through the
-motions (wake, pick) but no actual protection is applied.
+motions (wake, pick) but the registry contract requires
+``has_ability`` at application time, so no effect is emitted.
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 from engine.character import Character
-from engine.enums import CharType
-from engine.event import Event, EventType
+from engine.effect import Effect
+from engine.enums import CharType, DeathCause
+from engine.event import Event, EventOutcome, EventType
 from engine.prompt import SelectPlayerPrompt
 
 if TYPE_CHECKING:
     from engine.engine import Engine
+
+
+class MonkSafeEffect(Effect):
+    """Monk's nightly demon-kill protection.
+
+    Cancels PRE_DEATH events whose cause is DEMON_KILL on the
+    protected target. Force-kills (Assassin) bypass via the
+    ``not event.data.get("force")`` check.
+
+    Lifecycle: ``resolve_event`` only cancels demon kills (which only
+    happen at night, so no phase gate needed). The token marker
+    persists through the day after for storyteller bookkeeping, and
+    purges at the next dusk (transition into the next night).
+    """
+
+    kind = "monk_safe"
+    contributes_to_state = None
+
+    def on_phase_boundary(self, engine: "Engine", phase: str) -> None:
+        # Purge at next dusk so the SAFE marker stays visible through
+        # the day after the protection night.
+        if phase == "dusk":
+            engine.purge_effect(self)
+
+    def resolve_event(
+        self, engine: "Engine", event: Event
+    ) -> Optional[EventOutcome]:
+        if (
+            event.type is EventType.PRE_DEATH
+            and event.data.get("cause") is DeathCause.DEMON_KILL
+            and not event.data.get("cancelled")
+            and not event.data.get("force")
+        ):
+            event.data["cancelled_by_character"] = "Monk"
+            event.data["cancelled_reason"] = "Monk protects from demon"
+            try:
+                tgt = event.targets[0] if event.targets else None
+                tgt_name = tgt.name if tgt else "?"
+                engine.log_reaction(
+                    "Monk",
+                    f"{tgt_name} is protected from the Demon — no death.",
+                    target=tgt,
+                    trigger="demon_kill",
+                    effect="monk_safe",
+                )
+            except Exception:  # pragma: no cover (defensive)
+                pass
+            return EventOutcome.CANCEL
+        return None
+
 
 class Monk(Character):
     name = "Monk"
@@ -41,37 +94,6 @@ class Monk(Character):
         {"name": 'SAFE', "icon": 'monk_safe.png'},
     ]
 
-    def __init__(self, player=None) -> None:
-        super().__init__(player)
-        # Most-recent player chosen by the Monk this night. Surfaced
-        # to the UI grimoire so the SAFE reminder token can be drawn
-        # on the chosen seat. Cleared at NIGHT_START (see ``reaction``)
-        # so a stale pick from a previous night doesn't leak into the
-        # snapshot before the Monk has chosen tonight.
-        self._target = None
-
-    def compute_reminder_tokens(self, engine: "Engine") -> "dict[str, list[int]]":
-        """Place the SAFE token on the chosen target while protected."""
-        if (
-            self.player is None
-            or not self.player.has_ability
-            or self._target is None
-            or not getattr(self._target, "alive", False)
-            or not getattr(self._target, "protected_from_demon", False)
-            or getattr(self._target, "character", None) is None
-        ):
-            return {}
-        return {"monk_safe": [self._target.id]}
-
-    def reaction(self, event: "Event", engine: "Engine") -> None:
-        # Reset the surfaced target at the start of every night so the
-        # SAFE token disappears alongside the engine's reset of
-        # ``protected_from_demon``. The Monk's ability re-populates
-        # ``_target`` once the storyteller picks tonight.
-        if event.type is EventType.NIGHT_START:
-            self._target = None
-        return super().reaction(event, engine)
-
     def ability(self, engine: "Engine", night_number: int) -> None:
         if night_number == 1 or self.player is None or self.player.dead:
             return
@@ -79,9 +101,6 @@ class Monk(Character):
             Event(EventType.CHECK_CONDITION, source=self, targets=[self.player])
         )
 
-        # WAKEUP — engine-internal event so other abilities can react,
-        # but no separate ST-facing prompt: the wake-up line is shown
-        # as part of the next prompt's panel.
         engine.dispatch(
             Event(EventType.WAKEUP, source=self, targets=[self.player])
         )
@@ -96,7 +115,7 @@ class Monk(Character):
             count=1,
             eligible_player_ids=eligible,
             allow_self=False,
-            allow_randomize=False,  # player decision (Monk picks)
+            allow_randomize=False,
             target_player_id=self.player.id,
             meta={
                 "character": self.name,
@@ -118,22 +137,16 @@ class Monk(Character):
             Event(EventType.SELECT, source=self, targets=[target])
         )
 
-        # RESOLUTION: set the protected flag — but only if the Monk is
-        # sober and healthy. A drunk/poisoned Monk goes through the
-        # motions for the player's sake (the storyteller still wakes
-        # them, etc.) but no real protection lands.
+        # RESOLUTION: emit MonkSafeEffect via the registry. A drunk/
+        # poisoned Monk goes through the motions but no effect lands.
         if self.player.has_ability:
-            target.protected_from_demon = True
-            self._target = target
+            engine.add_effect(MonkSafeEffect(
+                source=self, targets=[target.id],
+            ))
             engine.log(
                 f"Monk {self.player.name} protects {target.name} tonight."
             )
         else:
-            # Drunk/poisoned Monk still records the picked target so
-            # storytellers can audit what was chosen, but the SAFE
-            # token is gated on ``protected_from_demon`` in the UI
-            # snapshot — so it won't render when the flag isn't set.
-            self._target = target
             engine.log(
                 f"Monk {self.player.name} is drunk/poisoned — "
                 f"{target.name} is NOT actually protected."

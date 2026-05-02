@@ -47,8 +47,14 @@ from engine.chairs import ChairStore
 from engine.character import Character
 from engine.lobby import Lobby
 from engine.pool import CharacterPool
+from engine.effect import (
+    Effect,
+    SetupEffect,
+    all_setup_effect_classes,
+    get_setup_effect_class,
+)
 from engine.enums import Alignment, CharType, DeathCause, Phase, SetupMode
-from engine.event import Event, EventType
+from engine.event import Event, EventOutcome, EventType
 from engine.player import Player
 from engine.prompt import (
     InformationPrompt,
@@ -191,6 +197,38 @@ class Engine:
         # win-condition reads, etc.) can still tell *how* the player
         # died — only the visual reminder is transient.
         self._demon_killed_player_ids: List[int] = []
+
+        # ---- Effect registry (Layer 1 foundation) -------------------
+        # Triple-indexed store of every active or inactive
+        # :class:`Effect` in the game. Populated by character migrations
+        # via :meth:`add_effect` and consulted by the resolver, the
+        # phase-1 event-resolution pass, and the grimoire token
+        # rendering. Empty until the first character migrates to the
+        # registry-based model — the legacy direct-mutation paths
+        # (``set_drunk``, ``set_poisoned``) keep working alongside.
+        #
+        # ``_effects_by_id`` is the canonical store; the per-target and
+        # per-kind dicts are indexes maintained alongside for O(1)
+        # lookups. ``_next_effect_id`` is monotonic — id == creation
+        # order, which is the topological order the resolver walks for
+        # the no-cycle invariant.
+        self._effects_by_id: Dict[int, Effect] = {}
+        self._effects_by_target: Dict[int, List[Effect]] = {}
+        self._effects_by_kind: Dict[str, List[Effect]] = {}
+        self._next_effect_id = itertools.count(1)
+
+        # Set of player ids whose ``drunk`` / ``poisoned`` flag is
+        # currently being asserted by the registry resolver. Lets the
+        # resolver clear the flag when the last contributing effect
+        # purges, without trampling legacy direct-mutation paths from
+        # un-migrated characters (e.g. an Innkeeper still using
+        # ``set_drunk(True)`` on a seat). During the migration window,
+        # the convention is "don't have legacy and registry both touch
+        # the same player's same flag in the same game" — once all
+        # characters migrate, the legacy paths disappear and these
+        # sets become the authoritative source.
+        self._registry_drunk_ids: set = set()
+        self._registry_poisoned_ids: set = set()
 
         # Storyteller-readable event log.
         self._log: List[str] = []
@@ -672,6 +710,17 @@ class Engine:
         if self._phase is not Phase.SETUP:
             raise RuntimeError("Seats can only be removed during setup.")
         player = self.get_player(player_id)
+        # Notify the outgoing character (if any) before tearing down
+        # the seat. Default ``on_unseated`` purges every effect sourced
+        # by this character from the registry — so setup-phase markers
+        # (WW/Lib/Inv/FT/Grandmother) follow the role out of the bag.
+        if player.character is not None:
+            try:
+                player.character.on_unseated(self)
+            except Exception as exc:  # pragma: no cover (defensive)
+                self.log(
+                    f"Error in {player.character.name} on_unseated: {exc!r}"
+                )
         self._players.remove(player)
         # Compact seat numbers.
         for p in self._players:
@@ -693,12 +742,24 @@ class Engine:
         is currently set; the IN_GAME pass prompts the storyteller.
         """
         player = self.get_player(player_id)
+        # Notify the OUTGOING character (if the seat had one) so any
+        # setup-phase markers it owns are torn down before the new
+        # character takes over. Default ``on_unseated`` purges every
+        # effect the old character sourced.
+        if player.character is not None:
+            try:
+                player.character.on_unseated(self)
+            except Exception as exc:  # pragma: no cover (defensive)
+                self.log(
+                    f"Error in {player.character.name} on_unseated: {exc!r}"
+                )
         char = script_data.build_character(character_name)
         player.assign_character(char)
         # Per-character seed: each Character class declares any
         # seat-bound side effect via ``on_assign_to_seat`` (the Drunk
-        # marks itself drunk, etc.). The engine has no character-name
-        # knowledge here.
+        # marks itself drunk, the WW/FT/Grandmother emit their setup
+        # markers via ``engine.add_effect``, etc.). The engine has no
+        # character-name knowledge here.
         try:
             char.on_assign_to_seat(self)
         except Exception as exc:  # pragma: no cover (defensive)
@@ -993,6 +1054,46 @@ class Engine:
             return str(exc)
         # Re-absorb on the FT so its members[0] / _red_herring update.
         self._retrigger_setup_for_role("Fortune Teller", reset_first=True)
+        return None
+
+    def move_grandmother_grandchild_token(
+        self, dest_chair_id: int
+    ) -> Optional[str]:
+        """Drop the GRANDCHILD reminder onto ``dest_chair_id``.
+
+        The destination chair's character must be a Townsfolk or
+        Outsider role currently in the pool, and may not be the
+        Grandmother herself. On success the engine re-resolves the
+        Grandmother's ``_grandchild_id`` via the standard setup
+        retrigger.
+        """
+        dest = self.chairs.get(dest_chair_id)
+        if dest is None:
+            return f"no chair with id {dest_chair_id}"
+        if "Grandmother" not in self.pool.list():
+            return "Grandmother is not in the pool"
+        dest_char = (dest.get("character") or "").strip()
+        if not dest_char:
+            return "destination chair has no character assigned"
+        if dest_char == "Grandmother":
+            return (
+                "Grandmother's grandchild can't be the Grandmother herself"
+            )
+        if not self._good_in_play(dest_char):
+            return (
+                "destination chair must hold a Townsfolk or Outsider role"
+            )
+        if dest_char not in self.pool.list():
+            return f"{dest_char!r} is not in the pool"
+        try:
+            self.pool.set_grandmother_grandchild(dest_char)
+        except ValueError as exc:
+            return str(exc)
+        # Re-absorb on the Grandmother so its _grandchild_id reflects
+        # the move. ``reset_first=True`` mirrors the FT red-herring
+        # convention: setup-time tokens replay their setup hook so
+        # the seat-id resolution re-runs.
+        self._retrigger_setup_for_role("Grandmother", reset_first=True)
         return None
 
     def move_washerwoman_townsfolk_token(self, dest_chair_id: int) -> Optional[str]:
@@ -2294,6 +2395,14 @@ class Engine:
                         f"{perceived.name}) on_setup_ability: {exc!r}"
                     )
         self._dispatch(Event(EventType.SETUP_END))
+        # Note on ``setup_only`` SetupEffect lifecycle: the WW/Lib/Inv
+        # markers correctly persist past SETUP_END so the storyteller
+        # can see who the first-night ability will point at *before*
+        # the ability runs. Per-character cleanup happens at end of
+        # the first-night ability (each WW/Lib/Inv calls
+        # ``engine.purge_effect(...)`` after the info is shown). The
+        # ``setup_only`` flag is documentation only at this point;
+        # there's no engine-side auto-purge.
 
     def _perceived_night_for(self, char: Character) -> int:
         """Return the night number ``char.ability`` should be told it is.
@@ -2438,6 +2547,8 @@ class Engine:
         player_id: int,
         cause: DeathCause = DeathCause.STORYTELLER,
         source: Optional["Character"] = None,
+        *,
+        force: bool = False,
     ) -> Player:
         """Kill ``player_id`` with the given cause.
 
@@ -2452,28 +2563,29 @@ class Engine:
         demon kill at the dispatch level (without any
         character-specific knowledge in either ability). Default is
         ``None`` (engine/Storyteller-attributed).
+
+        ``force=True`` makes the kill *unblockable*: the
+        ``PRE_DEATH`` / ``PRE_DEATH_LAST_RESORT`` events are still
+        dispatched (so reactions can observe the attempt for logging
+        and state-keeping), but any ``cancelled`` flag set by a
+        protector — Soldier, Monk SAFE, Tea Lady, Sailor, Innkeeper
+        SAFE, Devil's Advocate, Mayor redirect, Pacifist, Zombuul /
+        Fool last-resort save — is ignored and the death lands. Used
+        by abilities that explicitly bypass protection (e.g. the
+        Assassin's once-per-game stab: "they die, even if for some
+        reason they could not"). Default ``False``.
         """
         player = self.get_player(player_id)
         if player.dead:
             return player
 
-        # Demon-kill protection (Monk only here; the Soldier's
-        # protection rule lives on the Soldier class as a PRE_DEATH
-        # reaction — see :mod:`engine.characters.soldier`).
-        if cause is DeathCause.DEMON_KILL:
-            if player.protected_from_demon:
-                # Monk-style protection: someone is shielding ``player``
-                # from the demon for this night. Log the reaction with
-                # the protector's role so the report is unambiguous;
-                # ``protected_from_demon`` is set by the Monk's ability
-                # path, so attribute it to the Monk here.
-                self.log_reaction(
-                    "Monk",
-                    f"{player.name} is protected from the Demon — no death.",
-                    target=player,
-                    trigger="demon_kill",
-                )
-                return player
+        # Note: Monk-style demon-kill protection is no longer
+        # short-circuited here — Layer 2 migration moved Monk to a
+        # registry :class:`MonkSafeEffect` whose ``resolve_event``
+        # cancels demon kills during phase-1 dispatch. The
+        # ``Player.protected_from_demon`` flag is vestigial and
+        # currently unused by any character (a future cleanup pass
+        # will remove it).
 
         # PRE_DEATH hook — fires after protection checks but BEFORE the
         # death actually lands. A reaction may cancel the kill by
@@ -2492,8 +2604,36 @@ class Engine:
             data={"cause": cause, "cancelled": False},
         )
         self._dispatch(pre_event)
-        if pre_event.data.get("cancelled"):
+        # Last-resort save pass: only "self-save" abilities (currently
+        # the Zombuul's first-life save and the Fool's once-per-game
+        # save) react. Deferred so all standard protections (Innkeeper
+        # SAFE, Soldier, Mayor redirect, Tea Lady, Sailor, Pacifist,
+        # Devil's Advocate) get to cancel first — a Zombuul / Fool
+        # saved by another ability must keep their slot intact (the
+        # slot is tied to *actual* death, not "death that would have
+        # happened in the absence of the other protector"). The new
+        # Event reuses the same data dict so any cancellation set in
+        # the last-resort pass propagates back into ``pre_event.data``.
+        if not pre_event.data.get("cancelled"):
+            self._dispatch(
+                Event(
+                    EventType.PRE_DEATH_LAST_RESORT,
+                    source=source,
+                    targets=[player],
+                    data=pre_event.data,
+                )
+            )
+        # ``force=True`` callers (e.g. Assassin's once-per-game stab)
+        # ignore protector cancellations and land the kill anyway.
+        # The events were still dispatched so reactions can observe
+        # the attempt for logging / state-keeping.
+        if pre_event.data.get("cancelled") and not force:
             return player
+        if pre_event.data.get("cancelled") and force:
+            self.log(
+                f"{player.name!r}: protection cancelled but kill is "
+                f"forced — death lands anyway."
+            )
 
         player.kill(cause)
         self.log(f"{player.name!r} dies ({cause.value}).")
@@ -2516,6 +2656,33 @@ class Engine:
                 data={"cause": cause},
             )
         )
+        # Layer 1 hook: notify every registry effect sourced by the
+        # dead player AND every effect *targeting* the dead player.
+        # ``on_source_death`` lets a sourced effect clean itself up
+        # (default: purge if ``purge_on_source_death``).
+        # ``on_target_death`` lets a targeting effect react (default
+        # no-op; Grandmother's grandchild-effect overrides to grieve).
+        if player.character is not None:
+            sourced = [
+                e for e in self._effects_by_id.values()
+                if e.source is player.character
+            ]
+            for eff in sourced:
+                try:
+                    eff.on_source_death(self)
+                except Exception as exc:  # pragma: no cover (defensive)
+                    self.log(
+                        f"on_source_death in effect {eff!r} crashed: {exc!r}"
+                    )
+        targeting = list(self._effects_by_target.get(player.id, []))
+        for eff in targeting:
+            if eff.is_active:
+                try:
+                    eff.on_target_death(self, player.id)
+                except Exception as exc:  # pragma: no cover (defensive)
+                    self.log(
+                        f"on_target_death in effect {eff!r} crashed: {exc!r}"
+                    )
         # Drain deferred post-DEATH callbacks. Reactions that need to
         # observe the *settled* state after every other reaction has
         # fired (e.g. Imp self-kill, which must let the Scarlet
@@ -2588,6 +2755,9 @@ class Engine:
         player.set_poisoned(True)
         self.log(f"{player.name!r} is poisoned.")
         self._dispatch(Event(EventType.POISON, targets=[player]))
+        # Layer 2 hook: re-resolve so registry effects whose source
+        # is now legacy-poisoned correctly deactivate.
+        self.resolve_droison_state()
         self._console_log(
             "state",
             f"{player.name} is poisoned",
@@ -2598,6 +2768,7 @@ class Engine:
         player = self.get_player(player_id)
         player.set_poisoned(False)
         self.log(f"{player.name!r} is no longer poisoned.")
+        self.resolve_droison_state()
         self._console_log(
             "state",
             f"{player.name} is no longer poisoned",
@@ -2609,6 +2780,7 @@ class Engine:
         player.set_drunk(True)
         self.log(f"{player.name!r} is drunk.")
         self._dispatch(Event(EventType.DRUNK, targets=[player]))
+        self.resolve_droison_state()
         self._console_log(
             "state",
             f"{player.name} is drunk",
@@ -2618,6 +2790,7 @@ class Engine:
     def sober_up(self, player_id: int) -> None:
         player = self.get_player(player_id)
         player.set_drunk(False)
+        self.resolve_droison_state()
         self._console_log(
             "state",
             f"{player.name} is no longer drunk",
@@ -2667,6 +2840,26 @@ class Engine:
                 data={"new_character": character_name},
             )
         )
+        # Layer 1 hook: notify every registry effect sourced by the
+        # outgoing character. Default behavior (per
+        # ``purge_on_source_character_change``) purges. Fires AFTER
+        # the dispatch so legacy reactions still see the old source
+        # in place, but BEFORE the actual character swap so any
+        # purge-related logging/state stays attributable to the old
+        # role.
+        if player.character is not None:
+            sourced = [
+                e for e in self._effects_by_id.values()
+                if e.source is player.character
+            ]
+            for eff in sourced:
+                try:
+                    eff.on_source_character_change(self, character_name)
+                except Exception as exc:  # pragma: no cover (defensive)
+                    self.log(
+                        f"on_source_character_change in effect "
+                        f"{eff!r} crashed: {exc!r}"
+                    )
         # ``build_character`` returns a freshly-constructed instance —
         # the source of "all conditions reset" for the new role.
         char = script_data.build_character(character_name)
@@ -2719,6 +2912,22 @@ class Engine:
             data={"cause": DeathCause.EXECUTION, "cancelled": False},
         )
         self._dispatch(pre_event)
+        # Last-resort save pass — see ``Engine.kill`` for the full
+        # rationale. In short: Zombuul's first-life save and the
+        # Fool's once-per-game save fire here rather than on the
+        # standard ``PRE_DEATH`` pass so they only consume the slot
+        # when no other protector (Pacifist, Tea Lady, Sailor,
+        # Innkeeper, Devil's Advocate, …) has already cancelled the
+        # execution. Same shared data dict so the cancellation flag
+        # propagates back unchanged.
+        if not pre_event.data.get("cancelled"):
+            self._dispatch(
+                Event(
+                    EventType.PRE_DEATH_LAST_RESORT,
+                    targets=[player],
+                    data=pre_event.data,
+                )
+            )
         if pre_event.data.get("cancelled"):
             char_name = player.character.name if player.character else None
             self._console_log(
@@ -2856,11 +3065,18 @@ class Engine:
         We refuse to start a new ability while another worker thread
         (e.g. the night loop) is still alive.
         """
-        if self._phase is not Phase.DAY:
-            raise RuntimeError("Daytime abilities only fire during day.")
         player = self.get_player(player_id)
         if player.character is None:
             raise RuntimeError(f"{player.name!r} has no character.")
+        # Most daytime abilities (Slayer, Virgin, Artist) only fire
+        # during the day. A small set of "any time" abilities opt in
+        # to firing at night via ``daytime_ability_active_at_night``
+        # — the canonical case is the Tinker's "you might die at any
+        # time", which a Storyteller may invoke mid-night.
+        if self._phase is not Phase.DAY and not getattr(
+            player.character, "daytime_ability_active_at_night", False
+        ):
+            raise RuntimeError("Daytime abilities only fire during day.")
         if not player.alive and not getattr(
             player.character, "daytime_ability_active_when_dead", False
         ):
@@ -2878,6 +3094,17 @@ class Engine:
             target_player_name=player.name,
             ability_kind="daytime",
         )
+        # ``daytime_ability_active_at_night`` characters (currently the
+        # Tinker, "you might die at any time") run inline rather than on
+        # a worker thread. Per the Tinker's class docstring, such an
+        # ability must not call ``send_prompt`` — without prompting,
+        # there is no risk of deadlocking the HTTP thread, and running
+        # inline lets a Storyteller fire the ability mid-night without
+        # racing against the worker (the test suite reads
+        # ``pending_night_deaths`` immediately after the call).
+        if getattr(char, "daytime_ability_active_at_night", False):
+            self._run_daytime_ability(char)
+            return
         thread = threading.Thread(
             target=self._run_daytime_ability,
             args=(char,),
@@ -2909,16 +3136,93 @@ class Engine:
     def _dispatch(self, event: Event) -> None:
         """Run reaction(event) on every player's character.
 
-        Drunk-style impersonators also get reactions delivered to the
-        impersonated role, so role-specific bookkeeping (Undertaker
-        tracking executions, Virgin tracking nominations, …) keeps
-        running on the Drunk's chair. The impersonated role's
-        ``self.player.has_ability`` is False, so any state mutation
-        gated on ``has_ability`` (Virgin's execute-the-nominator,
-        Monk-style protection, …) takes the drunk/poisoned branch
-        and resolves to no real game-state change — exactly as the
-        rulebook requires.
+        Two-phase resolution:
+
+        1. **Effect resolution.** Walk every *active* effect targeting
+           one of the event's subjects, in registry-creation order.
+           Each effect's ``resolve_event`` may return
+           :class:`EventOutcome.CANCEL` (sets ``event.data["cancelled"]
+           = True`` and stops) or :class:`EventOutcome.REDIRECT` (the
+           effect mutates ``event.targets`` first; we re-walk against
+           the new targets, capped to avoid pathological loops).
+           Phase 1 is a no-op when the registry holds no effects
+           targeting the event's subjects — i.e. always until
+           character migrations populate the registry.
+
+        2. **Character reactions.** Same pass as before: every seated
+           character's ``reaction(event)`` runs, plus drunk-style
+           impersonators' perceived-character reactions. Role-specific
+           bookkeeping (Undertaker tracking executions, Virgin tracking
+           nominations, …) keeps running on the Drunk's chair. The
+           impersonated role's ``self.player.has_ability`` is False, so
+           any state mutation gated on ``has_ability`` takes the
+           drunk/poisoned branch.
+
+        Effects that already cancelled the event in phase 1 set the
+        same ``event.data["cancelled"]`` flag the legacy reaction code
+        uses, so phase-2 reactions and downstream consumers
+        (``Engine.kill`` / ``execute_player``) observe cancellation
+        through the same channel they always have.
         """
+        # ---- Phase 1: effect resolution ----------------------------
+        # Only relevant for events whose targets list is non-empty —
+        # effects target seats, so an event with no targets has no
+        # phase-1 hook surface.
+        if event.targets and self._effects_by_id:
+            redirects_left = 4   # cap — pathological redirect chains
+            while redirects_left > 0:
+                redirected = False
+                # Snapshot the unique target ids; mutation during walk
+                # only happens via REDIRECT (which restarts the walk).
+                target_ids = {p.id for p in event.targets}
+                # Walk effects newest-irrelevant — we want creation
+                # order so the earliest-created (Mayor redirect at
+                # game-start) gets first say before later protections.
+                candidates: List[Effect] = []
+                for tgt_id in target_ids:
+                    candidates.extend(
+                        self._effects_by_target.get(tgt_id, [])
+                    )
+                # Deduplicate (an effect targeting both subjects of a
+                # 2-subject event would otherwise be visited twice)
+                # while preserving id order.
+                seen_ids: set = set()
+                unique = []
+                for eff in candidates:
+                    if eff.id in seen_ids:
+                        continue
+                    seen_ids.add(eff.id)
+                    unique.append(eff)
+                unique.sort(key=lambda e: e.id)
+
+                for eff in unique:
+                    if not eff.is_active:
+                        continue
+                    try:
+                        outcome = eff.resolve_event(self, event)
+                    except Exception as exc:  # pragma: no cover (defensive)
+                        self.log(
+                            f"resolve_event in effect {eff!r} crashed: "
+                            f"{exc!r}"
+                        )
+                        continue
+                    if outcome is EventOutcome.CANCEL:
+                        event.data["cancelled"] = True
+                        event.data.setdefault("cancelled_by_effect", eff.kind)
+                        return
+                    if outcome is EventOutcome.REDIRECT:
+                        redirected = True
+                        break
+
+                if not redirected:
+                    break
+                redirects_left -= 1
+            if redirects_left <= 0:
+                self.log(
+                    "Event redirect chain hit cap — last redirect lands."
+                )
+
+        # ---- Phase 2: character reactions --------------------------
         for p in self._players:
             char = p.character
             if char is None:
@@ -2936,6 +3240,480 @@ class Engine:
                         f"Reaction in {char.name} (perceived "
                         f"{perceived.name}) crashed: {exc!r}"
                     )
+
+    # ==================================================================
+    #                       EFFECT REGISTRY (Layer 1)
+    # ==================================================================
+    # The methods below form the engine-side foundation of the
+    # state/effect refactor. They are purely additive — no existing
+    # character calls them yet, so the registry stays empty during
+    # normal play and these methods are no-ops in aggregate. Character
+    # migrations (per the per-batch enumeration in the design doc)
+    # gradually replace direct ``Player.set_drunk`` / ``set_poisoned``
+    # calls with ``engine.add_effect(...)`` and the resolver becomes
+    # the writer for those flags.
+
+    def add_effect(self, effect: "Effect") -> int:
+        """Insert an effect into the registry.
+
+        Assigns a monotonic ``effect.id`` (== creation order, used by
+        the resolver for the no-cycle topological walk), populates the
+        per-target and per-kind indexes, dispatches an
+        ``EFFECT_ADDED`` event, then runs ``resolve_droison_state`` to
+        re-decide active/inactive for every effect in light of the new
+        addition. Returns the assigned id.
+
+        The caller's contract (per the design doc): only call this when
+        the source's ``has_ability`` is True at the moment of creation.
+        Effects whose source is droisoned at application time should
+        simply not be added — see e.g. ``CourtierDrunkEffect`` callers.
+        """
+        effect.id = next(self._next_effect_id)
+        effect.is_active = True
+        self._effects_by_id[effect.id] = effect
+        for tgt_id in effect.targets:
+            self._effects_by_target.setdefault(tgt_id, []).append(effect)
+        self._effects_by_kind.setdefault(effect.kind, []).append(effect)
+        try:
+            self._dispatch(Event(EventType.EFFECT_ADDED, source=effect.source))
+        except Exception:  # pragma: no cover (defensive)
+            pass
+        self.resolve_droison_state()
+        return effect.id
+
+    def purge_effect(self, effect: "Effect") -> None:
+        """Remove an effect from the registry.
+
+        Idempotent: safe to call on an effect that was already purged
+        (e.g. by a phase-boundary expiry that races a source-death
+        cleanup). Dispatches ``EFFECT_PURGED`` and re-resolves state.
+        """
+        if effect.id not in self._effects_by_id:
+            return
+        del self._effects_by_id[effect.id]
+        for tgt_id in effect.targets:
+            bucket = self._effects_by_target.get(tgt_id)
+            if bucket is not None:
+                try:
+                    bucket.remove(effect)
+                except ValueError:
+                    pass
+                if not bucket:
+                    del self._effects_by_target[tgt_id]
+        kind_bucket = self._effects_by_kind.get(effect.kind)
+        if kind_bucket is not None:
+            try:
+                kind_bucket.remove(effect)
+            except ValueError:
+                pass
+            if not kind_bucket:
+                del self._effects_by_kind[effect.kind]
+        try:
+            self._dispatch(Event(EventType.EFFECT_PURGED, source=effect.source))
+        except Exception:  # pragma: no cover (defensive)
+            pass
+        self.resolve_droison_state()
+
+    def effects_targeting(
+        self,
+        player_id: int,
+        kind: Optional[str] = None,
+        active_only: bool = True,
+    ) -> List["Effect"]:
+        """Return effects whose targets list includes ``player_id``.
+
+        Filters by ``kind`` if provided. Filters out inactive effects by
+        default (set ``active_only=False`` to see deactivated ones too —
+        useful for token rendering, which displays both per Q-new-9).
+        Returned in registry-creation order (== id order).
+        """
+        bucket = self._effects_by_target.get(player_id, [])
+        out = list(bucket)
+        if kind is not None:
+            out = [e for e in out if e.kind == kind]
+        if active_only:
+            out = [e for e in out if e.is_active]
+        out.sort(key=lambda e: e.id)
+        return out
+
+    def effects_sourced_by(self, character: "Character") -> List["Effect"]:
+        """Return effects whose ``source`` is the given character.
+
+        Used for character-scoped operations (``CHARACTER_CHANGE``
+        purges all effects sourced by the swapped character; an
+        ability that wants to find its own previous emission does so
+        via this query).
+        """
+        out = [
+            e for e in self._effects_by_id.values() if e.source is character
+        ]
+        out.sort(key=lambda e: e.id)
+        return out
+
+    def effects_by_kind(
+        self, kind: str, active_only: bool = True
+    ) -> List["Effect"]:
+        """Return all effects of a given kind. Sorted by id."""
+        bucket = self._effects_by_kind.get(kind, [])
+        out = list(bucket)
+        if active_only:
+            out = [e for e in out if e.is_active]
+        out.sort(key=lambda e: e.id)
+        return out
+
+    def resolve_droison_state(self) -> None:
+        """Recompute active/inactive for every effect in the registry,
+        then sync derived state onto each Player.
+
+        Algorithm (the no-cycle reverse-creation-order walk from the
+        design doc):
+
+        Walk effects newest → oldest. For each effect, compute the
+        source's drunk/poison status using *only effects already
+        decided in this walk* (i.e. strictly newer than the current
+        effect). Per the temporal invariant — at creation time the
+        source had ``has_ability``, so no effect targeting the source
+        can have been created earlier — newer effects are the only
+        ones that can affect this effect's source's status. Walking
+        newest-to-oldest means by the time we reach effect E, every
+        effect that could droison E's source has been decided.
+
+        Self-source exemption: when computing E's source's droison,
+        we exclude effect E itself from the union (so self-target
+        effects don't trigger a self-deactivation cycle — Sailor
+        self-drunkening themselves is active until something *else*
+        targets the Sailor).
+
+        Drunk character: ``deactivate_on_source_droisoned = False``
+        means E is always active regardless of source's droison.
+        """
+        # NOTE: do NOT early-return when the registry is empty — even
+        # then we may need to clear ``_registry_drunk_ids`` /
+        # ``_registry_poisoned_ids`` entries left over from the last
+        # purged effect. The walk below correctly produces empty
+        # decided maps and the apply phase clears the registry-flagged
+        # players.
+
+        # Two parallel data structures:
+        #
+        # * ``status_drunk`` / ``status_poisoned`` — used to decide
+        #   each effect's active state. Seeded with **legacy
+        #   direct-mutation** contributions (``Player.drunk`` /
+        #   ``Player.poisoned`` flags set outside the registry — by
+        #   storyteller mutators, un-migrated characters, etc.) so
+        #   the resolver correctly deactivates registry effects
+        #   whose source has been legacy-droisoned. Then accumulates
+        #   contributions from active registry effects as the walk
+        #   proceeds.
+        #
+        # * ``registry_drunk`` / ``registry_poisoned`` — only the set
+        #   of player ids whose flags are flagged by **active
+        #   registry effects** in this resolve pass. Drives the apply
+        #   phase that set/clear flags. We deliberately do NOT roll
+        #   legacy contributions into these sets — otherwise the
+        #   resolver would "claim" legacy mutations and then clear
+        #   them on the next pass when no registry effect contributes.
+        #
+        # The ``_registry_*_ids`` filter on the legacy seed prevents
+        # double-counting: if the previous resolve pass set
+        # ``Player.drunk = True`` from a registry effect, we treat
+        # that as a registry contribution (visible through the walk),
+        # not as a legacy seed.
+        status_drunk: Dict[int, bool] = {}
+        status_poisoned: Dict[int, bool] = {}
+        for p in self._players:
+            if p.drunk and p.id not in self._registry_drunk_ids:
+                status_drunk[p.id] = True
+            if p.poisoned and p.id not in self._registry_poisoned_ids:
+                status_poisoned[p.id] = True
+        registry_drunk: set = set()
+        registry_poisoned: set = set()
+
+        all_effects = sorted(
+            self._effects_by_id.values(), key=lambda e: -e.id
+        )
+
+        # Two-pass approach: first pass marks each effect's is_active
+        # based on the source state derived from already-decided
+        # newer effects (and strictly newer effects only — self
+        # exemption is automatic since we exclude effects with the
+        # same id, and we visit each effect exactly once).
+        new_active: Dict[int, bool] = {}
+        for eff in all_effects:
+            if eff.source is None or eff.source.player is None:
+                new_active[eff.id] = False
+                continue
+            src_player = eff.source.player
+            if not src_player.alive:
+                new_active[eff.id] = False
+                continue
+            if not eff.deactivate_on_source_droisoned:
+                # Drunk-character self-effect: always active.
+                new_active[eff.id] = True
+                # Still contributes to its target's state below.
+            else:
+                src_id = src_player.id
+                src_drunk = status_drunk.get(src_id, False)
+                src_poisoned = status_poisoned.get(src_id, False)
+                if src_drunk or src_poisoned:
+                    new_active[eff.id] = False
+                else:
+                    new_active[eff.id] = True
+
+            if new_active[eff.id] and eff.contributes_to_state:
+                # Update status_* (visible to subsequent walk steps)
+                # AND registry_* (drives the apply phase).
+                if eff.contributes_to_state == "drunk":
+                    for tgt_id in eff.targets:
+                        status_drunk[tgt_id] = True
+                        registry_drunk.add(tgt_id)
+                elif eff.contributes_to_state == "poisoned":
+                    for tgt_id in eff.targets:
+                        status_poisoned[tgt_id] = True
+                        registry_poisoned.add(tgt_id)
+
+        # Apply active flips, dispatching activation/deactivation
+        # events for transitions (silent state-change is fine per
+        # Q-new-4; we still emit the event for any character that
+        # subscribes).
+        for eff in all_effects:
+            was_active = eff.is_active
+            eff.is_active = new_active.get(eff.id, False)
+            if was_active != eff.is_active:
+                try:
+                    if eff.is_active:
+                        self._dispatch(Event(
+                            EventType.EFFECT_ACTIVATED, source=eff.source
+                        ))
+                    else:
+                        self._dispatch(Event(
+                            EventType.EFFECT_DEACTIVATED, source=eff.source
+                        ))
+                except Exception:  # pragma: no cover (defensive)
+                    pass
+
+        # Sync ``Player.drunk`` / ``Player.poisoned`` to reflect the
+        # union of active registry effects. The resolver tracks which
+        # players it has flagged (``_registry_drunk_ids`` /
+        # ``_registry_poisoned_ids``) so it can also CLEAR flags when
+        # the last contributing active effect goes away — without
+        # trampling legacy direct-mutation flags from un-migrated
+        # characters. The contract during migration: don't mix legacy
+        # and registry on the same player's same flag.
+        new_registry_drunk_ids = registry_drunk
+        new_registry_poisoned_ids = registry_poisoned
+
+        # Set the flag on newly-registry-drunk players.
+        for pid in new_registry_drunk_ids - self._registry_drunk_ids:
+            try:
+                p = self.get_player(pid)
+                if not p.drunk:
+                    p.set_drunk(True)
+            except KeyError:
+                pass
+        # Clear the flag on players the registry no longer flags as
+        # drunk (only those it had previously flagged — so we don't
+        # touch legacy-set flags).
+        for pid in self._registry_drunk_ids - new_registry_drunk_ids:
+            try:
+                p = self.get_player(pid)
+                if p.drunk:
+                    p.set_drunk(False)
+            except KeyError:
+                pass
+        self._registry_drunk_ids = new_registry_drunk_ids
+
+        # Same dance for poisoned.
+        for pid in new_registry_poisoned_ids - self._registry_poisoned_ids:
+            try:
+                p = self.get_player(pid)
+                if not p.poisoned:
+                    p.set_poisoned(True)
+            except KeyError:
+                pass
+        for pid in self._registry_poisoned_ids - new_registry_poisoned_ids:
+            try:
+                p = self.get_player(pid)
+                if p.poisoned:
+                    p.set_poisoned(False)
+            except KeyError:
+                pass
+        self._registry_poisoned_ids = new_registry_poisoned_ids
+
+    def tick_effects(self, phase: str) -> None:
+        """Call ``on_phase_boundary(phase)`` on every effect (active
+        and inactive — per Q9, duration counters tick regardless of
+        activation status). Then re-resolve state.
+
+        Wired into the same path as :meth:`_recheck_persistent_effects`
+        so phase boundaries fire one set of hooks per layer:
+        per-character ``recheck_persistent_effects`` (legacy) plus
+        per-effect ``on_phase_boundary`` (new). Once all characters
+        have migrated, ``recheck_persistent_effects`` overrides go
+        away and only ``on_phase_boundary`` remains.
+        """
+        # Snapshot first — purges during iteration would mutate the
+        # collection.
+        for eff in list(self._effects_by_id.values()):
+            try:
+                eff.on_phase_boundary(self, phase)
+            except Exception as exc:  # pragma: no cover (defensive)
+                self.log(
+                    f"on_phase_boundary in effect {eff!r} crashed: {exc!r}"
+                )
+        self.resolve_droison_state()
+
+    # ==================================================================
+    #              SETUP-EFFECT REGISTRY (Pool Phase A)
+    # ==================================================================
+    # Pool-system refactor Phase A: generic drag-and-drop dispatcher
+    # plus auto-fill orchestrator for SetupEffect subclasses. These
+    # APIs are designed to eventually replace the hand-rolled
+    # ``move_*_token`` methods and ``CharacterPool._autofill_*`` hooks.
+    # During the migration window both layers coexist; characters opt
+    # into the new model by overriding ``on_assign_to_seat`` to emit
+    # SetupEffect subclasses.
+
+    def move_setup_token(
+        self,
+        kind: str,
+        dest_chair_id: int,
+        source: Optional["Character"] = None,
+    ) -> bool:
+        """Move (or place) a setup-time token of ``kind`` onto a chair.
+
+        Engine-generic dispatcher: looks up the :class:`SetupEffect`
+        subclass for ``kind``, validates ``can_target(engine,
+        dest_chair_id)``, then re-targets the existing effect (if
+        any) sourced by ``source`` — purging the old emission and
+        adding a new one targeting ``dest_chair_id``. Mutex-conflicting
+        effects already on the destination chair are purged first.
+
+        Parameters
+        ----------
+        kind:
+            The :attr:`SetupEffect.kind` string (e.g.
+            ``"ft_red_herring"``, ``"washerwoman_townsfolk"``).
+        dest_chair_id:
+            Target player id.
+        source:
+            The character emitting the effect. If ``None``, the
+            engine looks up the seated player whose character
+            declares this ``kind`` in its emitted set (currently:
+            walks all seated characters and asks each whether they
+            own ``kind`` via existing-effect membership). Pass
+            ``source`` explicitly when the engine needs to be sure
+            (e.g. multi-source kinds in future presets).
+
+        Returns
+        -------
+        ``True`` if the move succeeded; ``False`` if the kind is
+        unknown, the destination is invalid, or no matching source
+        was found.
+        """
+        cls = get_setup_effect_class(kind)
+        if cls is None:
+            self.log(f"move_setup_token: unknown kind {kind!r}")
+            return False
+        # Validate the destination per the effect's own rule.
+        if not cls.can_target(self, dest_chair_id):
+            self.log(
+                f"move_setup_token: chair {dest_chair_id} fails "
+                f"{kind} can_target check"
+            )
+            return False
+        # Resolve the source character if not given.
+        if source is None:
+            for p in self._players:
+                if p.character is None:
+                    continue
+                for eff in self.effects_sourced_by(p.character):
+                    if isinstance(eff, cls):
+                        source = p.character
+                        break
+                if source is not None:
+                    break
+        if source is None:
+            self.log(
+                f"move_setup_token: no source character found for "
+                f"kind {kind!r}"
+            )
+            return False
+        # Purge any existing emission of this exact class by this
+        # source (we're re-targeting it, not adding a second).
+        for old in list(self.effects_sourced_by(source)):
+            if isinstance(old, cls):
+                self.purge_effect(old)
+        # Purge mutex-conflicting effects on the destination chair.
+        for conflicting_kind in cls.mutex_kinds:
+            for eff in list(self.effects_targeting(
+                dest_chair_id, kind=conflicting_kind, active_only=False,
+            )):
+                self.purge_effect(eff)
+        # Emit the new effect.
+        self.add_effect(cls(source=source, targets=[dest_chair_id]))
+        return True
+
+    def refresh_setup_effects(self) -> None:
+        """Auto-fill orchestrator: ensure every seated character that
+        owns :class:`SetupEffect` subclasses has a current emission
+        for each, calling ``autofill_default_target`` to pick a
+        default for any missing emission.
+
+        Called from :meth:`CharacterPool.add` /
+        :meth:`CharacterPool.remove` so when the bag composition
+        changes, dependent setup effects refresh.
+
+        Iteration order is deterministic: SetupEffect subclasses sort
+        by ``autofill_priority`` (descending) so dependent effects
+        (e.g. WW wrong target needs the seen target already known)
+        process in the right order.
+        """
+        all_classes = sorted(
+            all_setup_effect_classes(),
+            key=lambda c: -getattr(c, "autofill_priority", 0),
+        )
+        for cls in all_classes:
+            for p in self._players:
+                if p.character is None:
+                    continue
+                # Does this character own this effect class? We
+                # consider a character to "own" a SetupEffect class
+                # if it has emitted one in the past — the typical
+                # path is the character's ``on_assign_to_seat``
+                # creating one. If no emission exists and the class
+                # has an ``autofill_default_target`` that returns a
+                # valid chair, emit it.
+                existing = [
+                    e for e in self.effects_sourced_by(p.character)
+                    if isinstance(e, cls)
+                ]
+                if existing:
+                    # Validate the existing target still satisfies
+                    # ``can_target``. If not (e.g. the chair the
+                    # token is on no longer holds a valid character
+                    # for this kind), purge and let the next
+                    # iteration auto-fill a fresh default.
+                    for eff in existing:
+                        valid = all(
+                            cls.can_target(self, tgt) for tgt in eff.targets
+                        )
+                        if not valid:
+                            self.purge_effect(eff)
+                    # Re-check after purges.
+                    existing = [
+                        e for e in self.effects_sourced_by(p.character)
+                        if isinstance(e, cls)
+                    ]
+                if existing:
+                    continue
+                # No emission — try auto-fill.
+                default_target = cls.autofill_default_target(p.character, self)
+                if default_target is None:
+                    continue
+                if not cls.can_target(self, default_target):
+                    continue
+                self.add_effect(cls(source=p.character, targets=[default_target]))
 
     def _recheck_persistent_effects(self, phase: str) -> None:
         """Run :meth:`Character.recheck_persistent_effects` on every seat.
@@ -2978,6 +3756,12 @@ class Engine:
                         f"recheck_persistent_effects in {char.name} "
                         f"(perceived {perceived.name}) crashed: {exc!r}"
                     )
+        # Layer 1 hook: tick the new effect registry on the same
+        # boundary. No-op when the registry is empty (the common
+        # case until characters migrate). After all migrations land,
+        # the per-character ``recheck_persistent_effects`` overrides
+        # go away and only this remains.
+        self.tick_effects(phase)
 
     # ==================================================================
     #                       PROMPT BROKERAGE
@@ -3258,6 +4042,15 @@ class Engine:
             p for p in alive if p.char_type is CharType.DEMON
         ]
         if not alive_demons:
+            # Mastermind extension: a seated, sober Mastermind absorbs
+            # the demon-dead trigger so the game continues for one
+            # more day (the Mastermind's reaction set the flag from
+            # its DEATH handler, which fires inside the same
+            # ``_dispatch(DEATH)`` call that precedes this check).
+            # The actual pending win is registered by Mastermind's
+            # next-day EXECUTION / DAY_END reactions.
+            if getattr(self, "_mastermind_extension_active", False):
+                return None
             return Alignment.GOOD, "The Demon is dead."
         counted = [
             p for p in alive
@@ -3636,6 +4429,27 @@ class Engine:
             perceived = char.acting_perceived_character()
             if perceived is not None:
                 _absorb(perceived)
+
+        # Layer 2 hook: also merge tokens contributed by the engine's
+        # effect registry. Each effect's ``token_kind_for_target`` is
+        # consulted per target. Per Q-new-9 of the design doc, both
+        # active and inactive effects render their tokens (no separate
+        # visual for now). Migrated characters have stopped writing
+        # ``compute_reminder_tokens``; their tokens flow through here.
+        for eff in self._effects_by_id.values():
+            for tgt_id in eff.targets:
+                try:
+                    kind = eff.token_kind_for_target(tgt_id, self)
+                except Exception as exc:  # pragma: no cover (defensive)
+                    self.log(
+                        f"token_kind_for_target crashed in {eff!r}: {exc!r}"
+                    )
+                    continue
+                if not kind:
+                    continue
+                bucket = merged.setdefault(kind, [])
+                if tgt_id not in bucket:
+                    bucket.append(tgt_id)
 
         return merged
 

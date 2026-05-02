@@ -69,6 +69,7 @@ class Pacifist(Character):
             and self.player.has_ability
             and event.data.get("cause") is DeathCause.EXECUTION
             and not event.data.get("cancelled")
+            and not event.data.get("force")
             and event.targets
         ):
             target = event.targets[0]
@@ -89,6 +90,10 @@ class Pacifist(Character):
                 save = engine.send_prompt(ask)
                 if isinstance(save, bool) and save:
                     event.data["cancelled"] = True
+                    event.data["cancelled_by_character"] = "Pacifist"
+                    event.data["cancelled_reason"] = (
+                        "Pacifist saves an executed good player"
+                    )
                     engine.log_reaction(
                         "Pacifist",
                         (

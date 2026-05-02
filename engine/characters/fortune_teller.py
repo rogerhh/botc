@@ -30,6 +30,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Optional
 
 from engine.character import Character
+from engine.effect import SetupEffect
 from engine.enums import CharType, SetupMode
 from engine.event import Event, EventType
 from engine.prompt import (
@@ -41,6 +42,46 @@ from engine.prompt import (
 if TYPE_CHECKING:
     from engine.engine import Engine
     from engine.player import Player
+
+
+class FortuneTellerRedHerringEffect(SetupEffect):
+    """The good player who registers as the Demon to the Fortune Teller.
+
+    Setup-phase pick that persists into play. Lifecycle:
+
+    * Created during setup when the storyteller picks (or the pool
+      auto-fills) the herring role; resolves to a chair.
+    * Persists for the whole game.
+    * Purged when the Fortune Teller dies (default
+      ``purge_on_source_death=True``) or changes character.
+    * Survives the herring's own death — per Q-new-6 the marker
+      stays on the dead seat. (No ``on_target_death`` override; the
+      default no-op leaves the effect intact.)
+    """
+
+    kind = "ft_red_herring"
+    contributes_to_state = None
+    purge_on_source_death = True
+    purge_on_source_character_change = True
+    deactivate_on_source_droisoned = False  # marker is bookkeeping;
+                                            # readings are handled in
+                                            # FT.ability() based on
+                                            # FT's current state
+
+    @classmethod
+    def can_target(cls, engine: "Engine", chair_id: int) -> bool:
+        try:
+            p = engine.get_player(chair_id)
+        except KeyError:
+            return False
+        if p.character is None:
+            return False
+        # Red herring must be a good role (TF or Outsider).
+        return p.character.char_type in (
+            CharType.TOWNSFOLK,
+            CharType.OUTSIDER,
+        )
+
 
 class FortuneTeller(Character):
     name = "Fortune Teller"
@@ -115,6 +156,7 @@ class FortuneTeller(Character):
                     f"{self.player.name} (pre-set)."
                 )
                 break
+        self._refresh_registry_effect(engine)
 
     def _resolve_red_herring_player(
         self, engine: "Engine"
@@ -127,6 +169,42 @@ class FortuneTeller(Character):
             if p.character is not None and p.character.name == role.name:
                 return p
         return None
+
+    def _refresh_registry_effect(self, engine: "Engine") -> None:
+        """Synchronise the registry's
+        :class:`FortuneTellerRedHerringEffect` with the resolved
+        herring player.
+
+        Bridges the legacy pool-based herring storage with the new
+        registry-effect model. Called from absorb_setup_data,
+        on_setup_ability(SETUP_PHASE), and ability() (where the
+        herring is re-resolved each night to handle mid-game role
+        swaps on the herring's seat).
+        """
+        if self.player is None:
+            return
+        existing = [
+            e for e in engine.effects_sourced_by(self)
+            if isinstance(e, FortuneTellerRedHerringEffect)
+        ]
+        target_id = (
+            self._red_herring.id if self._red_herring is not None else None
+        )
+        # If the existing effect already targets the right seat,
+        # nothing to do.
+        if (
+            len(existing) == 1
+            and target_id is not None
+            and existing[0].targets == [target_id]
+        ):
+            return
+        for old in existing:
+            engine.purge_effect(old)
+        if target_id is None:
+            return
+        engine.add_effect(FortuneTellerRedHerringEffect(
+            source=self, targets=[target_id],
+        ))
 
     # ------------------------------------------------------------------
     # Setup.
@@ -155,6 +233,7 @@ class FortuneTeller(Character):
                 # Already populated; just refresh the resolved player.
                 if self._red_herring is None:
                     self._red_herring = self._resolve_red_herring_player(engine)
+                self._refresh_registry_effect(engine)
                 return
             rh_name = engine.pool.ft_red_herring()
             if rh_name:
@@ -169,6 +248,7 @@ class FortuneTeller(Character):
                         f"{self._red_herring.name} ({rh_name}) absorbed as "
                         f"red herring for {self.player.name} (Fortune Teller)."
                     )
+                self._refresh_registry_effect(engine)
             return
         # IN_GAME: legacy prompt path.
         self.setup_ability(engine)
@@ -249,6 +329,7 @@ class FortuneTeller(Character):
         # character swap on that seat (Scarlet Woman becomes the Imp,
         # etc.) is reflected in tonight's read.
         self._red_herring = self._resolve_red_herring_player(engine)
+        self._refresh_registry_effect(engine)
 
         engine.dispatch(
             Event(EventType.CHECK_CONDITION, source=self, targets=[self.player])

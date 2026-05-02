@@ -61,12 +61,27 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from engine.character import Character
+from engine.effect import Effect
 from engine.enums import Alignment, CharType, DeathCause
 from engine.event import Event, EventType
 from engine.prompt import InformationPrompt, SelectPlayerPrompt
 
 if TYPE_CHECKING:
     from engine.engine import Engine
+
+
+class ImpDeadEffect(Effect):
+    """Marker on a seat the Imp killed last night. Cleared at next dawn."""
+
+    kind = "imp_dead"
+    contributes_to_state = None
+    purge_on_source_death = True
+    deactivate_on_source_droisoned = False
+
+    def on_phase_boundary(self, engine: "Engine", phase: str) -> None:
+        if phase == "dawn":
+            engine.purge_effect(self)
+
 
 class Imp(Character):
     name = "Imp"
@@ -82,35 +97,31 @@ class Imp(Character):
     ]
 
     def compute_reminder_tokens(self, engine: "Engine") -> "dict[str, list[int]]":
-        """Demon-class reminder tokens.
+        """Demon-class reminder tokens (post-Layer-2):
 
-          * ``imp_dead``: every seat the Demon killed since dawn.
-            Uses the engine's transient ``_demon_killed_player_ids``,
-            populated when a DEMON_KILL lands and cleared at dawn.
-            Contributed once per Demon seat — even if multiple Demons
-            are seated (defensive), the merge is a set-union.
+          * ``imp_dead`` is now rendered via :class:`ImpDeadEffect` in
+            the registry — emitted from ``ability()`` after a successful
+            kill. This method no longer contributes that token.
           * ``scarlet_woman_is_demon``: any seat that was promoted
             from Scarlet Woman to this Demon class. The Imp adopts
             the marker so the UI grimoire knows the seat used to be
-            the SW. If this Imp's seat isn't in the promoted list
-            the contribution is empty for the marker.
+            the SW. (Still rendered through this method until the
+            Scarlet Woman / promotion flow itself migrates.)
         """
         out: "dict[str, list[int]]" = {}
-        ids = list(getattr(engine, "_demon_killed_player_ids", []) or [])
-        if ids:
-            out["imp_dead"] = list(ids)
         sw_ids = list(getattr(engine, "_sw_promoted_player_ids", []) or [])
-        # Only contribute the SW marker for *this* seat — otherwise a
-        # script with multiple demon classes would have every seated
-        # demon claim every promoted seat. The merge below in the
-        # engine is a union so it's still safe, but the per-seat call
-        # is the right shape.
         if self.player is not None and self.player.id in sw_ids:
             out["scarlet_woman_is_demon"] = [self.player.id]
         return out
 
     def ability(self, engine: "Engine", night_number: int) -> None:
         if night_number == 1 or self.player is None or self.player.dead:
+            return
+        # Exorcist's "Demon doesn't wake tonight" block: short-circuit
+        # before any wake or prompt. The Exorcist already showed the
+        # reveal to the Demon player.
+        if getattr(engine, "_exorcism_blocked_id", None) == self.player.id:
+            engine.log(f"Imp {self.player.name}: blocked by the Exorcist.")
             return
         engine.dispatch(
             Event(EventType.CHECK_CONDITION, source=self, targets=[self.player])
@@ -171,6 +182,14 @@ class Imp(Character):
         # the starpassing flow — no special-case branching at this
         # call site.
         engine.kill(target.id, DeathCause.DEMON_KILL, source=self)
+        # Emit the per-demon kill marker on the dead seat. Mirrors
+        # the engine's transient ``_demon_killed_player_ids`` for the
+        # registry-based renderer; both will work in parallel until
+        # the legacy state can be retired.
+        if not target.alive:
+            engine.add_effect(ImpDeadEffect(
+                source=self, targets=[target.id],
+            ))
 
         engine.dispatch(
             Event(EventType.RESOLUTION, source=self, targets=[target])

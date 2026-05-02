@@ -157,6 +157,83 @@ BAD_MOON_RISING: Tuple[ScriptCharacter, ...] = (
     ScriptCharacter("Fool", CharType.TOWNSFOLK,
                     "The 1st time you die, you don't.",
                     once_per_game=True),
+    ScriptCharacter("Grandmother", CharType.TOWNSFOLK,
+                    "You start knowing a good player & their character. "
+                    "If the Demon kills them, you die too.",
+                    first_night_order=36),
+    ScriptCharacter("Exorcist", CharType.TOWNSFOLK,
+                    "Each night*, choose a player (different to last "
+                    "night): the Demon, if chosen, learns who you are "
+                    "then doesn't wake tonight.",
+                    other_night_order=21),
+    ScriptCharacter("Gambler", CharType.TOWNSFOLK,
+                    "Each night*, choose a player & guess their "
+                    "character: if you guess wrong, you die.",
+                    other_night_order=41),
+    ScriptCharacter("Gossip", CharType.TOWNSFOLK,
+                    "Each day, you may make a public statement. Tonight, "
+                    "if it was true, a player dies.",
+                    other_night_order=47),
+    ScriptCharacter("Professor", CharType.TOWNSFOLK,
+                    "Once per game, at night*, choose a dead player: "
+                    "if they are a Townsfolk, they are resurrected.",
+                    other_night_order=49,
+                    once_per_game=True),
+    ScriptCharacter("Minstrel", CharType.TOWNSFOLK,
+                    "When a Minion dies by execution, all other players "
+                    "(except Travellers) are drunk until dusk tomorrow."),
+    ScriptCharacter("Goon", CharType.OUTSIDER,
+                    "Each night, the 1st player to choose you with "
+                    "their ability is drunk until dusk. You become "
+                    "their alignment."),
+    ScriptCharacter("Lunatic", CharType.OUTSIDER,
+                    "You think you are a Demon, but you are not. The "
+                    "Demon knows who you are & who you choose at night."),
+    ScriptCharacter("Tinker", CharType.OUTSIDER,
+                    "You might die at any time."),
+    ScriptCharacter("Moonchild", CharType.OUTSIDER,
+                    "When you learn that you died, publicly choose 1 "
+                    "alive player. Tonight, if it was a good player, "
+                    "they die.",
+                    once_per_game=True),
+    ScriptCharacter("Godfather", CharType.MINION,
+                    "You start knowing which Outsiders are in play. If "
+                    "1 died today, choose a player tonight: they die. "
+                    "[-1 or +1 Outsider]",
+                    first_night_order=18, other_night_order=46,
+                    setup_outsider_delta=1, setup_townsfolk_delta=-1),
+    ScriptCharacter("Devil's Advocate", CharType.MINION,
+                    "Each night, choose a living player (different to "
+                    "last night): if executed tomorrow, they don't die.",
+                    first_night_order=16, other_night_order=19),
+    ScriptCharacter("Assassin", CharType.MINION,
+                    "Once per game, at night*, choose a player: they "
+                    "die, even if for some reason they could not.",
+                    other_night_order=43,
+                    once_per_game=True),
+    ScriptCharacter("Mastermind", CharType.MINION,
+                    "If the Demon dies by execution (ending the game), "
+                    "play for 1 more day. If a player is then executed, "
+                    "their team loses."),
+    ScriptCharacter("Zombuul", CharType.DEMON,
+                    "Each night*, if no-one died today, choose a "
+                    "player: they die. The 1st time you die, you live "
+                    "but register as dead.",
+                    other_night_order=26),
+    ScriptCharacter("Pukka", CharType.DEMON,
+                    "Each night, choose a player: they are poisoned. "
+                    "The previously poisoned player dies then becomes "
+                    "healthy.",
+                    first_night_order=19, other_night_order=27),
+    ScriptCharacter("Shabaloth", CharType.DEMON,
+                    "Each night*, choose 2 players: they die. A dead "
+                    "player you chose last night might be regurgitated.",
+                    other_night_order=28),
+    ScriptCharacter("Po", CharType.DEMON,
+                    "Each night*, you may choose a player: they die. "
+                    "If your last choice was no-one, choose 3 players "
+                    "tonight.",
+                    other_night_order=29),
 )
 
 

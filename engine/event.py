@@ -47,6 +47,19 @@ class EventType(str, Enum):
     # so the Mayor never transiently appears dead. ``data["cause"]``
     # carries the original ``DeathCause``.
     PRE_DEATH = "pre_death"
+    # Fired immediately after ``PRE_DEATH`` *only if* no standard
+    # protection cancelled it. This is the "last-resort" save pass
+    # reserved for self-save abilities that must defer to every other
+    # protector — currently the Zombuul's first-life save and the
+    # Fool's once-per-game save. It shares the same ``data`` dict as
+    # the originating ``PRE_DEATH`` so a cancellation
+    # (``data["cancelled"] = True``) propagates back and is observed
+    # by ``Engine.kill`` / ``Engine.execute_player``. Standard
+    # cancellers (Innkeeper SAFE, Soldier, Mayor redirect, Tea Lady,
+    # Sailor, Pacifist, Devil's Advocate) only react to ``PRE_DEATH``;
+    # this guarantees a Zombuul / Fool's slot is spent only when the
+    # death would otherwise actually land.
+    PRE_DEATH_LAST_RESORT = "pre_death_last_resort"
     DEATH = "death"
     EXECUTION = "execution"
     NOMINATION = "nomination"
@@ -75,6 +88,42 @@ class EventType(str, Enum):
     SETUP_START = "setup_start"
     SETUP_END = "setup_end"
     SETUP_PICK = "setup_pick"
+
+    # Effect-registry lifecycle (Layer 1 foundation; emitted by
+    # ``Engine.add_effect`` / ``purge_effect`` / state transitions in
+    # the resolver). Useful for character reactions that want to react
+    # to the moment a poison appears, not the underlying state flip.
+    # Most characters won't subscribe to these.
+    EFFECT_ADDED = "effect_added"
+    EFFECT_PURGED = "effect_purged"
+    EFFECT_ACTIVATED = "effect_activated"
+    EFFECT_DEACTIVATED = "effect_deactivated"
+
+    # Alignment changes (Goon allegiance flip, future characters that
+    # rotate good/evil). Tea Lady's protection re-evaluates on this.
+    ALIGNMENT_CHANGE = "alignment_change"
+
+
+class EventOutcome(Enum):
+    """Phase-1 (effect) resolution outcomes for ``Effect.resolve_event``.
+
+    The engine's two-phase event dispatch walks every *active* effect
+    targeting the event's subjects (phase 1) before running character
+    reactions (phase 2). An effect's ``resolve_event`` returns one of
+    these to indicate how the engine should treat the event.
+
+    * ``CANCEL`` — event is cancelled. The dispatcher sets
+      ``event.data["cancelled"] = True`` (matching the legacy
+      reaction-side cancellation shape) and stops further resolution.
+    * ``REDIRECT`` — event continues with new targets. The effect
+      mutates ``event.targets`` *before* returning REDIRECT; the
+      dispatcher restarts the phase-1 walk against the new targets.
+    * Returning ``None`` (the default) abstains — the effect didn't
+      have anything to say about this event.
+    """
+
+    CANCEL = "cancel"
+    REDIRECT = "redirect"
 
 
 @dataclass

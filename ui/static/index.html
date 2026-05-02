@@ -2552,9 +2552,26 @@
   // tokens by symbolic name without sprinkling URLs everywhere.
   const TOKEN_FILES = {
     drunk:                   "drunk_is_the_drunk",
-    fortune_teller_red_herring: "fortune_teller_red_herring",
-    poisoned:                "poisoner_poisoned",
+    // The engine emits the kind ``ft_red_herring`` (the setup-token
+    // getter name on the pool); the actual icon file is named
+    // ``fortune_teller_red_herring.png``. Key the table off the
+    // engine-emitted kind so ``tokenUrl("ft_red_herring")`` resolves.
+    ft_red_herring:          "fortune_teller_red_herring",
+    // The Poisoner's POISONED reminder. Engine emits the kind
+    // ``poisoner_poisoned`` (matching the PoisonerPoisonEffect's
+    // ``kind``); the file basename matches one-to-one.
+    poisoner_poisoned:       "poisoner_poisoned",
     imp_dead:                "imp_dead",
+    // Each demon emits its own DEAD marker on the seat killed last
+    // night (cleared at the next dawn). At most one demon is in
+    // play per game so these are mutually exclusive with imp_dead.
+    po_dead:                 "po_dead",
+    pukka_dead:              "pukka_dead",
+    // Minion-kill markers — Godfather's overnight kill on the
+    // outsider-died-today trigger, and the Assassin's once-per-game
+    // stab. Cleared at the next dawn (Godfather) / dusk (Assassin).
+    godfather_dead:          "godfather_dead",
+    assassin_dead:           "assassin_dead",
     monk_safe:               "monk_safe",
     butler_master:           "butler_master",
     investigator_minion:     "investigator_minion",
@@ -2572,6 +2589,57 @@
     // matches the role; the caption is the same "Wrong" on each).
     librarian_wrong:         "librarian_wrong",
     investigator_wrong:      "investigator_wrong",
+    grandmother_grandchild:  "grandmother_grandchild",
+    // Bad Moon Rising reminder tokens. Each kind matches the string
+    // returned by the corresponding character's
+    // ``compute_reminder_tokens`` so the seat-tokens collector in
+    // ``engine.chair_views`` lights them up. The basename here is
+    // the actual file under /assets/tokens/ — a couple diverge from
+    // the kind (e.g. "devils_advocate_survives_execution.png" for
+    // the kind ``devils_advocate_survives``).
+    minstrel_everyone_drunk:    "minstrel_everyone_is_drunk",
+    exorcist_chosen:            "exorcist_chosen",
+    po_3_attacks:               "po_3_attacks",
+    devils_advocate_survives:   "devils_advocate_survives_execution",
+    goon_drunk:                 "goon_drunk",
+    sailor_drunk:               "sailor_drunk",
+    tea_lady_cannot_die:        "tea_lady_cannot_die",
+    godfather_died_today:       "godfather_died_today",
+    pukka_poisoned:             "pukka_poisoned",
+    assassin_no_ability:        "assassin_no_ability",
+    fool_no_ability:            "fool_no_ability",
+    // No bespoke "shabaloth_attacked" art ships in /assets/tokens/;
+    // the live-Shabaloth tile is the closest match and is what the
+    // grimoire uses to tag victims of the previous night's attack.
+    shabaloth_attacked:         "shabaloth_alive",
+    moonchild_dead:             "moonchild_dead",
+    innkeeper_safe:             "innkeeper_safe",
+    innkeeper_drunk:            "innkeeper_drunk",
+    // Zombuul: three reminder tokens emitted by ``Zombuul.compute_reminder_tokens``.
+    // ``zombuul_dead`` rides on every seat the Zombuul killed tonight,
+    // ``zombuul_died_today`` on every seat that died during the most-recent
+    // day, and ``life_token_back`` sits on the Zombuul's own seat from the
+    // moment their first-death save fires (the wiki's "flip the life token"
+    // cue) until the game ends. The flipped marker reuses the generic
+    // ``life_token_back.png`` art rather than a Zombuul-specific PNG.
+    zombuul_dead:               "zombuul_dead",
+    zombuul_died_today:         "zombuul_died_today",
+    life_token_back:            "life_token_back",
+    // Professor: ``professor_alive`` rides on the seat the Professor
+    // resurrected, ``professor_no_ability`` on the Professor's own seat
+    // once their once-per-game revive is spent.
+    professor_alive:            "professor_alive",
+    professor_no_ability:       "professor_no_ability",
+    // Courtier: the engine rotates the DRUNK marker each night of the
+    // 3-night/3-day duration, exactly like the wiki — DRUNK 1 on the
+    // pick night, DRUNK 2 the next night, DRUNK 3 the night after —
+    // and ``courtier_no_ability`` rides on the Courtier's own seat
+    // once the duration ends (or, for picks that had no effect,
+    // immediately).
+    courtier_drunk_1:           "courtier_drunk_1",
+    courtier_drunk_2:           "courtier_drunk_2",
+    courtier_drunk_3:           "courtier_drunk_3",
+    courtier_no_ability:        "courtier_no_ability",
   };
   function tokenUrl(key) {
     const base = TOKEN_FILES[key];
@@ -2587,22 +2655,48 @@
   // apart. Mutually-exclusive token pairs share an angle on purpose:
   // a chair can only carry one half of each pair, so collapsing the
   // pair to one slot widens the spread.
+  //   -165° : minstrel_everyone_drunk
   //   -150° : slayer_no_ability   / virgin_no_ability     (mutex)
+  //          / artist_no_ability                          (mutex)
+  //   -135° : assassin_no_ability
   //   -120° : librarian_outsider  / librarian_wrong       (mutex)
+  //   -105° : godfather_died_today
   //    -90° : investigator_minion / investigator_wrong    (mutex)
+  //    -75° : po_3_attacks
   //    -60° : washerwoman_townsfolk / washerwoman_wrong   (mutex)
-  //    -30° : ft_red_herring
+  //    -45° : shabaloth_attacked
+  //    -30° : ft_red_herring / grandmother_grandchild
+  //    -15° : fool_no_ability
   //      0° : (reserved — top stays clear for visual balance)
-  //     30° : drunk
+  //     15° : exorcist_chosen
+  //     30° : drunk / sailor_drunk / goon_drunk / innkeeper_drunk
+  //          (a player has at most one source of drunkenness in
+  //           practice — the IS-THE-DRUNK marker can stack with a
+  //           drunkening source but the visual overlap is
+  //           acceptable for that edge case)
+  //     45° : innkeeper_safe
   //     60° : butler_master
+  //     75° : tea_lady_cannot_die
   //     90° : monk_safe
-  //    120° : poisoned
-  //    150° : imp_dead / scarlet_woman_is_demon  (rarely co-occur;
-  //           if both, SW keeps 150° and imp_dead shifts to 165°)
-  //    180° : undertaker_died_today
+  //    105° : devils_advocate_survives
+  //    120° : poisoner_poisoned
+  //    135° : moonchild_dead
+  //    150° : imp_dead / po_dead / pukka_dead / godfather_dead /
+  //           assassin_dead / zombuul_dead / scarlet_woman_is_demon
+  //           (each demon emits its own DEAD marker but only one
+  //           demon is in play per game, so the demon-kill markers
+  //           are mutex with each other; minion-kill markers
+  //           [godfather_dead, assassin_dead] hit different victim
+  //           chairs in practice. If a chair somehow carries an SW
+  //           marker plus a kill marker, the SW marker keeps 150°
+  //           and the kill marker shifts to 165°.)
+  //    165° : pukka_poisoned / life_token_back
+  //           (different demon — won't co-occur. Also the overflow
+  //           slot for kill markers when SW shares 150°.)
+  //    180° : undertaker_died_today / zombuul_died_today
   const TOKEN_VIEW = {
     drunk:                  { icon: "drunk",                  angle:  30, title: "Is the Drunk" },
-    ft_red_herring:         { icon: "fortune_teller_red_herring", angle: -30, title: "Fortune Teller's red herring" },
+    ft_red_herring:         { icon: "ft_red_herring",         angle: -30, title: "Fortune Teller's red herring" },
     washerwoman_townsfolk:  { icon: "washerwoman_townsfolk",  angle: -60, title: "Washerwoman saw this Townsfolk" },
     washerwoman_wrong:      { icon: "washerwoman_wrong",      angle: -60, title: "Washerwoman WRONG" },
     investigator_minion:    { icon: "investigator_minion",    angle: -90, title: "Investigator saw this Minion" },
@@ -2611,13 +2705,63 @@
     librarian_wrong:        { icon: "librarian_wrong",        angle: -120, title: "Librarian WRONG" },
     butler_master:          { icon: "butler_master",          angle:  60, title: "Butler's Master" },
     monk_safe:              { icon: "monk_safe",              angle:  90, title: "Monk-protected tonight" },
-    poisoned:               { icon: "poisoned",               angle: 120, title: "Poisoned by the Poisoner" },
+    poisoner_poisoned:      { icon: "poisoner_poisoned",      angle: 120, title: "Poisoned by the Poisoner" },
     scarlet_woman_is_demon: { icon: "scarlet_woman_is_demon", angle: 150, title: "Scarlet Woman has become the Demon" },
-    imp_dead:               { icon: "imp_dead",               angle: 150, title: "Killed by the Demon last night" },
+    imp_dead:               { icon: "imp_dead",               angle: 150, title: "Killed by the Imp last night" },
+    // BMR demon-kill markers. Each demon stamps its own DEAD token on
+    // the seat it killed last night; at most one demon plays at a
+    // time so they share 150° with imp_dead.
+    po_dead:                { icon: "po_dead",                angle: 150, title: "Killed by the Po last night" },
+    pukka_dead:             { icon: "pukka_dead",             angle: 150, title: "Killed by the Pukka last night" },
+    // Minion-kill markers (Godfather, Assassin). They typically land
+    // on a different chair from the demon-kill marker, so the 150°
+    // share is safe in practice.
+    godfather_dead:         { icon: "godfather_dead",         angle: 150, title: "Killed by the Godfather last night" },
+    assassin_dead:          { icon: "assassin_dead",          angle: 150, title: "Killed by the Assassin" },
     undertaker_died_today:  { icon: "undertaker_died_today",  angle: 180, title: "Died today (Undertaker will see this character tonight)" },
     slayer_no_ability:      { icon: "slayer_no_ability",      angle: -150, title: "Slayer has used their once-per-game shot" },
     virgin_no_ability:      { icon: "virgin_no_ability",      angle: -150, title: "Virgin's nominator-execute ability has been used" },
     artist_no_ability:      { icon: "artist_no_ability",      angle: -150, title: "Artist has asked their once-per-game question" },
+    grandmother_grandchild: { icon: "grandmother_grandchild", angle:  -30, title: "Grandmother's grandchild" },
+
+    // ----- Bad Moon Rising -----
+    minstrel_everyone_drunk:  { icon: "minstrel_everyone_drunk",  angle: -165, title: "Minstrel: every other player is drunk tonight" },
+    assassin_no_ability:      { icon: "assassin_no_ability",      angle: -135, title: "Assassin has used their once-per-game kill" },
+    godfather_died_today:     { icon: "godfather_died_today",     angle: -105, title: "Outsider died today (Godfather will kill tonight)" },
+    po_3_attacks:             { icon: "po_3_attacks",             angle:  -75, title: "Po has 3 attacks tonight" },
+    shabaloth_attacked:       { icon: "shabaloth_attacked",       angle:  -45, title: "Attacked by the Shabaloth (may be regurgitated)" },
+    fool_no_ability:          { icon: "fool_no_ability",          angle:  -15, title: "Fool has used their one-shot survive" },
+    exorcist_chosen:          { icon: "exorcist_chosen",          angle:   15, title: "Exorcist's chosen Demon (ability blocked tonight)" },
+    sailor_drunk:             { icon: "sailor_drunk",             angle:   30, title: "Drunk (Sailor)" },
+    goon_drunk:               { icon: "goon_drunk",               angle:   30, title: "Drunk (Goon)" },
+    innkeeper_drunk:          { icon: "innkeeper_drunk",          angle:   30, title: "Drunk (Innkeeper)" },
+    courtier_drunk_1:         { icon: "courtier_drunk_1",         angle:   30, title: "Drunk (Courtier — night 1 of 3)" },
+    courtier_drunk_2:         { icon: "courtier_drunk_2",         angle:   30, title: "Drunk (Courtier — night 2 of 3)" },
+    courtier_drunk_3:         { icon: "courtier_drunk_3",         angle:   30, title: "Drunk (Courtier — night 3 of 3)" },
+    innkeeper_safe:           { icon: "innkeeper_safe",           angle:   45, title: "Innkeeper-protected tonight" },
+    tea_lady_cannot_die:      { icon: "tea_lady_cannot_die",      angle:   75, title: "Cannot die (Tea Lady's good neighbour)" },
+    devils_advocate_survives: { icon: "devils_advocate_survives", angle:  105, title: "Survives execution today (Devil's Advocate)" },
+    moonchild_dead:           { icon: "moonchild_dead",           angle:  135, title: "Killed by the Moonchild" },
+    pukka_poisoned:           { icon: "pukka_poisoned",           angle:  165, title: "Poisoned by the Pukka" },
+
+    // ----- Sects & Violets-flavoured (still on the BMR shelf for now) -----
+    // Professor: ALIVE marker rides on the resurrected seat (rare, so
+    // we share 105° with Devil's Advocate's survives — they don't
+    // co-occur in practice). NO ABILITY rides on the Professor's own
+    // seat alongside the other once-per-game spent markers at -150°.
+    professor_alive:          { icon: "professor_alive",          angle:  105, title: "Resurrected by the Professor" },
+    professor_no_ability:     { icon: "professor_no_ability",     angle: -150, title: "Professor has used their once-per-game revive" },
+    // Courtier's NO ABILITY shares the once-per-game stack at -150°.
+    courtier_no_ability:      { icon: "courtier_no_ability",      angle: -150, title: "Courtier has used their once-per-game drunkening" },
+    // Zombuul tokens: DEAD on each seat the Zombuul killed tonight
+    // (shares 150° with imp_dead — only one demon kills per night),
+    // DIED TODAY on day-deaths (shares 180° with undertaker_died_today),
+    // ``life_token_back`` on the Zombuul's own seat after first-death
+    // save fires (shares 165° with pukka_poisoned — different demon,
+    // won't co-occur).
+    zombuul_dead:             { icon: "zombuul_dead",             angle:  150, title: "Killed by the Zombuul tonight" },
+    zombuul_died_today:       { icon: "zombuul_died_today",       angle:  180, title: "Died today (Zombuul tracking)" },
+    life_token_back:          { icon: "life_token_back",          angle:  165, title: "Zombuul: registers as dead (life token flipped)" },
   };
 
   // Per-player side-panel labels for each token kind. Same source of
@@ -2634,13 +2778,44 @@
     librarian_wrong:        { label: "Librarian wrong",             cls: "flag-on" },
     butler_master:          { label: "Butler's master",             cls: "flag-on" },
     monk_safe:              { label: "Monk safe",                   cls: "flag-on" },
-    poisoned:               { label: "Poisoned (target)",           cls: "flag-on" },
-    imp_dead:               { label: "Killed by Demon",             cls: "flag-on" },
+    poisoner_poisoned:      { label: "Poisoned by Poisoner",        cls: "flag-on" },
+    imp_dead:               { label: "Killed by Imp",               cls: "flag-on" },
+    po_dead:                { label: "Killed by Po",                cls: "flag-on" },
+    pukka_dead:             { label: "Killed by Pukka",             cls: "flag-on" },
+    godfather_dead:         { label: "Killed by Godfather",         cls: "flag-on" },
+    assassin_dead:          { label: "Killed by Assassin",          cls: "flag-on" },
     undertaker_died_today:  { label: "Died today",                  cls: "flag-on" },
     scarlet_woman_is_demon: { label: "Scarlet Woman is the Demon",  cls: "flag-on" },
     slayer_no_ability:      { label: "Slayer no ability",           cls: "flag-off" },
     virgin_no_ability:      { label: "Virgin no ability",           cls: "flag-off" },
     artist_no_ability:      { label: "Artist no ability",           cls: "flag-off" },
+    grandmother_grandchild: { label: "Grandmother's grandchild",     cls: "flag-on" },
+
+    // ----- Bad Moon Rising -----
+    minstrel_everyone_drunk:  { label: "Minstrel: all drunk tonight", cls: "flag-on"  },
+    assassin_no_ability:      { label: "Assassin no ability",         cls: "flag-off" },
+    godfather_died_today:     { label: "Outsider died today",         cls: "flag-on"  },
+    po_3_attacks:             { label: "Po: 3 attacks tonight",       cls: "flag-on"  },
+    shabaloth_attacked:       { label: "Attacked by Shabaloth",       cls: "flag-on"  },
+    fool_no_ability:          { label: "Fool no ability",             cls: "flag-off" },
+    exorcist_chosen:          { label: "Exorcist's chosen",           cls: "flag-on"  },
+    sailor_drunk:             { label: "Drunk (Sailor)",              cls: "flag-on"  },
+    goon_drunk:               { label: "Drunk (Goon)",                cls: "flag-on"  },
+    innkeeper_drunk:          { label: "Drunk (Innkeeper)",           cls: "flag-on"  },
+    courtier_drunk_1:         { label: "Drunk (Courtier — n1/3)",     cls: "flag-on"  },
+    courtier_drunk_2:         { label: "Drunk (Courtier — n2/3)",     cls: "flag-on"  },
+    courtier_drunk_3:         { label: "Drunk (Courtier — n3/3)",     cls: "flag-on"  },
+    courtier_no_ability:      { label: "Courtier no ability",         cls: "flag-off" },
+    innkeeper_safe:           { label: "Innkeeper-safe",              cls: "flag-on"  },
+    tea_lady_cannot_die:      { label: "Tea Lady: cannot die",        cls: "flag-on"  },
+    devils_advocate_survives: { label: "Survives execution",          cls: "flag-on"  },
+    moonchild_dead:           { label: "Killed by Moonchild",         cls: "flag-on"  },
+    pukka_poisoned:           { label: "Poisoned by Pukka",           cls: "flag-on"  },
+    professor_alive:          { label: "Resurrected by Professor",    cls: "flag-on"  },
+    professor_no_ability:     { label: "Professor no ability",        cls: "flag-off" },
+    zombuul_dead:             { label: "Killed by Zombuul",           cls: "flag-on"  },
+    zombuul_died_today:       { label: "Died today (Zombuul)",        cls: "flag-on"  },
+    life_token_back:          { label: "Zombuul registers as dead",   cls: "flag-on"  },
   };
 
   // Append a reminder-token badge to a chair group. The badge is
@@ -2998,11 +3173,18 @@
   // No background shape — the bold serif numeral itself is the marker.
   // Positioned high enough that the player name (centered at y=-13
   // when both name and role are set) has clearance.
-  function appendChairNumber(g, num) {
+  //
+  // For *evil* chairs (Minion / Demon) the layout is inverted: the
+  // seat number sits at the bottom of the chair, and the character
+  // name floats above the player name (see ``render()``). This gives
+  // the storyteller an at-a-glance "evil" cue without any extra
+  // colour or icon — the chair text reads upside-down, like the
+  // chair itself has been flipped.
+  function appendChairNumber(g, num, evil) {
     const t = document.createElementNS("http://www.w3.org/2000/svg", "text");
     t.setAttribute("class", "chair-num");
     t.setAttribute("x", "0");
-    t.setAttribute("y", "-37");
+    t.setAttribute("y", evil ? "37" : "-37");
     t.setAttribute("dominant-baseline", "central");
     t.textContent = String(num);
     g.appendChild(t);
@@ -3042,38 +3224,73 @@
       circle.setAttribute("stroke-width", "2");
       g.appendChild(circle);
 
+      const name = (c.name || "").trim();
+      const character = (c.character || "").trim();
+      // Visible role; the engine swaps the Drunk's fake role in here.
+      const characterDisplay = (c.display_character || character).trim();
+      // Evil chairs get the inverted layout: seat number drops to
+      // the bottom of the chair and the character row mirrors above
+      // the player name. The flip is driven by the *live* alignment
+      // surfaced on the chair (``c.alignment``), NOT by the
+      // character's static type — alignment is mutable (e.g. the
+      // Goon flips its own alignment with its ability) and the
+      // chair must follow that runtime state without any client-side
+      // allowlist of "always-evil" characters. The engine derives
+      // ``c.alignment`` from ``Player.alignment`` once a chair is
+      // seated, falling back to the role's default alignment during
+      // setup. Empty chairs (alignment null) keep the default
+      // layout.
+      const isEvil = (c.alignment === "evil");
+
       // Seat number. Uses the chair's id, which the server keeps
       // compacted to 1..N: adding a chair appends N+1, and removing a
       // chair renumbers the rest so there are no gaps. The engine's
       // ``_sync_chairs_to_engine`` walks chairs in chair-id order so
       // ``player.id == chair.id`` — one number system, end to end.
-      appendChairNumber(g, c.id);
+      // The number drops to the bottom of an evil chair.
+      appendChairNumber(g, c.id, isEvil);
 
-      const name = (c.name || "").trim();
-      const character = (c.character || "").trim();
-      // Visible role; the engine swaps the Drunk's fake role in here.
-      const characterDisplay = (c.display_character || character).trim();
       const textsToFit = [];
-      // All offsets are nudged below the chair's vertical center so the
-      // seat number (centered at y=-37) has clearance above the text.
-      // The player name always anchors at y=-5 (its position when a
-      // character is also set), so toggling the character on or off
-      // doesn't shift the name. The character text sits below at y=22
-      // when the chair has a name; on its own it falls back to centered
-      // (y=10). Status reminder tokens sit *outside* the chair
-      // circle so the chair interior keeps the grimoire-style reading:
-      // just the role this player thinks they are.
+      // All offsets are nudged so the seat number (centered at
+      // y=±37) has clearance from the text. For *good* chairs: the
+      // player name anchors at y=-5 (just under the seat number) and
+      // the character sits below at y=22. For *evil* chairs every
+      // text row is *mirrored* across the chair center — chair-num
+      // -37 ↔ +37, player name -5 ↔ +5, character +22 ↔ -22 — so
+      // the inverted chair is the perfect reflection of a good chair
+      // about the horizontal axis. Status reminder tokens sit
+      // *outside* the chair circle so the chair interior keeps the
+      // grimoire-style reading: just the role this player thinks
+      // they are.
       if (name) {
-        const tName = svgText("chair-name", name, 0, -5);
-        g.appendChild(tName);
-        textsToFit.push(tName);
-        if (character) {
-          const tChar = svgText("chair-character", characterDisplay, 0, 22);
+        if (character && isEvil) {
+          // Mirrored: character at y=-22 (above), player name at y=+5
+          // (below). These are the negatives of the good-side y=22
+          // / y=-5 positions, so the row layout reads as the
+          // top-to-bottom flip of the good chair.
+          const tChar = svgText("chair-character", characterDisplay, 0, -22);
           g.appendChild(tChar);
           textsToFit.push(tChar);
+          const tName = svgText("chair-name", name, 0, 5);
+          g.appendChild(tName);
+          textsToFit.push(tName);
+        } else {
+          const tName = svgText("chair-name", name, 0, -5);
+          g.appendChild(tName);
+          textsToFit.push(tName);
+          if (character) {
+            const tChar = svgText("chair-character", characterDisplay, 0, 22);
+            g.appendChild(tChar);
+            textsToFit.push(tChar);
+          }
         }
       } else if (character) {
-        const tChar = svgText("chair-character", characterDisplay, 0, 10);
+        // No player name yet — center the character. Good chairs put
+        // it slightly below center (y=10) so the seat number above
+        // breathes; evil chairs mirror that to y=-10 so the seat
+        // number below breathes instead.
+        const tChar = svgText(
+          "chair-character", characterDisplay, 0, isEvil ? -10 : 10);
         g.appendChild(tChar);
         textsToFit.push(tChar);
       }
@@ -3084,15 +3301,22 @@
       // renders. Visibility is purely a function of state — when the
       // engine clears a slot the token simply stops appearing.
       const tokenKinds = (c.tokens || []).map(t => t && t.kind).filter(Boolean);
-      // Visual collision: imp_dead and scarlet_woman_is_demon share
-      // 150°; if a chair somehow carries both, nudge imp_dead to 165°.
-      const bothImpAndSw =
-        tokenKinds.indexOf("imp_dead") !== -1
-        && tokenKinds.indexOf("scarlet_woman_is_demon") !== -1;
+      // Visual collision: every demon-/minion-kill marker shares 150°
+      // with scarlet_woman_is_demon. If a chair somehow carries the SW
+      // marker plus a kill marker, nudge the kill marker to 165° so
+      // both stay readable. The set of kill markers stays in sync
+      // with the 150° row in the angle-map comment block above.
+      const KILL_MARKERS_AT_150 = [
+        "imp_dead", "po_dead", "pukka_dead",
+        "godfather_dead", "assassin_dead", "zombuul_dead",
+      ];
+      const hasSwMarker =
+        tokenKinds.indexOf("scarlet_woman_is_demon") !== -1;
       for (const kind of tokenKinds) {
         const spec = TOKEN_VIEW[kind];
         if (!spec) continue;
-        const angle = (kind === "imp_dead" && bothImpAndSw) ? 165 : spec.angle;
+        const isKillMarker = KILL_MARKERS_AT_150.indexOf(kind) !== -1;
+        const angle = (isKillMarker && hasSwMarker) ? 165 : spec.angle;
         let title = spec.title;
         if (kind === "drunk"
             && c.display_character
@@ -3487,7 +3711,7 @@
     const labelForName = (n) => {
       const picks = (poolState.setup_picks_by_role || {})[n] || {};
       const slotPriority = ["fake", "red_herring", "townsfolk",
-                            "outsider", "minion"];
+                            "outsider", "minion", "grandchild"];
       let pickValue = null;
       for (const slot of slotPriority) {
         if (picks[slot]) { pickValue = picks[slot]; break; }
@@ -3833,16 +4057,22 @@
     // on the snapshot and let those characters keep the button
     // enabled while dead.
     const canActWhenDead = !!p.daytime_ability_active_when_dead;
+    // "Any time" abilities (Tinker: "you might die at any time") may
+    // also fire at night. Characters opt in via
+    // ``daytime_ability_active_at_night`` on the snapshot; when set,
+    // the button is enabled day or night.
+    const canActAtNight = !!p.daytime_ability_active_at_night;
+    const phaseAllowsAbility = isDay || canActAtNight;
     const canUseAbility = (
-      isDay
+      phaseAllowsAbility
       && (p.alive || canActWhenDead)
       && p.has_daytime_ability
       && (!p.once_per_game || !p.once_per_game_used)
     );
     seatActUseAbility.disabled = !canUseAbility;
     seatActUseAbility.title = canUseAbility
-      ? "Trigger this player's daytime ability."
-      : (!isDay ? "Daytime abilities only fire during day."
+      ? "Trigger this player's ability."
+      : (!phaseAllowsAbility ? "Daytime abilities only fire during day."
          : (!p.alive && !canActWhenDead) ? "Dead players cannot act."
          : !p.has_daytime_ability ? "This character has no daytime ability."
          : "Once-per-game ability already spent.");
@@ -5045,7 +5275,15 @@
     if (prompt.type === "yes_no") return value ? "Yes" : "No";
     if (prompt.type === "select_player" || prompt.type === "select_players") {
       const ids = Array.isArray(value) ? value : (value == null ? [] : [value]);
-      const names = ids.map(id => lookupPlayerName(id) || ("Player " + id));
+      const meta = prompt.meta || {};
+      const declineId = (typeof meta.decline_id === "number")
+        ? meta.decline_id
+        : null;
+      const declineLabel = meta.decline_label || "Decline";
+      const names = ids.map(id => {
+        if (declineId !== null && id === declineId) return declineLabel;
+        return lookupPlayerName(id) || ("Player " + id);
+      });
       return names.join(", ") || "(none)";
     }
     if (prompt.type === "select_character") {
@@ -5488,13 +5726,28 @@
       const correctIds = Array.isArray(correctRaw)
         ? correctRaw.map(Number)
         : (typeof correctRaw === "number" ? [correctRaw] : []);
+      // The engine may include a sentinel ``meta.decline_id`` in
+      // ``eligible_player_ids`` so abilities like Po / Professor /
+      // Assassin can offer a "shake head no / decline" option alongside
+      // the real targets. Render that sentinel as a labeled Decline
+      // button instead of a phantom "Player 0 (#0)".
+      const declineId = (typeof meta.decline_id === "number")
+        ? meta.decline_id
+        : null;
+      const declineLabel = meta.decline_label || "Decline (no target)";
       // Ask /api/state for fresh player names if needed.
       eligible.forEach(pid => {
         const opt = document.createElement("button");
         opt.type = "button";
         opt.className = "option";
-        opt.textContent = (namesById.get(pid) || ("Player " + pid))
-          + " (#" + pid + ")";
+        const isDecline = (declineId !== null && pid === declineId);
+        if (isDecline) {
+          opt.textContent = declineLabel;
+          opt.classList.add("decline-option");
+        } else {
+          opt.textContent = (namesById.get(pid) || ("Player " + pid))
+            + " (#" + pid + ")";
+        }
         if (_selectedPlayerIds.includes(pid)) {
           opt.classList.add("default-hint");
         }
@@ -6552,7 +6805,7 @@
           // recognize. The order is the order Character.setup_picks
           // declares them; the first non-empty value wins.
           const slotPriority = ["fake", "red_herring", "townsfolk",
-                                "outsider", "minion"];
+                                "outsider", "minion", "grandchild"];
           let pickValue = null;
           for (const slot of slotPriority) {
             if (picks[slot]) { pickValue = picks[slot]; break; }
@@ -6665,7 +6918,7 @@
         // No per-character branches in the UI.
         const picks = (poolState.setup_picks_by_role || {})[n] || {};
         const slotPriority = ["fake", "red_herring", "townsfolk",
-                              "outsider", "minion"];
+                              "outsider", "minion", "grandchild"];
         let pickValue = null;
         for (const slot of slotPriority) {
           if (picks[slot]) { pickValue = picks[slot]; break; }

@@ -42,6 +42,13 @@ good-team detector gets bad info. The Storyteller may still pick
 So the Recluse class itself has no nightly action and no other
 reactions to override. We inherit from :class:`Character` (rather than
 :class:`StubCharacter`) so no placeholder prompt is emitted.
+
+Drunkenness / poisoning: misregistration IS an ability. A drunk or
+poisoned Recluse registers as themselves (an Outsider) — the override
+no-ops, no Storyteller prompt is emitted, and the detector sees the
+truthful good-team reading. The Recluse ability text says "even if
+dead", so death does NOT disable the override; only drunk / poisoned
+does.
 """
 
 from __future__ import annotations
@@ -98,6 +105,14 @@ class Recluse(Character):
         instead.
         """
         from engine.characters.stubs import DemonStub, EvilStub, MinionStub
+
+        # Misregistration IS an ability. A drunk or poisoned Recluse
+        # registers as themselves (an Outsider) — no Storyteller
+        # prompt, no eligible-list construction. Death does NOT
+        # disable the override (ability text: "even if dead"); only
+        # drunk / poisoned does.
+        if self.player and (self.player.drunk or self.player.poisoned):
+            return self.name
 
         if not the_check.registration_matters(
             self.registration_categories()

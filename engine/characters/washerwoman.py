@@ -28,6 +28,7 @@ import random as _rand
 from typing import TYPE_CHECKING, List, Optional
 
 from engine.character import Character
+from engine.effect import SetupEffect
 from engine.enums import CharType, SetupMode
 from engine.event import Event, EventType
 from engine.prompt import (
@@ -39,6 +40,68 @@ from engine.prompt import (
 if TYPE_CHECKING:
     from engine.engine import Engine
     from engine.player import Player
+
+
+class WasherwomanSeenEffect(SetupEffect):
+    """Marker on the seat the Washerwoman's first-night info will
+    point at as the Townsfolk-of-interest.
+
+    Setup-only: purged at the SETUP_END boundary (the WW's
+    first-night ability has already consumed this info by then).
+    Mutex with :class:`WasherwomanWrongEffect` on the same target.
+    Higher autofill priority than WRONG so it picks first."""
+
+    kind = "washerwoman_townsfolk"
+    contributes_to_state = None
+    setup_only = True
+    mutex_kinds = ("washerwoman_wrong",)
+    autofill_priority = 10
+    purge_on_source_death = True
+    purge_on_source_character_change = True
+    deactivate_on_source_droisoned = False  # bookkeeping; the
+                                            # drunk-info handling
+                                            # lives in ability()
+
+    @classmethod
+    def can_target(cls, engine: "Engine", chair_id: int) -> bool:
+        try:
+            p = engine.get_player(chair_id)
+        except KeyError:
+            return False
+        if p.character is None:
+            return False
+        # Must be a Townsfolk (Spy can also register, handled
+        # via misregistration logic in WW.ability()).
+        return p.character.char_type is CharType.TOWNSFOLK
+
+
+class WasherwomanWrongEffect(SetupEffect):
+    """Marker on the seat the Washerwoman's first-night info will
+    point at as the WRONG player (paired with the SEEN seat to
+    form the "1 of these 2 is the X" reading).
+
+    Setup-only and mutex with the SEEN marker on the same target.
+    Lower autofill priority so SEEN picks first."""
+
+    kind = "washerwoman_wrong"
+    contributes_to_state = None
+    setup_only = True
+    mutex_kinds = ("washerwoman_townsfolk",)
+    autofill_priority = 5
+    purge_on_source_death = True
+    purge_on_source_character_change = True
+    deactivate_on_source_droisoned = False
+
+    @classmethod
+    def can_target(cls, engine: "Engine", chair_id: int) -> bool:
+        # WRONG can land on any seat (the rule is just "different
+        # from the SEEN seat" — enforced by the mutex declaration).
+        try:
+            p = engine.get_player(chair_id)
+        except KeyError:
+            return False
+        return p.character is not None
+
 
 class Washerwoman(Character):
     name = "Washerwoman"
@@ -147,6 +210,46 @@ class Washerwoman(Character):
                 f"{self.player.name} (Washerwoman) WRONG token "
                 f"placed on the {ww_wrong} (pre-set)."
             )
+        self._refresh_registry_effects(engine)
+
+    def _refresh_registry_effects(self, engine: "Engine") -> None:
+        """Synchronise the registry's WW seen + wrong effects with
+        the current pool/character state. Bridges the legacy
+        pool-based storage with the new registry-effect model.
+        Idempotent."""
+        if self.player is None:
+            return
+        # Resolve role names to chair ids.
+        seen_chair: Optional[int] = None
+        wrong_chair: Optional[int] = None
+        if self._chosen_townsfolk:
+            for p in engine.players:
+                if (
+                    p.character is not None
+                    and p.character.name == self._chosen_townsfolk
+                ):
+                    seen_chair = p.id
+                    break
+        if self._chosen_wrong:
+            for p in engine.players:
+                if (
+                    p.character is not None
+                    and p.character.name == self._chosen_wrong
+                ):
+                    wrong_chair = p.id
+                    break
+        # Drop existing emissions, re-emit fresh.
+        for old in list(engine.effects_sourced_by(self)):
+            if isinstance(old, (WasherwomanSeenEffect, WasherwomanWrongEffect)):
+                engine.purge_effect(old)
+        if seen_chair is not None:
+            engine.add_effect(WasherwomanSeenEffect(
+                source=self, targets=[seen_chair],
+            ))
+        if wrong_chair is not None:
+            engine.add_effect(WasherwomanWrongEffect(
+                source=self, targets=[wrong_chair],
+            ))
 
     def on_setup_ability(
         self,
@@ -173,6 +276,7 @@ class Washerwoman(Character):
                 self._chosen_townsfolk = tf
             if wrong:
                 self._chosen_wrong = wrong
+            self._refresh_registry_effects(engine)
             return
         self.setup_ability(engine)
 
@@ -539,3 +643,7 @@ class Washerwoman(Character):
         # rendering the reminder tokens — display always matches
         # state, with no separate "first-night only" flag.
         engine.pool.clear_washerwoman_token_slots()
+        # And the registry mirror: purge any WW effects we emitted.
+        for old in list(engine.effects_sourced_by(self)):
+            if isinstance(old, (WasherwomanSeenEffect, WasherwomanWrongEffect)):
+                engine.purge_effect(old)

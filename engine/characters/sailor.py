@@ -14,47 +14,44 @@ Cannot-die mechanic
 A passive PRE_DEATH cancellation. The reaction listens for any death
 about to land on the Sailor's seat and, if the Sailor still has its
 ability (alive + sober + healthy), cancels via
-``event.data["cancelled"] = True`` — the same channel used by Mayor /
-Pacifist / Tea Lady / Fool. The "you can't die" works for *every*
-cause: Demon kill (after Monk's pre-PRE_DEATH gate), execution,
-ability kill, ST-attributed kill.
+``event.data["cancelled"] = True``. Per the design doc this is an
+*intrinsic reaction*, not an effect — there's no token, no source on
+another seat, no duration. Stays as a ``reaction()``.
 
-If the Sailor has been made drunk (typically by their own ability
-choosing themself), ``has_ability`` returns False and the cancellation
-no longer fires — so the self-drunk Sailor dies normally.
+Drunk-target lifecycle (registry-managed)
+-----------------------------------------
+The Sailor's drunkening goes through the engine's effect registry.
+:class:`SailorDrunkEffect` is added on resolution if the Sailor has
+ability, and the effect's ``on_phase_boundary`` purges itself at the
+next dusk. The lifecycle hooks the engine provides handle every
+cleanup path automatically:
 
-Drunk-target lifecycle
-----------------------
-The Sailor places the drunk on either themself or the chosen target.
-Cleanup paths mirror the Poisoner's design:
+  * **Natural dusk expiry** — ``on_phase_boundary("dusk")`` purges.
+  * **Sailor dies** — ``purge_on_source_death=True`` (default) → purge.
+  * **Sailor becomes drunk/poisoned** — the resolver deactivates the
+    effect; the target sobers. If the Sailor sobers again before
+    dusk, the effect re-activates and the target is drunk again.
+  * **Character change** — ``purge_on_source_character_change=True``
+    (default) → purge before the swap.
+  * **Self-target** — when the Sailor picks themself, the resolver's
+    self-source rule (excluding the effect itself when checking the
+    source's drunk status) keeps the effect active until *another*
+    droison source droisons the Sailor.
 
-  * **Natural dusk expiry** — the rulebook's "until dusk" duration is
-    cleared in :meth:`recheck_persistent_effects` (phase=``"dusk"``).
-  * **Sailor dies** — a dead Sailor cannot maintain the drunk; clear.
-    Note that a sober Sailor cannot die at all, so reaching this path
-    means the Sailor was already self-drunk.
-  * **Sailor becomes poisoned** — Sailor without ability cannot
-    maintain the drunk; clear.
-  * **Character change** — the Poisoner's pattern: clear before the
-    swap so the new role doesn't inherit the old role's effect.
-
-Drunkenness / poisoning
------------------------
-A drunk-from-self Sailor goes through the motions of picking the
-next night (the Storyteller still wakes them) but no real drunk is
-applied — guarded by ``self.player.has_ability`` at resolution time.
-A poisoned Sailor likewise loses both the cannot-die immunity and
-the drunkening effect.
+A drunk-from-self Sailor goes through the motions of picking the next
+night (the Storyteller still wakes them) but no real drunk is applied
+— guarded by ``self.player.has_ability`` at resolution time, exactly
+the contract the registry expects (don't add an effect when the
+source is droisoned at application time).
 
 Drunk pre-pick on the ST decision
 ---------------------------------
 The "Sailor or chosen player" pick is a 2-option choice. Per the
 project rule on drunk/poisoned info this is treated as binary, but
-the ability is the *Sailor's* — not an info ability — so we don't
-pre-pick a wrong default. Instead, the rulebook's heuristic is
-exposed via the prompt's default: townsfolk-typed picks default to
-*the chosen player* drunk, and outsider/minion/demon picks default
-to *the Sailor* drunk. The Storyteller may override either way.
+the ability is the Sailor's — not an info ability — so we don't
+pre-pick a wrong default. The rulebook's heuristic is exposed via the
+prompt's default: townsfolk-typed picks default to *the chosen
+player* drunk, otherwise *the Sailor*. The Storyteller may override.
 """
 
 from __future__ import annotations
@@ -62,6 +59,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Optional
 
 from engine.character import Character
+from engine.effect import Effect
 from engine.enums import CharType
 from engine.event import Event, EventType
 from engine.prompt import SelectPlayerPrompt
@@ -69,6 +67,29 @@ from engine.prompt import SelectPlayerPrompt
 if TYPE_CHECKING:
     from engine.engine import Engine
     from engine.player import Player
+
+
+class SailorDrunkEffect(Effect):
+    """The Sailor's nightly drunkening, lasting until dusk.
+
+    Registry-managed — the engine resolver decides active/inactive
+    based on the Sailor's current ``has_ability`` (alive + sober +
+    healthy). No private bookkeeping on the character.
+    """
+
+    kind = "sailor_drunk"
+    contributes_to_state = "drunk"
+    # Lifecycle defaults are correct:
+    # * ``purge_on_source_death = True`` — dead Sailor cannot maintain.
+    # * ``purge_on_source_character_change = True`` — clear on swap.
+    # * ``deactivate_on_source_droisoned = True`` — Sailor poisoned →
+    #   target sobers (re-activates if Sailor sobers within the
+    #   one-phase duration, though dusk would purge first in practice).
+
+    def on_phase_boundary(self, engine: "Engine", phase: str) -> None:
+        """Sailor's drunk lasts ``until dusk`` — purge at next dusk."""
+        if phase == "dusk":
+            engine.purge_effect(self)
 
 
 class Sailor(Character):
@@ -84,65 +105,14 @@ class Sailor(Character):
         {"name": "DRUNK", "icon": "sailor_drunk.png"},
     ]
 
-    def __init__(self, player: Optional["Player"] = None) -> None:
-        super().__init__(player)
-        # The seat the Sailor is currently keeping drunk via their
-        # nightly ability (could be themself). Cleared at dusk and on
-        # any of the cleanup-path triggers in :meth:`reaction`.
-        self._drunk_target: Optional["Player"] = None
-
     # ------------------------------------------------------------------
-    # Reminder tokens.
-    # ------------------------------------------------------------------
-
-    def compute_reminder_tokens(self, engine: "Engine") -> "dict[str, list[int]]":
-        """Show the DRUNK token on whoever the Sailor's ability has drunk.
-
-        Visibility is keyed off the actual ``Player.drunk`` flag on
-        ``_drunk_target`` so the token disappears the moment the
-        cleanup paths fire (or the engine's other state mutators
-        clear the flag).
-        """
-        if (
-            self._drunk_target is None
-            or getattr(self._drunk_target, "character", None) is None
-            or not self._drunk_target.drunk
-        ):
-            return {}
-        return {"sailor_drunk": [self._drunk_target.id]}
-
-    # ------------------------------------------------------------------
-    # Cleanup helpers.
-    # ------------------------------------------------------------------
-
-    def _clear_drunk(self, engine: "Engine", reason: str) -> None:
-        """Clear any drunk state placed by *this* Sailor.
-
-        Idempotent: safe to call when no target is currently set.
-        """
-        if self._drunk_target is None:
-            return
-        target = self._drunk_target
-        self._drunk_target = None
-        if target.drunk:
-            target.set_drunk(False)
-            engine.log(
-                f"{target.name} is no longer drunk ({reason})."
-            )
-
-    def recheck_persistent_effects(
-        self, engine: "Engine", phase: str
-    ) -> None:
-        """Expire the Sailor's drunk at the natural dusk boundary."""
-        if phase == "dusk":
-            self._clear_drunk(engine, "Sailor's drunk expired at dusk")
-
-    # ------------------------------------------------------------------
-    # Reactions.
+    # Reactions — intrinsic Sailor cannot die.
     # ------------------------------------------------------------------
 
     def reaction(self, event: Event, engine: "Engine") -> None:
         # Cannot-die: a sober Sailor's death is cancelled at PRE_DEATH.
+        # This is intrinsic to the role — not an effect emitted on
+        # another seat — so it stays in ``reaction()``.
         if (
             event.type is EventType.PRE_DEATH
             and self.player is not None
@@ -150,8 +120,13 @@ class Sailor(Character):
             and event.targets
             and any(t.id == self.player.id for t in event.targets)
             and not event.data.get("cancelled")
+            and not event.data.get("force")
         ):
             event.data["cancelled"] = True
+            event.data["cancelled_by_character"] = "Sailor"
+            event.data["cancelled_reason"] = (
+                "Sailor is sober (Sailor cannot die)"
+            )
             engine.log_reaction(
                 "Sailor",
                 f"{self.player.name} cannot die — the Sailor is sober.",
@@ -160,22 +135,6 @@ class Sailor(Character):
                 effect="sailor_cannot_die",
             )
             return
-
-        # Drunk-target cleanup paths (mirror Poisoner).
-        if self.player is not None and event.targets:
-            target_self = event.targets[0].id == self.player.id
-            if target_self:
-                if event.type is EventType.DEATH:
-                    self._clear_drunk(engine, "Sailor died")
-                elif event.type is EventType.POISON:
-                    self._clear_drunk(engine, "Sailor is poisoned")
-                elif event.type is EventType.CHARACTER_CHANGE:
-                    new_name = (
-                        event.data.get("new_character") if event.data else "?"
-                    )
-                    self._clear_drunk(
-                        engine, f"Sailor became the {new_name}"
-                    )
 
         return super().reaction(event, engine)
 
@@ -186,9 +145,6 @@ class Sailor(Character):
     def ability(self, engine: "Engine", night_number: int) -> None:
         if self.player is None or self.player.dead:
             return
-
-        # Defensive: clear any leftover drunk before the new pick.
-        self._clear_drunk(engine, "Sailor's drunk expired before new pick")
 
         engine.dispatch(
             Event(EventType.CHECK_CONDITION, source=self, targets=[self.player])
@@ -281,11 +237,15 @@ class Sailor(Character):
         except (KeyError, ValueError, TypeError):
             drunk_player = self.player
 
-        # RESOLUTION: apply the drunk. A drunk/poisoned Sailor goes
-        # through the motions but no real drunk is applied.
+        # RESOLUTION: emit the SailorDrunkEffect via the registry. A
+        # drunk/poisoned Sailor goes through the motions but the
+        # effect contract requires has_ability at application time —
+        # we skip add_effect entirely in that case (the slot still
+        # "fires" from the storyteller's perspective; nothing lands).
         if self.player.has_ability:
-            drunk_player.set_drunk(True)
-            self._drunk_target = drunk_player
+            engine.add_effect(SailorDrunkEffect(
+                source=self, targets=[drunk_player.id],
+            ))
             engine.log(
                 f"Sailor {self.player.name} drunkens {drunk_player.name}."
             )

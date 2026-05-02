@@ -303,6 +303,144 @@ def test_demon_stub_exists() -> None:
     assert stub_for_char_type(CharType.DEMON) is DemonStub
 
 
+# ---------------------------------------------------------------------------
+# Drunk / poisoned Recluse: misregistration ability fails — Recluse
+# registers as themselves, no recluse_registers_as prompt fires.
+# ---------------------------------------------------------------------------
+
+
+def test_poisoned_recluse_does_not_misregister_no_prompt() -> None:
+    """A poisoned Recluse's misregistration ability does not work.
+    The detection-side check sees the Recluse as the Recluse (an
+    Outsider → good), and the engine never emits a
+    ``recluse_registers_as`` prompt.
+
+    Scenario: Empath next to the Recluse. With the Recluse poisoned
+    the Empath's alignment check on the Recluse falls through to
+    the base ``Character.registers_as``, which returns ``"Recluse"``
+    (Outsider → good). Combined with the Imp on the other side,
+    the Empath sees count=1.
+    """
+    e = Engine()
+    a = e.add_seat("Alice")    # 1 — Empath
+    b = e.add_seat("Bob")      # 2 — Recluse  (Empath's clockwise neighbour)
+    c = e.add_seat("Cara")     # 3 — Mayor
+    d = e.add_seat("Dan")      # 4 — Soldier
+    f = e.add_seat("Eve")      # 5 — Imp      (Empath's ccw neighbour)
+
+    e.assign_character(a.id, "Empath")
+    e.assign_character(b.id, "Recluse")
+    e.assign_character(c.id, "Mayor")
+    e.assign_character(d.id, "Soldier")
+    e.assign_character(f.id, "Imp")
+
+    e.start_game()
+    e.poison(b.id)
+    seen_texts: List[str] = []
+
+    def collect(engine: Engine, scripted: List[Tuple[dict, Any]]) -> None:
+        deadline = time.time() + 5.0
+        answered = 0
+        while engine._night_thread and engine._night_thread.is_alive():
+            if time.time() > deadline:
+                raise TimeoutError("night thread didn't finish")
+            p = engine.pending_prompt()
+            if p is None:
+                time.sleep(0.01)
+                continue
+            if answered >= len(scripted):
+                raise AssertionError(
+                    f"Unexpected extra prompt: {p.text!r} meta={p.meta}"
+                )
+            matcher, response = scripted[answered]
+            for k, v in matcher.items():
+                assert p.meta.get(k) == v, (
+                    f"Prompt #{answered+1} mismatch: {p.meta!r}"
+                )
+            seen_texts.append(p.text)
+            engine.respond(p.id, response)
+            answered += 1
+            time.sleep(0.01)
+        assert answered == len(scripted)
+
+    e.start_night()
+    collect(e, [
+        # NO recluse_registers_as prompt — the override no-ops on a
+        # droisoned Recluse. Empath info: count=1 (only Eve the
+        # Imp counts as evil; the Recluse registers as themselves
+        # → Outsider → good).
+        ({"character": "Empath", "step": "information"}, None),
+    ])
+    e.advance_to_day()
+    assert any("1 of your alive neighbours is evil" in t for t in seen_texts), (
+        f"Empath should see count=1 (Recluse registers as Recluse → "
+        f"Outsider → good); texts={seen_texts!r}"
+    )
+
+
+def test_drunk_recluse_does_not_misregister_no_prompt() -> None:
+    """Same as the poisoned case, but with a drunk Recluse."""
+    e = Engine()
+    a = e.add_seat("Alice")    # 1 — Empath
+    b = e.add_seat("Bob")      # 2 — Recluse
+    c = e.add_seat("Cara")     # 3 — Mayor
+    d = e.add_seat("Dan")      # 4 — Soldier
+    f = e.add_seat("Eve")      # 5 — Imp
+
+    e.assign_character(a.id, "Empath")
+    e.assign_character(b.id, "Recluse")
+    e.assign_character(c.id, "Mayor")
+    e.assign_character(d.id, "Soldier")
+    e.assign_character(f.id, "Imp")
+
+    e.start_game()
+    e.make_drunk(b.id)
+    e.start_night()
+    drain_prompts(e, [
+        ({"character": "Empath", "step": "information"}, None),
+    ])
+    e.advance_to_day()
+
+
+def test_poisoned_recluse_slayer_check_no_prompt() -> None:
+    """A Slayer shoots a poisoned Recluse: no recluse_registers_as
+    prompt fires (the Recluse can't misregister), the Recluse
+    registers as themselves (Outsider, not Demon), and the shot
+    fizzles — Recluse stays alive."""
+    e = Engine()
+    a = e.add_seat("Alice")    # 1 — Slayer
+    b = e.add_seat("Bob")      # 2 — Mayor
+    c = e.add_seat("Cara")     # 3 — Recluse
+    d = e.add_seat("Dan")      # 4 — Soldier
+    f = e.add_seat("Eve")      # 5 — Imp
+
+    e.assign_character(a.id, "Slayer")
+    e.assign_character(b.id, "Mayor")
+    e.assign_character(c.id, "Recluse")
+    e.assign_character(d.id, "Soldier")
+    e.assign_character(f.id, "Imp")
+
+    e.start_game()
+    e.poison(c.id)
+    e.start_night()
+    drain_prompts(e, [])
+    e.advance_to_day()
+
+    e.use_daytime_ability(a.id)
+    drain_prompts(e, [
+        # Slayer picks the Recluse. No recluse_registers_as prompt
+        # follows — the Recluse is poisoned and the override
+        # no-ops. The base check fails (Recluse char_type is
+        # OUTSIDER, not DEMON).
+        ({"character": "Slayer", "step": "select_target"}, c.id),
+    ])
+
+    assert e.get_player(c.id).alive, (
+        "A poisoned Recluse can't misregister, so the Slayer's "
+        "char_type=DEMON check fails and the Recluse survives."
+    )
+
+
 if __name__ == "__main__":
     test_slayer_on_recluse_offers_demon_stub()
     print("test 1 passed.")
@@ -316,4 +454,10 @@ if __name__ == "__main__":
     print("test 5 passed.")
     test_demon_stub_exists()
     print("test 6 passed.")
+    test_poisoned_recluse_does_not_misregister_no_prompt()
+    print("test 7 passed.")
+    test_drunk_recluse_does_not_misregister_no_prompt()
+    print("test 8 passed.")
+    test_poisoned_recluse_slayer_check_no_prompt()
+    print("test 9 passed.")
     print("All Recluse misregistration tests passed.")

@@ -66,6 +66,20 @@ class Character:
     # flag relaxes that gate for roles that need to act after dying.
     daytime_ability_active_when_dead: bool = False
 
+    # True for "any time" abilities the Storyteller can fire during
+    # *night* as well as during day. The canonical case is the Tinker
+    # ("you might die at any time") — the Storyteller may choose to
+    # kill the Tinker at any moment, day or night. The base
+    # ``use_daytime_ability`` path in :class:`engine.engine.Engine`
+    # and the storyteller side panel both gate the "Use ability"
+    # button on ``phase == DAY`` by default; this flag relaxes that
+    # gate. Characters opting in MUST implement
+    # :meth:`daytime_ability` synchronously — the engine runs at-night
+    # invocations inline (no worker thread, no
+    # ``send_prompt`` calls) so it does not collide with the running
+    # night-order thread.
+    daytime_ability_active_at_night: bool = False
+
     # Setup-time deltas (Baron: outsider +2, townsfolk -2).
     setup_outsider_delta: int = 0
     setup_townsfolk_delta: int = 0
@@ -97,10 +111,12 @@ class Character:
         CharType.TOWNSFOLK: frozenset({
             "washerwoman_townsfolk", "ft_red_herring",
             "washerwoman_wrong", "librarian_wrong", "investigator_wrong",
+            "grandmother_grandchild",
         }),
         CharType.OUTSIDER: frozenset({
             "ft_red_herring", "librarian_outsider",
             "washerwoman_wrong", "librarian_wrong", "investigator_wrong",
+            "grandmother_grandchild",
         }),
         CharType.MINION: frozenset({
             "investigator_minion",
@@ -374,12 +390,49 @@ class Character:
             to ``"Townsfolk"`` so the player's phone doesn't reveal the
             Drunk before the storyteller picks the impersonated TF.
 
+        With the registry-effects refactor (Layer 2 + pool-system
+        Phase A), this is also the hook for emitting *setup-phase*
+        registry effects via ``engine.add_effect(SetupEffect(...))``.
+        For example, the Washerwoman emits its TOWNSFOLK and WRONG
+        markers here; the Fortune Teller emits its red-herring
+        marker; the Grandmother emits its grandchild marker. Each
+        SetupEffect class owns its auto-fill defaults so this method
+        usually just calls a single helper or ``add_effect`` line.
+
         Default: no-op. Override on any role with seat-bound side
         effects of being assigned. The engine has no character-name
         knowledge in :meth:`Engine.assign_character`; everything the
         new role needs to seed lives on this hook.
         """
         return None
+
+    def on_unseated(self, engine: "Engine") -> None:
+        """Run when this character is removed from a seat.
+
+        Fires from :meth:`Engine.assign_character` (when re-assigning
+        a seat to a different character — the OLD character on the
+        seat gets ``on_unseated`` called before the new one gets
+        ``on_assign_to_seat``) and from :meth:`Engine.remove_seat`.
+
+        Default behavior: purge every effect sourced by this
+        character from the registry. Most setup-phase markers
+        (WW/Lib/Inv/FT/Grandmother) want this — when the role
+        leaves the bag, its tokens go with it.
+
+        Override only if the character has a more nuanced cleanup
+        story (currently no roles do).
+        """
+        if engine is None:
+            return
+        try:
+            sourced = list(engine.effects_sourced_by(self))
+        except Exception:  # pragma: no cover (defensive)
+            return
+        for eff in sourced:
+            try:
+                engine.purge_effect(eff)
+            except Exception:  # pragma: no cover (defensive)
+                pass
 
     def setup_ability(self, engine: "Engine") -> None:
         """Run the character's setup-time ability, if any (legacy entry).
@@ -447,6 +500,25 @@ class Character:
     def daytime_ability(self, engine: "Engine") -> None:
         """For abilities triggered during the day (Slayer, Virgin)."""
         return None
+
+    def day_ability_available(self, engine: "Engine") -> bool:
+        """Whether this character's day-time ability should be exposed
+        as an invocable button on the player's left-side panel right
+        now.
+
+        The UI calls this on every seated character whenever a refresh
+        happens during the day; characters with day-active or
+        on-learning-of-death abilities (Slayer, Artist, Moonchild,
+        Klutz, Tinker, Gossip, Virgin's nominator-execute trigger) say
+        Yes when their gate is satisfied. Default returns False — most
+        characters don't have a day-button.
+
+        This is the engine-generic hook for the day-button surface; the
+        engine never hardcodes character names. Subclasses override
+        with their own gating logic (typically: alive AND not yet used
+        AND any pending-trigger latch).
+        """
+        return False
 
     def recheck_persistent_effects(
         self, engine: "Engine", phase: str

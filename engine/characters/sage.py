@@ -5,26 +5,19 @@
 
 The Sage acts only on a night they died **due to a Demon's ability**.
 The trigger is reaction-driven: when a ``DEATH`` event fires for the
-Sage's seat and ``event.source.char_type is CharType.DEMON``, the Sage
-arms itself for tonight's wake-up. The arming flag is consumed by
+Sage's seat with ``cause == DeathCause.DEMON_KILL``, the Sage arms
+itself for tonight's wake-up. The arming flag is consumed by
 ``would_act_tonight`` so the action loop only schedules the Sage when
 the trigger actually fired.
 
-Demon-attribution is purely scalable — no character names are
-hard-coded. Any role whose ``char_type`` is ``DEMON`` (Imp, and any
-future Demon class added to the script / external content) lights up
-the trigger. Mayor's night-kill redirect carries the original kill
-``source`` through to the redirected target, so a Demon kill bounced
-back to (or onto) the Sage by the Mayor still arms the trigger. Other
-death sources do **not** count: an Imp self-kill that arbitrates the
-Sage's death via a Pit-Hag-style ability lists the Pit-Hag (a Minion)
-as the kill source and never sets the flag, exactly as the rulebook
-example states.
-
-Execution doesn't count either. Engine-side, executed players are
-never appended to ``_pending_night_deaths`` and the cause is
-``DeathCause.EXECUTION``; either gate alone is sufficient and we keep
-both for defence in depth.
+The single positive ``cause is DEMON_KILL`` check is enough — every
+Demon class (Imp, Zombuul, Pukka, Shabaloth, Po, …) routes its
+nightly kill through ``engine.kill(target, DeathCause.DEMON_KILL,
+source=self)``. Mayor's night-kill redirect carries that cause
+through to the redirected target's ``Engine.kill`` call, so a Demon
+kill bounced onto the Sage still arms the trigger. Other death
+causes (``ABILITY`` from Slayer / Tinker / etc., ``STORYTELLER``,
+``EXECUTION``) do not.
 
 How to run (from the rulebook)
 ------------------------------
@@ -107,20 +100,15 @@ class Sage(Character):
     def reaction(self, event: Event, engine: "Engine") -> None:
         """Arm the trigger when the Sage dies due to a Demon's ability.
 
-        Listens on ``DEATH`` events targeting the Sage's seat. Demon-
-        attribution is read off ``event.source.char_type`` rather than
-        the death cause, so any character class with ``CharType.DEMON``
-        (Imp today, any future Demon in another edition) trips the
-        flag without per-name code here. Mayor redirects flow the
-        original ``source`` through to the redirected target's
-        :meth:`Engine.kill` call, so a redirected Demon kill that
-        lands on the Sage still arms the trigger.
-
-        Execution can never fire this branch: an executed player is
-        not added to ``_pending_night_deaths`` and the cause carried
-        on the DEATH event is :attr:`DeathCause.EXECUTION` — both are
-        defended against in :meth:`would_act_tonight`, and the source
-        of an execution is engine-attributed (no Demon character).
+        Listens on ``DEATH`` events targeting the Sage's seat. The
+        single trigger gate is ``cause is DeathCause.DEMON_KILL`` —
+        every Demon class routes its nightly kill through
+        ``engine.kill(..., DeathCause.DEMON_KILL, source=self)`` and
+        the Mayor's redirect carries that cause through, so a
+        redirected Demon kill that lands on the Sage still arms the
+        trigger. ``DeathCause.ABILITY`` (Slayer, Tinker, Virgin),
+        ``DeathCause.STORYTELLER`` and ``DeathCause.EXECUTION`` do
+        not.
         """
         if self.player is None:
             return super().reaction(event, engine)
@@ -129,31 +117,26 @@ class Sage(Character):
         if not any(t.id == self.player.id for t in event.targets):
             return super().reaction(event, engine)
 
-        source = event.source
         cause = event.data.get("cause") if event.data else None
-
-        # Belt-and-braces: the canonical "Demon kill" path uses
-        # ``DeathCause.DEMON_KILL``. We *additionally* require
-        # ``source.char_type is DEMON`` so any future Demon-class
-        # ability that ends up using a different cause but still
-        # attributes to a Demon source is covered, while a Pit-Hag
-        # arbitrary death (source = Minion) is filtered out.
-        if cause is DeathCause.EXECUTION:
-            return super().reaction(event, engine)
-        if source is None or getattr(source, "char_type", None) is not CharType.DEMON:
+        if cause is not DeathCause.DEMON_KILL:
             return super().reaction(event, engine)
 
+        source = event.source
+        source_name = (
+            source.name if source is not None and hasattr(source, "name")
+            else "the Demon"
+        )
         self._died_to_demon = True
         engine.log_reaction(
             self.name,
             (
-                f"{self.player.name} died to the {source.name} — Sage "
+                f"{self.player.name} died to {source_name} — Sage "
                 f"trigger armed for tonight's wake-up."
             ),
             target=self.player,
             trigger="death",
             effect="armed",
-            demon_source=source.name,
+            demon_source=source_name,
         )
         return super().reaction(event, engine)
 
@@ -176,8 +159,6 @@ class Sage(Character):
             return False
         if self.player not in engine.pending_night_deaths:
             return False
-        if self.player.death_cause is DeathCause.EXECUTION:
-            return False
         return True
 
     # ------------------------------------------------------------------
@@ -190,8 +171,6 @@ class Sage(Character):
         if not self._died_to_demon or self._triggered:
             return
         if self.player not in engine.pending_night_deaths:
-            return
-        if self.player.death_cause is DeathCause.EXECUTION:
             return
 
         # Mark spent up-front so a re-entrant call (defensive) doesn't
