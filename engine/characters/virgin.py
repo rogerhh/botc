@@ -7,23 +7,19 @@ Reaction-based daytime ability. The Virgin's "trigger" is the first
 nomination targeted at them. We listen for ``NOMINATION`` events on
 ourselves; on the first hit, if the nominator registers as a Townsfolk
 (via :meth:`Character.registers_as` with categories=(TOWNSFOLK,)) the
-nominator is killed by the Virgin's ability. So a Spy nominator may
-register as a Townsfolk and trigger the Virgin's kill; the Recluse
-override does not fire for a TOWNSFOLK-only check. Once consumed
-(success or not), the ability is spent.
+nominator is executed. So a Spy nominator may register as a Townsfolk
+and trigger the Virgin's execute; the Recluse override does not fire
+for a TOWNSFOLK-only check. Once consumed (success or not), the
+ability is spent.
 
-The flavour text says "executed", but mechanically this kill uses
-``DeathCause.ABILITY``: the engine reserves ``DeathCause.EXECUTION``
-for deaths produced by the Storyteller's Execute button
-(``Engine.execute_player``). The Virgin therefore does NOT dispatch
-an ``EXECUTION`` event and does NOT set ``Engine._executed_today``.
-Saint loss, Mastermind extension, Pacifist / Devil's Advocate saves,
-Undertaker info, Minstrel drunkness, etc. all key off the EXECUTION
-event or ``DeathCause.EXECUTION`` and so do not fire on the Virgin's
-kill.
+The Virgin's kill is a true execution: it uses
+``DeathCause.EXECUTION`` and the Virgin manually dispatches an
+``EXECUTION`` event so every execution-keyed reaction (Saint loss,
+Mastermind extension on a Demon nominator, Undertaker info, Minstrel
+drunkness on Minion nominator, etc.) fires correctly.
 
 Drunkenness / poisoning: a drunk or poisoned Virgin still consumes
-their trigger but does NOT kill the nominator.
+their trigger but does NOT execute the nominator.
 """
 
 from __future__ import annotations
@@ -143,24 +139,35 @@ class Virgin(Character):
             )
             return super().reaction(event, engine)
 
-        # Kill the nominator on the spot. This is an ability-driven
-        # death, not an execution: ``DeathCause.EXECUTION`` is reserved
-        # for deaths that originate from the Storyteller's Execute
-        # button (``Engine.execute_player``). The Virgin's own kill
-        # therefore uses ``DeathCause.ABILITY`` and does NOT dispatch
-        # an ``EXECUTION`` event — only ``Engine.kill``'s standard
-        # ``PRE_DEATH`` / ``DEATH`` flow runs.
+        # Execute the nominator on the spot. Per the rule's flavour
+        # text, this IS an execution: cause is ``DeathCause.EXECUTION``
+        # and an ``EXECUTION`` event is dispatched so all
+        # execution-keyed reactions fire (Saint loss, Mastermind's
+        # demon-execution extension, Undertaker info, Minstrel
+        # drunkness, etc.). We also latch ``Engine._executed_today``
+        # so the day's execution slot is consumed — the Mayor's
+        # "no execution today" win condition correctly excludes a
+        # day where the Virgin's ability fired.
         engine.log_reaction(
             "Virgin",
             (
-                f"{self.player.name}'s ability kills {nominator.name} "
+                f"{self.player.name} executes {nominator.name} "
                 f"(first-nomination ability)."
             ),
             target=self.player,
             trigger="nomination",
-            effect="kill_nominator",
+            effect="execute_nominator",
             nominator_id=nominator.id,
             nominator_name=nominator.name,
         )
-        engine.kill(nominator.id, DeathCause.ABILITY, source=self)
+        engine._executed_today = True
+        engine.kill(nominator.id, DeathCause.EXECUTION)
+        engine.dispatch(
+            Event(
+                EventType.EXECUTION,
+                source=self,
+                targets=[nominator],
+                data={"cause": DeathCause.EXECUTION},
+            )
+        )
         return super().reaction(event, engine)
