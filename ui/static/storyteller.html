@@ -175,6 +175,24 @@
     color: #aaa;
     word-break: break-all;
   }
+  /* Access code box — large monospace so the storyteller can read it
+     out loud to a player whose phone won't auto-fill it (e.g. they
+     typed the URL manually). The QR itself embeds ?code=… so a
+     scanned join just works. */
+  #qrPlayerCard .code-row {
+    margin: 8px 0 4px;
+    font-size: 12px;
+    color: var(--muted);
+  }
+  #qrPlayerCard .code-row .code {
+    font-family: "SF Mono", Menlo, Consolas, monospace;
+    font-size: 18px;
+    color: #f0c27a;
+    letter-spacing: 0.12em;
+    margin-left: 4px;
+    user-select: all;
+  }
+  #qrPlayerCard .code-row.hidden { display: none; }
   #qrPlayerCard .actions {
     margin-top: 12px;
     display: flex;
@@ -310,11 +328,30 @@
     opacity: 1;
     filter: drop-shadow(0 0 12px #f0c27aaa);
   }
-  /* Selection ring (storyteller picks) */
+  /* Selection ring (storyteller picks).
+
+     For multi-pick prompts (count >= 2) ``reapplyChairSelection`` sets
+     inline ``--pick-index`` (0..N-1) and ``--pick-count`` (N) on each
+     selected chair, so the i-th pick is progressively darker. The ST
+     can read the pick order off the board without any extra label.
+     Single-pick prompts leave the props unset and the var() fallbacks
+     resolve ``--pick-progress`` to 0 — same teal as before. */
+  g[data-id].chair-picked {
+    --pick-progress: calc(
+      var(--pick-index, 0) / max(1, calc(var(--pick-count, 1) - 1))
+    );
+  }
   g[data-id].chair-picked .chair {
-    stroke: #6fd4d2;
+    stroke: hsl(
+      180
+      calc(50% + var(--pick-progress) * 10%)
+      calc(64% - var(--pick-progress) * 28%)
+    );
     stroke-width: 5;
-    filter: drop-shadow(0 0 14px #6fd4d2cc);
+    filter: drop-shadow(
+      0 0 14px
+      hsl(180 50% calc(64% - var(--pick-progress) * 28%) / 0.8)
+    );
   }
 
   /* Dead shroud */
@@ -449,10 +486,26 @@
   #promptCard .option.correct-hint {
     box-shadow: 0 0 0 2px #5db05688;
   }
+  /* Multi-pick gradient — when ``renderSelectionState`` set inline
+     ``--pick-index`` / ``--pick-count`` on a picked option, the i-th
+     pick is progressively darker so the ST can read pick order at a
+     glance. Single-pick prompts leave the props unset and var()
+     fallbacks resolve to the original solid amber. */
   #promptCard .option.picked {
-    background: var(--accent);
+    --pick-progress: calc(
+      var(--pick-index, 0) / max(1, calc(var(--pick-count, 1) - 1))
+    );
+    background: hsl(
+      34
+      calc(79% - var(--pick-progress) * 18%)
+      calc(71% - var(--pick-progress) * 30%)
+    );
     color: #1a1410;
-    border-color: var(--accent);
+    border-color: hsl(
+      34
+      calc(79% - var(--pick-progress) * 18%)
+      calc(71% - var(--pick-progress) * 30%)
+    );
     font-weight: 600;
   }
 
@@ -519,12 +572,6 @@
     text-transform: uppercase;
     letter-spacing: 0.16em;
     color: var(--accent);
-    margin-bottom: 6px;
-  }
-  #showCard .show-target {
-    font-size: 17px;
-    font-weight: 700;
-    color: #f5e6c4;
     margin-bottom: 8px;
   }
   #showCard .token-row {
@@ -746,6 +793,9 @@
     <h2>Players: scan to join</h2>
     <p class="sub">They'll be added to the lobby on the storyteller's screen.</p>
     <div class="qr-frame" id="qrPlayerFrame"></div>
+    <div class="code-row hidden" id="qrPlayerCodeRow">
+      Access code:<span class="code" id="qrPlayerCode"></span>
+    </div>
     <div class="url" id="qrPlayerUrl"></div>
     <div class="actions">
       <button type="button" id="btnPlayerQrClose">Close</button>
@@ -800,8 +850,7 @@
      the prompt card, but is the only thing visible below the
      grimoire while body.show-player is set. -->
 <div id="showCard" role="dialog" aria-live="polite">
-  <div class="show-header">Show this to</div>
-  <div class="show-target" id="showTarget">—</div>
+  <div class="show-header" id="showTarget">Show this to —</div>
   <div id="showTokens"></div>
   <div class="actions">
     <button type="button" id="showNext">Done ▶</button>
@@ -1440,9 +1489,10 @@
     }
   }
 
-  // Evil chairs (Minion / Demon) flip the seat number to the bottom
-  // of the chair so the chair reads as the inverted twin of a good
-  // chair. ``evil`` is derived from ``c.char_type`` in render().
+  // Evil chairs flip the seat number to the bottom of the chair so
+  // the chair reads as the inverted twin of a good chair. ``evil``
+  // is derived from the live ``c.alignment`` in render(), so a
+  // mid-game flip (Goon, etc.) follows automatically.
   function appendChairNumber(g, num, evil) {
     const t = document.createElementNS(SVG_NS, "text");
     t.setAttribute("class", "chair-num");
@@ -1614,6 +1664,9 @@
 
   function reapplyChairSelection() {
     const pickedChairIds = new Set();
+    // Map chairId -> 0-based pick index, used to drive the multi-pick
+    // gradient on chair-picked.
+    const chairPickIndex = new Map();
     if (_currentPrompt
         && (_currentPrompt.type === "select_player"
             || _currentPrompt.type === "select_players")) {
@@ -1622,14 +1675,29 @@
         if (ch.player_id != null) playerToChair.set(ch.player_id, ch);
         else playerToChair.set(ch.id, ch);
       }
-      for (const pid of _selectedPlayerIds) {
+      _selectedPlayerIds.forEach((pid, idx) => {
         const ch = playerToChair.get(pid);
-        if (ch) pickedChairIds.add(ch.id);
-      }
+        if (ch) {
+          pickedChairIds.add(ch.id);
+          chairPickIndex.set(ch.id, idx);
+        }
+      });
     }
+    const promptCount = (_currentPrompt && _currentPrompt.count) || 1;
+    const isMulti = promptCount >= 2;
     chairsG.querySelectorAll("g[data-id]").forEach(g => {
       const id = parseInt(g.getAttribute("data-id"), 10);
-      g.classList.toggle("chair-picked", pickedChairIds.has(id));
+      const isPicked = pickedChairIds.has(id);
+      g.classList.toggle("chair-picked", isPicked);
+      if (isPicked && isMulti) {
+        g.style.setProperty(
+          "--pick-index", String(chairPickIndex.get(id) || 0),
+        );
+        g.style.setProperty("--pick-count", String(promptCount));
+      } else {
+        g.style.removeProperty("--pick-index");
+        g.style.removeProperty("--pick-count");
+      }
     });
     _currentChairPickedIds = [...pickedChairIds];
   }
@@ -1989,7 +2057,7 @@
       const targetName = (p.target_player_id != null && namesById.has(p.target_player_id))
         ? namesById.get(p.target_player_id)
         : (meta.target_player_name || "the player");
-      showTarget.textContent = targetName;
+      showTarget.textContent = "Show this to " + targetName;
 
       const description = (_panelSession && _panelSession.description) || "";
       const tokens = buildInfoTokens(p, meta, namesById, description);
@@ -2181,21 +2249,44 @@
   }
 
   function renderSelectionState() {
-    // Reflect picks in the option buttons.
+    // Reflect picks in the option buttons. For multi-pick prompts
+    // (count >= 2) attach the 0-based pick index and total count as
+    // inline CSS custom properties so the .picked rule shades later
+    // picks darker. Single-pick / Yes-No options leave the props
+    // unset and the var() fallbacks keep the original solid amber.
+    const promptCount = (_currentPrompt && _currentPrompt.count) || 1;
+    const isMulti = promptCount >= 2;
     promptOptions.querySelectorAll(".option").forEach(opt => {
       opt.classList.remove("picked");
+      let pickIdx = -1;
       if (opt.dataset.yesno !== undefined) {
         const val = opt.dataset.yesno === "true";
         if (_selectedYesNo === val) opt.classList.add("picked");
       } else if (opt.dataset.pid !== undefined) {
         const pid = parseInt(opt.dataset.pid, 10);
-        if (_selectedPlayerIds.includes(pid)) opt.classList.add("picked");
+        const i = _selectedPlayerIds.indexOf(pid);
+        if (i >= 0) {
+          opt.classList.add("picked");
+          pickIdx = i;
+        }
       } else if (opt.dataset.name !== undefined) {
         const name = opt.dataset.name;
-        if (_selectedCharacter === name
-            || _selectedCharacters.includes(name)) {
+        if (_selectedCharacter === name) {
           opt.classList.add("picked");
+        } else {
+          const i = _selectedCharacters.indexOf(name);
+          if (i >= 0) {
+            opt.classList.add("picked");
+            pickIdx = i;
+          }
         }
+      }
+      if (isMulti && pickIdx >= 0) {
+        opt.style.setProperty("--pick-index", String(pickIdx));
+        opt.style.setProperty("--pick-count", String(promptCount));
+      } else {
+        opt.style.removeProperty("--pick-index");
+        opt.style.removeProperty("--pick-count");
       }
     });
     reapplyChairSelection();
@@ -2388,24 +2479,41 @@
   const qrPlayerBackdrop = document.getElementById("qrPlayerBackdrop");
   const qrPlayerFrame = document.getElementById("qrPlayerFrame");
   const qrPlayerUrl = document.getElementById("qrPlayerUrl");
+  const qrPlayerCodeRow = document.getElementById("qrPlayerCodeRow");
+  const qrPlayerCode = document.getElementById("qrPlayerCode");
   const btnPlayerQr = document.getElementById("btnPlayerQr");
   const btnPlayerQrClose = document.getElementById("btnPlayerQrClose");
 
+  // Builds the /player URL for the QR. Returns ``{url, code}`` so the
+  // caller can both encode the URL into the QR (with ?code=…) and
+  // display the bare code as text below the QR for players whose
+  // phones won't auto-pick the code from the URL.
   async function _detectPlayerQrUrl() {
+    let base = null;
+    let code = "";
     try {
       const r = await fetch("/api/host_info", { cache: "no-store" });
       if (r.ok) {
         const info = await r.json();
-        if (info && info.lan_ip) {
+        code = (info && info.access_code) || "";
+        // Prefer the Cloudflare Quick Tunnel URL when active. It's HTTPS
+        // and reachable from off-network, so the player phone reading
+        // this QR off the storyteller's phone doesn't need to be on the
+        // same WiFi.
+        if (info && info.tunnel_url) {
+          base = info.tunnel_url + "/player";
+        } else if (info && info.lan_ip) {
           const port = info.port || window.location.port;
           const portPart = port ? ":" + port : "";
-          return "http://" + info.lan_ip + portPart + "/player";
+          base = "http://" + info.lan_ip + portPart + "/player";
         }
       }
     } catch (e) {
       // fall through to origin-based URL
     }
-    return window.location.origin + "/player";
+    if (base === null) base = window.location.origin + "/player";
+    const url = code ? base + "?code=" + encodeURIComponent(code) : base;
+    return { url, code };
   }
 
   function _qrToSvgString(qr, border) {
@@ -2427,14 +2535,21 @@
   async function openPlayerQrModal() {
     qrPlayerFrame.innerHTML = "<span style='color:#888;font-size:13px'>Loading…</span>";
     qrPlayerUrl.textContent = "";
+    qrPlayerCode.textContent = "";
+    qrPlayerCodeRow.classList.add("hidden");
     qrPlayerBackdrop.classList.add("open");
-    let url;
+    let url, code;
     try {
-      url = await _detectPlayerQrUrl();
+      ({ url, code } = await _detectPlayerQrUrl());
     } catch (e) {
       url = window.location.origin + "/player";
+      code = "";
     }
     qrPlayerUrl.textContent = url;
+    if (code) {
+      qrPlayerCode.textContent = code;
+      qrPlayerCodeRow.classList.remove("hidden");
+    }
     try {
       const QRC = qrcodegen.QrCode;
       const qr = QRC.encodeText(url, QRC.Ecc.QUARTILE);

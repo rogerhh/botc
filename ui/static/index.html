@@ -306,8 +306,14 @@
      the left of the text and alternates color each time the engine
      advances to a new character (toggled via #promptPanel.alt below),
      giving the storyteller a clear "we've moved on" cue without
-     restyling the whole panel. */
-  #promptPanel .title {
+     restyling the whole panel.
+
+     Selectors are dual-target: ``#promptPanel`` is the engine prompt
+     panel (slayer / virgin / select_player flows); ``#nominatePicker``
+     is the parallel ST-driven nominate panel. They share one
+     stylesheet so the two surfaces are visually identical. */
+  #promptPanel .title,
+  #nominatePicker .title {
     font-size: 12px;
     text-transform: uppercase;
     letter-spacing: 1px;
@@ -316,17 +322,20 @@
     border-left: 4px solid #c69049;
     padding-left: 8px;
   }
-  #promptPanel.alt .title {
+  #promptPanel.alt .title,
+  #nominatePicker.alt .title {
     border-left-color: #5b8caa;
   }
   /* Drunk / poisoned parenthetical inside the title — italic so the
      storyteller's eye picks up the impaired state at a glance without
      the label overpowering the role name. */
-  #promptPanel .title .impaired-label {
+  #promptPanel .title .impaired-label,
+  #nominatePicker .title .impaired-label {
     font-style: italic;
     font-weight: 400;
   }
-  #promptPanel .description {
+  #promptPanel .description,
+  #nominatePicker .description {
     font-size: 15px;
     line-height: 1.4;
     margin: 4px 0 10px 0;
@@ -336,7 +345,8 @@
      pure display, never an interaction; styled as a subdued banner so
      the eye distinguishes it from the rule description above and the
      stages below. */
-  #promptPanel .wakeup {
+  #promptPanel .wakeup,
+  #nominatePicker .wakeup {
     font-size: 13px;
     font-weight: 600;
     letter-spacing: 0.04em;
@@ -354,13 +364,15 @@
      contains the prompt question (the actual input controls live in
      #promptOptions / #promptActions, kept where they were so existing
      button wiring still applies). */
-  #promptPanel .stages {
+  #promptPanel .stages,
+  #nominatePicker .stages {
     display: flex;
     flex-direction: column;
     gap: 6px;
     margin: 0 0 8px 0;
   }
-  #promptPanel .stage {
+  #promptPanel .stage,
+  #nominatePicker .stage {
     border: 1px solid #00000044;
     background: #261c14;
     border-radius: 6px;
@@ -368,10 +380,12 @@
     font-size: 13px;
     line-height: 1.35;
   }
-  #promptPanel .stage .stage-question {
+  #promptPanel .stage .stage-question,
+  #nominatePicker .stage .stage-question {
     color: var(--muted);
   }
-  #promptPanel .stage .stage-answer {
+  #promptPanel .stage .stage-answer,
+  #nominatePicker .stage .stage-answer {
     margin-top: 4px;
     padding: 4px 8px;
     background: #5a3c14;
@@ -380,11 +394,13 @@
     color: #ffe2a4;
     font-weight: 600;
   }
-  #promptPanel .stage.current {
+  #promptPanel .stage.current,
+  #nominatePicker .stage.current {
     border-color: #c69049;
     background: #2e2114;
   }
-  #promptPanel .stage.current .stage-question {
+  #promptPanel .stage.current .stage-question,
+  #nominatePicker .stage.current .stage-question {
     color: var(--text);
   }
   /* Wake-up marker — sits inside the stages list, between any
@@ -392,7 +408,8 @@
      like the original wakeup banner so the visual cue ("the player
      is now awake") is the same regardless of whether the panel had
      pre-wake stages above it. */
-  #promptPanel .wakeup-marker {
+  #promptPanel .wakeup-marker,
+  #nominatePicker .wakeup-marker {
     font-size: 13px;
     font-weight: 600;
     letter-spacing: 0.04em;
@@ -403,7 +420,8 @@
     padding: 6px 10px;
     border-radius: 0 4px 4px 0;
   }
-  #promptPanel .player-payload {
+  #promptPanel .player-payload,
+  #nominatePicker .player-payload {
     margin: 6px 0 10px 0;
     border: 1px dashed #66493a;
     border-radius: 6px;
@@ -412,14 +430,16 @@
     min-height: 44px;
     background: #2a1c13;
   }
-  #promptPanel .player-payload .label {
+  #promptPanel .player-payload .label,
+  #nominatePicker .player-payload .label {
     font-size: 11px;
     text-transform: uppercase;
     letter-spacing: 1px;
     color: #b8945a;
     margin-bottom: 4px;
   }
-  #promptPanel .player-payload .body {
+  #promptPanel .player-payload .body,
+  #nominatePicker .player-payload .body {
     font-size: 14px;
     line-height: 1.4;
     color: var(--text);
@@ -427,51 +447,60 @@
   /* Stack of one or more "info tokens" — each token is a labeled row
      of the form "<TOKEN NAME>: <values>" so the storyteller knows
      which physical token to show the player and what to point at. */
-  #promptPanel .player-payload .tokens {
+  #promptPanel .player-payload .tokens,
+  #nominatePicker .player-payload .tokens {
     display: flex;
     flex-direction: column;
     gap: 6px;
   }
-  #promptPanel .player-payload .token-row {
+  #promptPanel .player-payload .token-row,
+  #nominatePicker .player-payload .token-row {
     display: flex;
     flex-direction: column;
     gap: 2px;
   }
-  #promptPanel .player-payload .token-row .token-label {
+  #promptPanel .player-payload .token-row .token-label,
+  #nominatePicker .player-payload .token-row .token-label {
     font-size: 13px;
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.5px;
     color: #e8c98a;
   }
-  #promptPanel .player-payload .token-row .token-body {
+  #promptPanel .player-payload .token-row .token-body,
+  #nominatePicker .player-payload .token-row .token-body {
     font-size: 14px;
     line-height: 1.4;
     color: var(--text);
   }
-  #promptPanel .actions {
+  #promptPanel .actions,
+  #nominatePicker .actions {
     display: flex;
     gap: 8px;
     flex-wrap: wrap;
     align-items: center;
     justify-content: flex-end;
   }
-  #promptPanel .actions .left {
+  #promptPanel .actions .left,
+  #nominatePicker .actions .left {
     margin-right: auto;
     font-size: 12px;
     color: var(--muted);
   }
-  #promptPanel .actions button {
+  #promptPanel .actions button,
+  #nominatePicker .actions button {
     font-size: 13px;
     padding: 6px 12px;
   }
-  #promptPanel .options {
+  #promptPanel .options,
+  #nominatePicker .options {
     display: flex;
     gap: 6px;
     flex-wrap: wrap;
     margin-bottom: 8px;
   }
-  #promptPanel .option {
+  #promptPanel .option,
+  #nominatePicker .option {
     background: var(--button);
     border: 1px solid #00000055;
     color: var(--text);
@@ -480,23 +509,45 @@
     font-size: 13px;
     cursor: pointer;
   }
-  #promptPanel .option:hover { background: var(--button-hover); }
-  #promptPanel .option.selected {
-    background: #8a5a1c;
-    border-color: #c69049;
+  #promptPanel .option:hover,
+  #nominatePicker .option:hover { background: var(--button-hover); }
+  /* Multi-pick gradient: the inline ``--pick-index`` / ``--pick-count``
+     custom properties set by ``renderSelectionState`` derive
+     ``--pick-progress`` (0..1), darkening successive picks so the
+     order is visible at a glance. Single-pick prompts leave the props
+     unset; the var() fallbacks resolve progress to 0 and the option
+     keeps its original solid amber. */
+  #promptPanel .option.selected,
+  #nominatePicker .option.selected {
+    --pick-progress: calc(
+      var(--pick-index, 0) / max(1, calc(var(--pick-count, 1) - 1))
+    );
+    background: hsl(
+      28
+      calc(66% - var(--pick-progress) * 6%)
+      calc(33% - var(--pick-progress) * 7%)
+    );
+    border-color: hsl(
+      30
+      calc(56% - var(--pick-progress) * 4%)
+      calc(53% - var(--pick-progress) * 11%)
+    );
   }
-  #promptPanel .option.default-hint {
+  #promptPanel .option.default-hint,
+  #nominatePicker .option.default-hint {
     box-shadow: 0 0 0 2px #87c98744;
   }
   /* When the engine surfaces the *correct* answer alongside a
      drunk/poisoned prompt, mark it with a small green border so the
      storyteller can see at a glance which option is the truth — even
      though the prefilled (highlighted) default is the wrong one. */
-  #promptPanel .option.correct-hint {
+  #promptPanel .option.correct-hint,
+  #nominatePicker .option.correct-hint {
     border: 2px solid #5fb05f;
     padding: 4px 9px;  /* compensate for the thicker border */
   }
-  #promptPanel .option.correct-hint.default-hint {
+  #promptPanel .option.correct-hint.default-hint,
+  #nominatePicker .option.correct-hint.default-hint {
     box-shadow: 0 0 0 2px #87c98744;
   }
   .toolbar .start-status {
@@ -628,20 +679,46 @@
      eligibility halo so "eligible" vs "picked" stay readable at a
      glance. The ring is layered on the inner circle (which already
      hosts other state-driven fills) so the chair stroke override
-     doesn't fight the existing chair-edge color. */
+     doesn't fight the existing chair-edge color.
+
+     For multi-pick prompts (count >= 2) the per-chair custom
+     properties ``--pick-index`` (0..N-1) and ``--pick-count`` (N) are
+     set inline by ``reapplyChairSelection``; the i-th pick is
+     progressively darker, so the storyteller can read pick order off
+     the board without any extra label. Single-pick prompts leave the
+     props unset and the var() fallbacks (0, 1) reduce
+     ``--pick-progress`` to 0 — same teal as before. */
+  g[data-id].chair-picked {
+    --pick-progress: calc(
+      var(--pick-index, 0) / max(1, calc(var(--pick-count, 1) - 1))
+    );
+  }
   g[data-id].chair-picked .chair {
-    stroke: #6fd4d2;
+    stroke: hsl(
+      180
+      calc(50% + var(--pick-progress) * 5%)
+      calc(64% - var(--pick-progress) * 14%)
+    );
     stroke-width: 5;
-    filter: drop-shadow(0 0 14px #6fd4d2cc);
+    filter: drop-shadow(
+      0 0 14px
+      hsl(180 50% calc(64% - var(--pick-progress) * 14%) / 0.8)
+    );
   }
   /* In selection mode the eligible chairs get a subtle pointer/hover
      cue so the storyteller knows the click does something different
      from the usual side-panel open. Non-eligible chairs in this mode
-     keep the default cursor — clicks on them are ignored. */
-  body.prompt-pick-mode #chairs g[data-id].highlight-target {
+     keep the default cursor — clicks on them are ignored.
+
+     ``nominate-pick-mode`` is the click-to-nominate equivalent: the
+     same chair-clickability and hover affordance, but driven by the
+     seat-panel "Nominate" button rather than an engine prompt. */
+  body.prompt-pick-mode #chairs g[data-id].highlight-target,
+  body.nominate-pick-mode #chairs g[data-id].highlight-target {
     cursor: pointer;
   }
-  body.prompt-pick-mode #chairs g[data-id].highlight-target:hover .chair {
+  body.prompt-pick-mode #chairs g[data-id].highlight-target:hover .chair,
+  body.nominate-pick-mode #chairs g[data-id].highlight-target:hover .chair {
     fill: var(--chair-hover);
   }
 
@@ -669,6 +746,29 @@
   .chair-status-hit { cursor: grab; fill: transparent; }
   .chair-status-wrapper:hover .chair-status-token {
     filter: drop-shadow(0 2px 4px #000a);
+  }
+
+  /* Inactive token — the underlying effect is currently suppressed
+     because the source character is drunk or poisoned. The engine
+     keeps emitting the reminder so the storyteller still has the
+     bookkeeping, but we mute the token visually so the storyteller
+     can tell at a glance that the ability isn't actually firing.
+     Slightly higher selector specificity (g[data-id] prefix) so
+     this wins over the dead-chair token-dim rule below — an
+     inactive marker on a dead chair should still read as inactive
+     rather than just "muted because dead". */
+  g[data-id] .chair-status-wrapper.chair-status-inactive .chair-status-token {
+    opacity: 0.38;
+    filter: grayscale(0.85);
+  }
+  g[data-id] .chair-status-wrapper.chair-status-inactive .chair-status-halo {
+    opacity: 0.55;
+  }
+  /* Preserve hover feedback (drop-shadow) on inactive tokens while
+     keeping the grayscale mute so the storyteller can still see
+     they're grabbable. */
+  g[data-id] .chair-status-wrapper.chair-status-inactive:hover .chair-status-token {
+    filter: grayscale(0.85) drop-shadow(0 2px 4px #000a);
   }
 
   .chair-name {
@@ -951,51 +1051,86 @@
     flex-shrink: 0;
   }
   .seat-panel-msg.ok { color: #8cc97a; }
-  .seat-nominate-picker {
-    padding: 8px 16px 14px;
-    border-top: 1px solid #00000088;
-    background: #15130f;
-    max-height: 40vh;
-    overflow-y: auto;
-    flex-shrink: 0;
-  }
-  .seat-nominate-picker .pick-title {
-    font-size: 12px;
-    color: #aa9a72;
-    margin-bottom: 6px;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-  }
-  .seat-nominate-picker .pick-row {
+  /* Nominate dock — bottom-right column, structurally identical to
+     ``#phaseDock``: a prompt-skinned panel on top followed by full-
+     width dock buttons (Back, then Next). All inner styling (title /
+     description / options / stages / wakeup / actions / option pill /
+     selected pill / etc.) comes from the dual-target ``#promptPanel,
+     #nominatePicker`` selectors above — so the two surfaces share one
+     stylesheet and stay pixel-equivalent. This block only owns layout
+     of the dock + the panel's "skin" (background / border / padding /
+     min-height) and the standalone dock buttons (Back, Next). */
+  #nominateDock {
+    position: fixed;
+    right: 20px;
+    bottom: 20px;
+    z-index: 70;
     display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 6px 8px;
-    border: 1px solid #00000077;
-    border-radius: 4px;
-    margin-bottom: 4px;
-    cursor: pointer;
-    background: #221f1a;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+    width: min(378px, calc(100vw - 36px));
   }
-  .seat-nominate-picker .pick-row:hover { background: #3a342b; }
-  .seat-nominate-picker .pick-row[disabled],
-  .seat-nominate-picker .pick-row.disabled {
+  #nominateDock[hidden] { display: none; }
+  /* The picker panel itself — same skin as ``#phaseDock #promptPanel``:
+     panel chrome (background / border / shadow / padding / min-height)
+     and a flex column so ``.actions { margin-top: auto }`` from the
+     phaseDock override anchors the actions row at the bottom. */
+  #nominateDock #nominatePicker {
+    background: #1f1611;
+    border: 1px solid #00000088;
+    border-radius: 10px;
+    box-shadow: 0 10px 40px #000000aa;
+    color: var(--text);
+    padding: 14px 16px 12px 16px;
+    min-height: 360px;
+    display: flex;
+    flex-direction: column;
+    transition: opacity 0.18s;
+  }
+  /* Push actions to the bottom of the panel — same trick the engine
+     prompt panel uses inside #phaseDock. */
+  #nominateDock #nominatePicker .actions { margin-top: auto; }
+  #nominateDock #nominatePicker .option:disabled,
+  #nominateDock #nominatePicker .option.disabled {
     opacity: 0.4;
     cursor: not-allowed;
-    background: #1a1815;
   }
-  .seat-nominate-picker .pick-row .nm { color: #e7d8a8; }
-  .seat-nominate-picker .pick-row .st { font-size: 11px; color: #9c8a64; }
-  .seat-nominate-picker .pick-cancel {
+  /* Dock buttons — copy the ``#phaseDock .dock-button`` rules so the
+     Back / Next buttons look IDENTICAL to the slayer-prompt pair. */
+  #nominateDock .dock-button {
     width: 100%;
-    margin-top: 6px;
-    padding: 6px;
-    background: transparent;
-    border: 1px solid #00000077;
-    color: #aa9a72;
-    border-radius: 4px;
+    padding: 14px 16px;
+    border-radius: 8px;
+    font-size: 16px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    border: 1px solid #00000088;
+    color: var(--text);
     cursor: pointer;
   }
+  #nominateDock .dock-button.next { background: #2f6b2c; }
+  #nominateDock .dock-button.next:hover:not(:disabled) { background: #3a8636; }
+  #nominateDock .dock-button.next:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  #nominateDock .dock-button.back {
+    background: #5a1f1f;
+    color: #d8a4a4;
+    opacity: 0.7;
+  }
+  #nominateDock .dock-button.back:hover {
+    background: #732828;
+    opacity: 0.9;
+  }
+  /* Hide the engine phase dock while the nominate dock owns the slot
+     so the two panels never overlap at the bottom-right. The phase
+     dock is empty (no prompt + Start Night button) during the slice of
+     day where nominations happen, so hiding it costs nothing — and
+     ``hideNominatePicker`` toggles the body class back off so Start
+     Night returns the moment the picker closes. */
+  body.nominate-pick-mode #phaseDock { display: none; }
 
   .modal {
     background: var(--panel);
@@ -1336,6 +1471,45 @@
     color: var(--muted);
   }
 
+  /* Godfather "[-1 or +1 Outsider]" picker. Small two-button group
+     that sits between the role name and the +/✓ indicator on the
+     Godfather row when it's in the pool. Each button is a 22px
+     square; the currently-picked side is highlighted, the other is
+     muted. Clicking a button flips the choice without removing the
+     Godfather from the pool (the row's parent click handler is
+     suppressed via stopPropagation in JS). */
+  .char-item .gf-delta-toggle {
+    display: inline-flex;
+    margin-left: 6px;
+    margin-right: 4px;
+    border: 1px solid #00000088;
+    border-radius: 4px;
+    overflow: hidden;
+  }
+  .char-item .gf-delta-toggle button {
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    border: 0;
+    background: #1a140f;
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 700;
+    line-height: 1;
+    cursor: pointer;
+    user-select: none;
+  }
+  .char-item .gf-delta-toggle button + button {
+    border-left: 1px solid #00000088;
+  }
+  .char-item .gf-delta-toggle button.active {
+    background: #f0c27a;
+    color: #14100d;
+  }
+  .char-item .gf-delta-toggle button:hover:not(.active) {
+    color: #f0c27a;
+  }
+
   /* --- Right-side dock --- */
   /* Stacks the arrange-chairs panel, the characters-in-game pool, and
      the Edit Character button in a single right-anchored column.
@@ -1646,9 +1820,25 @@
     transition: background 0.12s, border-color 0.12s;
   }
   .char-picker .pick-item:hover { border-color: #f0c27a99; }
+  /* Multi-pick gradient — same shape as ``#promptPanel .option.selected``
+     and ``g[data-id].chair-picked``: ``--pick-index`` / ``--pick-count``
+     drive ``--pick-progress``, which darkens the i-th pick so the ST
+     can see the order. Single-pick prompts (count==1) leave the props
+     unset and the picker keeps its original solid green. */
   .char-picker .pick-item.selected {
-    background: #2c3a26;
-    border-color: #6e9c5b;
+    --pick-progress: calc(
+      var(--pick-index, 0) / max(1, calc(var(--pick-count, 1) - 1))
+    );
+    background: hsl(
+      96
+      calc(20% - var(--pick-progress) * 3%)
+      calc(19% - var(--pick-progress) * 4%)
+    );
+    border-color: hsl(
+      96
+      calc(28% - var(--pick-progress) * 4%)
+      calc(49% - var(--pick-progress) * 11%)
+    );
   }
   .char-picker .pick-item.selected .ind { color: #9bd28e; }
   /* Characters already in use by another chair are dimmed and tagged
@@ -2040,13 +2230,50 @@
       <button type="button" id="seatActExecute" class="danger">Execute</button>
     </section>
     <div id="seatPanelMsg" class="seat-panel-msg"></div>
-    <div id="seatNominatePicker" class="seat-nominate-picker" hidden>
-      <div class="pick-title">Nominate which player?</div>
-      <div id="seatNominateList"></div>
-      <button type="button" class="pick-cancel" id="seatNominateCancel">Cancel</button>
-    </div>
   </div>
 </aside>
+
+<!-- Nominate dock — sibling of ``#phaseDock`` and structurally
+     identical down to the inner-panel sections: ARIA dialog, title,
+     description, wakeup banner (hidden), stages list, player payload
+     (hidden), options, actions row, then full-width Back + Next dock
+     buttons stacked below. Picking a nominee uses the same right-side
+     slot, panel skin, and dock-button styling as the engine
+     SELECT_PLAYER prompt that fires when the storyteller triggers a
+     slayer / virgin / etc. ability. -->
+<div id="nominateDock" hidden>
+  <div id="nominatePicker" role="dialog" aria-live="polite"
+       aria-label="Nominate prompt">
+    <!-- Sections 1, 2, 3 — always visible while picking a nominee. -->
+    <div class="title" id="nominatePickerTitle">Nominate</div>
+    <div class="description" id="nominatePickerDesc"></div>
+    <div class="wakeup" id="nominatePickerWakeup" style="display:none"></div>
+
+    <!-- Section 4 — current input stage card (matches the slayer
+         prompt's accumulating-stages list, just with the single
+         "Storyteller selects a player" stage). -->
+    <div class="stages" id="nominatePickerStages"></div>
+
+    <!-- Section 5 — player-facing payload (hidden for nominate; kept
+         in the DOM so the structure mirrors the slayer prompt). -->
+    <div id="nominatePickerPayload" class="player-payload" style="display:none">
+      <div class="label">Show this to the player</div>
+      <div class="tokens"></div>
+    </div>
+
+    <div class="options" id="nominatePickerList"></div>
+    <div class="actions">
+      <span class="left" id="nominatePickerHint"></span>
+    </div>
+  </div>
+  <button type="button" id="nominatePickerBack" class="dock-button back"
+          title="Cancel this nomination.">
+    ◀ Back
+  </button>
+  <button type="button" id="nominatePickerNext" class="dock-button next" disabled>
+    Next ▶
+  </button>
+</div>
 
 <div id="editBackdrop" class="modal-backdrop" role="dialog" aria-modal="true">
   <form id="editForm" class="modal">
@@ -2075,7 +2302,7 @@
     <input id="qrUrl" type="text" autocomplete="off" spellcheck="false" />
     <div id="qrCandidates" class="qr-candidates"></div>
 
-    <label for="qrCode">Access code <span class="faint">(optional)</span></label>
+    <label for="qrCode">Access code <span class="faint" id="qrCodeNote">(optional)</span></label>
     <input id="qrCode" type="text" autocomplete="off" autocapitalize="characters"
            spellcheck="false" placeholder="leave blank if the server has no code" />
 
@@ -2608,10 +2835,12 @@
     pukka_poisoned:             "pukka_poisoned",
     assassin_no_ability:        "assassin_no_ability",
     fool_no_ability:            "fool_no_ability",
-    // No bespoke "shabaloth_attacked" art ships in /assets/tokens/;
-    // the live-Shabaloth tile is the closest match and is what the
-    // grimoire uses to tag victims of the previous night's attack.
-    shabaloth_attacked:         "shabaloth_alive",
+    // Shabaloth: DEAD on every seat the Shabaloth killed last night
+    // (cleared when the next attack pass runs), ALIVE on the seat the
+    // Shabaloth regurgitated (a rest-of-game record per rulebook).
+    // The two are mutex on a seat — see TOKEN_VIEW for the shared angle.
+    shabaloth_dead:             "shabaloth_dead",
+    shabaloth_alive:            "shabaloth_alive",
     moonchild_dead:             "moonchild_dead",
     innkeeper_safe:             "innkeeper_safe",
     innkeeper_drunk:            "innkeeper_drunk",
@@ -2664,20 +2893,30 @@
   //    -90° : investigator_minion / investigator_wrong    (mutex)
   //    -75° : po_3_attacks
   //    -60° : washerwoman_townsfolk / washerwoman_wrong   (mutex)
-  //    -45° : shabaloth_attacked
+  //    -45° : shabaloth_dead    / shabaloth_alive          (mutex)
   //    -30° : ft_red_herring / grandmother_grandchild
   //    -15° : fool_no_ability
   //      0° : (reserved — top stays clear for visual balance)
   //     15° : exorcist_chosen
-  //     30° : drunk / sailor_drunk / goon_drunk / innkeeper_drunk
+  //     30° : drunk / sailor_drunk / goon_drunk / innkeeper_drunk /
+  //           courtier_drunk_1 / courtier_drunk_2 / courtier_drunk_3
   //          (a player has at most one source of drunkenness in
   //           practice — the IS-THE-DRUNK marker can stack with a
   //           drunkening source but the visual overlap is
   //           acceptable for that edge case)
-  //     45° : innkeeper_safe
+  //     45° : lunatic_chosen
+  //          (placed on every player the Lunatic picked tonight; only
+  //           one Lunatic can be in play at a time, so no mutex
+  //           concerns.)
   //     60° : butler_master
   //     75° : tea_lady_cannot_die
-  //     90° : monk_safe
+  //     90° : monk_safe / innkeeper_safe
+  //          (Monk is TB-only, Innkeeper is BMR-only — they never
+  //           co-occur in a standard script, so they safely share
+  //           90°. Innkeeper sits here rather than next to its own
+  //           drunk token because the Innkeeper-targeted chair always
+  //           carries SAFE+DRUNK simultaneously, and adjacent 15°
+  //           slots overlap visually.)
   //    105° : devils_advocate_survives
   //    120° : poisoner_poisoned
   //    135° : moonchild_dead
@@ -2704,6 +2943,7 @@
     librarian_outsider:     { icon: "librarian_outsider",     angle: -120, title: "Librarian saw this Outsider" },
     librarian_wrong:        { icon: "librarian_wrong",        angle: -120, title: "Librarian WRONG" },
     butler_master:          { icon: "butler_master",          angle:  60, title: "Butler's Master" },
+    lunatic_chosen:         { icon: "lunatic_chosen",         angle:  45, title: "Picked by the Lunatic tonight" },
     monk_safe:              { icon: "monk_safe",              angle:  90, title: "Monk-protected tonight" },
     poisoner_poisoned:      { icon: "poisoner_poisoned",      angle: 120, title: "Poisoned by the Poisoner" },
     scarlet_woman_is_demon: { icon: "scarlet_woman_is_demon", angle: 150, title: "Scarlet Woman has become the Demon" },
@@ -2717,7 +2957,7 @@
     // on a different chair from the demon-kill marker, so the 150°
     // share is safe in practice.
     godfather_dead:         { icon: "godfather_dead",         angle: 150, title: "Killed by the Godfather last night" },
-    assassin_dead:          { icon: "assassin_dead",          angle: 150, title: "Killed by the Assassin" },
+    assassin_dead:          { icon: "assassin_dead",          angle: 150, title: "Killed by the Assassin last night" },
     undertaker_died_today:  { icon: "undertaker_died_today",  angle: 180, title: "Died today (Undertaker will see this character tonight)" },
     slayer_no_ability:      { icon: "slayer_no_ability",      angle: -150, title: "Slayer has used their once-per-game shot" },
     virgin_no_ability:      { icon: "virgin_no_ability",      angle: -150, title: "Virgin's nominator-execute ability has been used" },
@@ -2729,7 +2969,8 @@
     assassin_no_ability:      { icon: "assassin_no_ability",      angle: -135, title: "Assassin has used their once-per-game kill" },
     godfather_died_today:     { icon: "godfather_died_today",     angle: -105, title: "Outsider died today (Godfather will kill tonight)" },
     po_3_attacks:             { icon: "po_3_attacks",             angle:  -75, title: "Po has 3 attacks tonight" },
-    shabaloth_attacked:       { icon: "shabaloth_attacked",       angle:  -45, title: "Attacked by the Shabaloth (may be regurgitated)" },
+    shabaloth_dead:           { icon: "shabaloth_dead",           angle:  -45, title: "Killed by the Shabaloth last night (may be regurgitated)" },
+    shabaloth_alive:          { icon: "shabaloth_alive",          angle:  -45, title: "Regurgitated by the Shabaloth" },
     fool_no_ability:          { icon: "fool_no_ability",          angle:  -15, title: "Fool has used their one-shot survive" },
     exorcist_chosen:          { icon: "exorcist_chosen",          angle:   15, title: "Exorcist's chosen Demon (ability blocked tonight)" },
     sailor_drunk:             { icon: "sailor_drunk",             angle:   30, title: "Drunk (Sailor)" },
@@ -2738,7 +2979,7 @@
     courtier_drunk_1:         { icon: "courtier_drunk_1",         angle:   30, title: "Drunk (Courtier — night 1 of 3)" },
     courtier_drunk_2:         { icon: "courtier_drunk_2",         angle:   30, title: "Drunk (Courtier — night 2 of 3)" },
     courtier_drunk_3:         { icon: "courtier_drunk_3",         angle:   30, title: "Drunk (Courtier — night 3 of 3)" },
-    innkeeper_safe:           { icon: "innkeeper_safe",           angle:   45, title: "Innkeeper-protected tonight" },
+    innkeeper_safe:           { icon: "innkeeper_safe",           angle:   90, title: "Innkeeper-protected tonight" },
     tea_lady_cannot_die:      { icon: "tea_lady_cannot_die",      angle:   75, title: "Cannot die (Tea Lady's good neighbour)" },
     devils_advocate_survives: { icon: "devils_advocate_survives", angle:  105, title: "Survives execution today (Devil's Advocate)" },
     moonchild_dead:           { icon: "moonchild_dead",           angle:  135, title: "Killed by the Moonchild" },
@@ -2790,13 +3031,15 @@
     virgin_no_ability:      { label: "Virgin no ability",           cls: "flag-off" },
     artist_no_ability:      { label: "Artist no ability",           cls: "flag-off" },
     grandmother_grandchild: { label: "Grandmother's grandchild",     cls: "flag-on" },
+    lunatic_chosen:         { label: "Picked by the Lunatic",        cls: "flag-on" },
 
     // ----- Bad Moon Rising -----
     minstrel_everyone_drunk:  { label: "Minstrel: all drunk tonight", cls: "flag-on"  },
     assassin_no_ability:      { label: "Assassin no ability",         cls: "flag-off" },
     godfather_died_today:     { label: "Outsider died today",         cls: "flag-on"  },
     po_3_attacks:             { label: "Po: 3 attacks tonight",       cls: "flag-on"  },
-    shabaloth_attacked:       { label: "Attacked by Shabaloth",       cls: "flag-on"  },
+    shabaloth_dead:           { label: "Killed by Shabaloth",         cls: "flag-on"  },
+    shabaloth_alive:          { label: "Regurgitated by Shabaloth",   cls: "flag-on"  },
     fool_no_ability:          { label: "Fool no ability",             cls: "flag-off" },
     exorcist_chosen:          { label: "Exorcist's chosen",           cls: "flag-on"  },
     sailor_drunk:             { label: "Drunk (Sailor)",              cls: "flag-on"  },
@@ -2861,7 +3104,18 @@
     // ``:hover`` rule covers the whole token area and a drag can
     // translate everything together via the wrapper's transform.
     const wrap = document.createElementNS(SVG_NS, "g");
-    wrap.setAttribute("class", "chair-status-wrapper");
+    // ``opts.active === false`` means the token's only contributor is
+    // an effect that has been deactivated by the source's drunkenness
+    // / poisoning. We tag the wrapper with ``chair-status-inactive``
+    // and let CSS dim the token (opacity + grayscale) so the
+    // storyteller can see at a glance that the ability isn't firing.
+    // Default to "active" when the flag is omitted (older callers /
+    // setup tokens / IS-THE-DRUNK marker etc.).
+    const isActive = !(opts && opts.active === false);
+    wrap.setAttribute(
+      "class",
+      "chair-status-wrapper" + (isActive ? "" : " chair-status-inactive")
+    );
 
     // Subtle white halo so the token is legible against any chair
     // color or background. The token PNG is transparent outside its
@@ -3174,12 +3428,14 @@
   // Positioned high enough that the player name (centered at y=-13
   // when both name and role are set) has clearance.
   //
-  // For *evil* chairs (Minion / Demon) the layout is inverted: the
-  // seat number sits at the bottom of the chair, and the character
-  // name floats above the player name (see ``render()``). This gives
-  // the storyteller an at-a-glance "evil" cue without any extra
-  // colour or icon — the chair text reads upside-down, like the
-  // chair itself has been flipped.
+  // For *evil* chairs the layout is inverted: the seat number sits
+  // at the bottom of the chair, and the character name floats above
+  // the player name (see ``render()``). This gives the storyteller
+  // an at-a-glance "evil" cue without any extra colour or icon —
+  // the chair text reads upside-down, like the chair itself has
+  // been flipped. Evil is decided per-chair from the live
+  // ``c.alignment`` field, so any mid-game alignment flip (Goon,
+  // etc.) is reflected automatically.
   function appendChairNumber(g, num, evil) {
     const t = document.createElementNS("http://www.w3.org/2000/svg", "text");
     t.setAttribute("class", "chair-num");
@@ -3300,7 +3556,19 @@
       // presentation in TOKEN_VIEW (icon, angle, hover title) and
       // renders. Visibility is purely a function of state — when the
       // engine clears a slot the token simply stops appearing.
-      const tokenKinds = (c.tokens || []).map(t => t && t.kind).filter(Boolean);
+      // Each entry in c.tokens is ``{kind, active}``. ``active`` is
+      // False when the token's only contributor is an effect that has
+      // been deactivated by the source character's drunkenness or
+      // poisoning — appendStatusToken dims those visually. We retain
+      // both kind and active flag through the loop so the dim state
+      // and the kind-keyed angle layout below stay in sync.
+      const tokenEntries = (c.tokens || [])
+        .filter(t => t && t.kind)
+        .map(t => ({
+          kind: t.kind,
+          active: t.active === undefined ? true : !!t.active,
+        }));
+      const tokenKinds = tokenEntries.map(t => t.kind);
       // Visual collision: every demon-/minion-kill marker shares 150°
       // with scarlet_woman_is_demon. If a chair somehow carries the SW
       // marker plus a kill marker, nudge the kill marker to 165° so
@@ -3312,7 +3580,8 @@
       ];
       const hasSwMarker =
         tokenKinds.indexOf("scarlet_woman_is_demon") !== -1;
-      for (const kind of tokenKinds) {
+      for (const tok of tokenEntries) {
+        const kind = tok.kind;
         const spec = TOKEN_VIEW[kind];
         if (!spec) continue;
         const isKillMarker = KILL_MARKERS_AT_150.indexOf(kind) !== -1;
@@ -3323,10 +3592,16 @@
             && c.display_character !== "Drunk") {
           title = `Is the Drunk (thinks they're the ${c.display_character})`;
         }
+        // Suffix the tooltip when the underlying ability is suppressed
+        // so the storyteller has an explanation for the dim render.
+        if (!tok.active) {
+          title = title + " — inactive (source drunk/poisoned)";
+        }
         appendStatusToken(g, spec.icon, angle, {
           title,
           dragKind: kind,
           chairId: c.id,
+          active: tok.active,
         });
       }
 
@@ -3537,7 +3812,15 @@
         // when it has consumed the click so we fall through to the
         // existing side-panel / chair-editor paths only when there's
         // no active player-selection prompt.
-        if (typeof handlePromptChairClick === "function"
+        //
+        // ``handleNominateChairClick`` is the parallel hook for the
+        // seat-panel "Nominate" flow: same UX, but commits the pick
+        // immediately instead of going through the engine prompt
+        // pipeline.
+        if (typeof handleNominateChairClick === "function"
+            && handleNominateChairClick(chair)) {
+          // consumed by the nominate picker — nothing else to do
+        } else if (typeof handlePromptChairClick === "function"
             && handlePromptChairClick(chair)) {
           // consumed by the prompt — nothing else to do
         } else if (isInGame()) {
@@ -3838,9 +4121,18 @@
   const seatActNominate  = document.getElementById("seatActNominate");
   const seatActVoted     = document.getElementById("seatActVoted");
   const seatActExecute   = document.getElementById("seatActExecute");
-  const seatNominatePicker = document.getElementById("seatNominatePicker");
-  const seatNominateList = document.getElementById("seatNominateList");
-  const seatNominateCancel = document.getElementById("seatNominateCancel");
+  // Right-side nominate dock (lives at the body root, in the same
+  // bottom-right slot as ``#phaseDock`` so it visually matches a
+  // slayer / SELECT_PLAYER prompt — picker panel on top, then Back +
+  // Next as full-width dock buttons stacked below).
+  const seatNominateDock = document.getElementById("nominateDock");
+  const seatNominateList = document.getElementById("nominatePickerList");
+  const seatNominateBack = document.getElementById("nominatePickerBack");
+  const seatNominateNext = document.getElementById("nominatePickerNext");
+  const seatNominateTitle = document.getElementById("nominatePickerTitle");
+  const seatNominateDesc = document.getElementById("nominatePickerDesc");
+  const seatNominateStages = document.getElementById("nominatePickerStages");
+  const seatNominateHint = document.getElementById("nominatePickerHint");
 
   // Currently-open seat panel target (engine player_id) and a cached
   // chair reference so we can re-resolve player_id after a refresh
@@ -3868,7 +4160,11 @@
     seatPanelTokensExpanded = false;
     seatPanel.classList.remove("open");
     seatPanel.setAttribute("aria-hidden", "true");
-    hideNominatePicker();
+    // NOTE: the nominate picker is NOT cleaned up here. The picker
+    // lives in its own bottom-right slot (a slayer-style ST prompt)
+    // and is intentionally decoupled from the seat panel — clicking
+    // Nominate closes the seat panel and hands off to the picker, so
+    // closing the seat panel must not cancel the picker.
   }
 
   function seatPlayer() {
@@ -3992,14 +4288,19 @@
       }
 
       // Tokens this seat carries — exactly the same source of truth
-      // as the chair badges (chair.tokens, set by the engine).
+      // as the chair badges (chair.tokens, set by the engine). Each
+      // entry is ``{kind, active}``; an inactive entry means the
+      // backing effect is suppressed by drunkenness / poisoning. We
+      // surface that in the side-panel value so the storyteller's
+      // textual readout matches the dimmed grimoire token.
       const myChair = (typeof p.id === "number")
         ? [...chairs.values()].find(c => c.player_id === p.id) || null
         : null;
-      const myKinds = (myChair && Array.isArray(myChair.tokens))
-        ? myChair.tokens.map(t => t && t.kind).filter(Boolean)
+      const myTokens = (myChair && Array.isArray(myChair.tokens))
+        ? myChair.tokens.filter(t => t && t.kind)
         : [];
-      for (const kind of myKinds) {
+      for (const tok of myTokens) {
+        const kind = tok.kind;
         const view = TOKEN_SEATROW[kind];
         if (!view) continue;
         let value = "yes";
@@ -4007,6 +4308,10 @@
             && myChair.display_character
             && myChair.display_character !== "Drunk") {
           value = `yes (thinks ${myChair.display_character})`;
+        }
+        const tokActive = tok.active === undefined ? true : !!tok.active;
+        if (!tokActive) {
+          value = value + " (inactive — source drunk/poisoned)";
         }
         tokenRows.push(seatRow(view.label, value, view.cls));
       }
@@ -4159,64 +4464,218 @@
     renderSeatPanel();
   }
 
+  // While the seat-panel nominate picker is open we mirror the slayer
+  // / SELECT_PLAYER prompt UX on the town square: eligible chairs are
+  // highlighted (everyone else dimmed) and clicking one fires the
+  // nomination directly. ``_nominateMode`` carries the nominator id and
+  // the eligible nominee id set so ``handleNominateChairClick`` can
+  // gate clicks without re-walking the player list.
+  let _nominateMode = null;
+
   function showNominatePicker() {
     const p = seatPlayer();
     if (!p) return;
-    const html = [];
+    // The picker lives at the body root, in the bottom-right slot —
+    // same spot the ``#promptPanel`` occupies during a SELECT_PLAYER
+    // prompt. Cache the nominator id BEFORE closing the seat panel so
+    // the picker still knows who is nominating after the left-side
+    // panel slides out of the way.
+    const nominatorId = p.id;
+    const nominatorName = p.name || ("Player " + p.id);
+    seatNominateList.innerHTML = "";
     // Sort by seat for a stable, table-order list. Dead players are
     // included; the nominee gating only blocks already-nominated-today.
     const others = Array.from(enginePlayersById.values())
       .sort((a, b) => a.seat - b.seat);
+    let count = 0;
+    const eligibleIds = [];
     for (const other of others) {
-      if (other.id === p.id) continue;
+      if (other.id === nominatorId) continue;
+      const opt = document.createElement("button");
+      opt.type = "button";
+      opt.className = "option";
+      // Match the SELECT_PLAYER prompt label format: "Name (#id)" with a
+      // " (dead)" suffix when the seat isn't alive — same convention
+      // used by daytime-ability prompts (Slayer, Virgin, …).
+      const dead = other.alive ? "" : " (dead)";
+      opt.textContent = (other.name || ("Player " + other.id))
+        + " (#" + other.id + ")" + dead;
       const disabled = !other.can_be_nominated;
-      const cls = disabled ? "pick-row disabled" : "pick-row";
-      const dead = other.alive ? "" : " <span class='st'>(dead)</span>";
-      const why = other.has_been_nominated_today
-        ? " <span class='st'>· already nominated</span>" : "";
-      html.push(
-        `<div class="${cls}" data-id="${other.id}">`
-        + `<span class="nm">${escapeHtml(other.name || ("#" + other.id))}${dead}${why}</span>`
-        + `<span class="st">${escapeHtml(other.character || "")}</span>`
-        + `</div>`
-      );
-    }
-    seatNominateList.innerHTML = html.join("");
-    seatNominatePicker.hidden = false;
-    seatNominateList.querySelectorAll(".pick-row").forEach(el => {
-      el.addEventListener("click", () => {
-        if (el.classList.contains("disabled")) return;
-        const nomineeId = parseInt(el.getAttribute("data-id"), 10);
-        submitNomination(nomineeId);
+      if (disabled) {
+        opt.classList.add("disabled");
+        opt.disabled = true;
+        opt.title = other.has_been_nominated_today
+          ? "Already nominated today."
+          : "Cannot be nominated.";
+      } else {
+        eligibleIds.push(other.id);
+      }
+      opt.dataset.id = String(other.id);
+      // Clicking an option SELECTS the nominee (it does not submit).
+      // The storyteller commits the pick by hitting Next, mirroring
+      // the slayer / SELECT_PLAYER flow.
+      opt.addEventListener("click", () => {
+        if (opt.disabled) return;
+        if (!_nominateMode) return;
+        _nominateMode.selected_id = other.id;
+        renderNominateSelectionState();
       });
+      seatNominateList.appendChild(opt);
+      count++;
+    }
+    // Title — uppercased by CSS, matches the slayer prompt's title row
+    // (``meta.character`` in the engine prompt path; here it's the
+    // static label "Nominate").
+    if (seatNominateTitle) seatNominateTitle.textContent = "Nominate";
+    // Description — rule-text style (matches slayer's
+    // "Slayer slays a player": narrative, not the question itself).
+    if (seatNominateDesc) {
+      seatNominateDesc.textContent =
+        `${nominatorName} nominates a player.`;
+    }
+    // Stages — render a single "current" stage card the same way the
+    // slayer prompt renders its ``select_target`` step. Slayer's label
+    // is "Player selects a target"; the parallel here is "Storyteller
+    // selects a player to nominate".
+    if (seatNominateStages) {
+      seatNominateStages.innerHTML = "";
+      const stage = document.createElement("div");
+      stage.className = "stage current";
+      const q = document.createElement("div");
+      q.className = "stage-question";
+      q.textContent = "Storyteller selects a player to nominate";
+      stage.appendChild(q);
+      seatNominateStages.appendChild(stage);
+    }
+    // Engage the chair-pick affordance on the board. Mirrors the slayer
+    // SELECT_PLAYER flow: eligible chairs get the warm halo (via
+    // ``applyHighlight``) and become click-targets (``nominate-pick-mode``
+    // body class hides the engine phaseDock so the picker owns the
+    // bottom-right slot).
+    _nominateMode = {
+      nominator_id: nominatorId,
+      nominator_name: nominatorName,
+      eligible_ids: new Set(eligibleIds),
+      selected_id: null,
+      eligible_count: count,
+    };
+    document.body.classList.add("nominate-pick-mode");
+    applyHighlight(eligibleIds);
+    seatNominateDock.hidden = false;
+    renderNominateSelectionState();
+    // Get the left-side seat panel out of the way. The picker is now
+    // self-sufficient (it remembers the nominator in ``_nominateMode``)
+    // and the slayer-style flow doesn't keep an extra panel open.
+    closeSeatPanel();
+  }
+
+  // Reflect ``_nominateMode.selected_id`` onto the picker's option
+  // buttons (`.option.selected`), the town-square chairs (`chair-picked`,
+  // mirroring the slayer prompt's pick feedback), and the Next button's
+  // enabled state + hint text. Called after every selection change.
+  // The chair outline is delegated to ``reapplyChairSelection`` so
+  // nominate-mode picks share the EXACT same styling code path (and
+  // re-render survival) as engine SELECT_PLAYER picks.
+  function renderNominateSelectionState() {
+    const mode = _nominateMode;
+    const sel = mode ? mode.selected_id : null;
+    // Option buttons
+    seatNominateList.querySelectorAll(".option").forEach(opt => {
+      const pid = parseInt(opt.dataset.id || "", 10);
+      opt.classList.toggle("selected", sel != null && pid === sel);
     });
+    // Town square chairs — same outline path as the slayer prompt.
+    if (typeof reapplyChairSelection === "function") reapplyChairSelection();
+    // Next button + hint. The hint matches slayer's prompt: a single
+    // static "Pick N player." line — selection feedback shows on the
+    // option pill / chair outline, not in the hint text.
+    const hasSel = sel != null;
+    if (seatNominateNext) seatNominateNext.disabled = !hasSel;
+    if (seatNominateHint) {
+      if (!mode || !mode.eligible_count) {
+        seatNominateHint.textContent = "No eligible nominees.";
+      } else {
+        seatNominateHint.textContent = "Pick 1 player.";
+      }
+    }
   }
 
   function hideNominatePicker() {
-    seatNominatePicker.hidden = true;
+    seatNominateDock.hidden = true;
     seatNominateList.innerHTML = "";
+    if (seatNominateStages) seatNominateStages.innerHTML = "";
+    _nominateMode = null;
+    document.body.classList.remove("nominate-pick-mode");
+    // Drop the eligibility halo / dim from the board.
+    applyHighlight([]);
+    // ``reapplyChairSelection`` now sees ``_nominateMode === null`` and
+    // no engine prompt, so it clears every chair-picked marker — same
+    // mechanism the engine prompt uses to drop its picks on Next.
+    if (typeof reapplyChairSelection === "function") reapplyChairSelection();
+    if (seatNominateNext) seatNominateNext.disabled = true;
+  }
+
+  // Chair-click hook for the seat-panel nominate picker. Mirrors
+  // ``handlePromptChairClick``: returns true when the click has been
+  // consumed (i.e. we are in nominate-pick mode), so the caller skips
+  // the side-panel / chair-editor paths. Clicks on non-eligible chairs
+  // are still consumed (the side panel stays out of the way) but don't
+  // change the selection. Clicking the nominator's own chair cancels.
+  function handleNominateChairClick(chair) {
+    if (!_nominateMode) return false;
+    const pid = (typeof chair.player_id === "number")
+      ? chair.player_id
+      : chair.id;
+    // Click on the nominator's own chair: cancel the picker so the ST
+    // can change their mind without having to hunt for the Cancel
+    // button. This matches the "click your own chair to back out"
+    // affordance many board UIs use.
+    if (pid === _nominateMode.nominator_id) {
+      hideNominatePicker();
+      return true;
+    }
+    if (!_nominateMode.eligible_ids.has(pid)) {
+      // Non-eligible chair while in pick mode: consume so the side
+      // panel doesn't pop up, but otherwise do nothing.
+      return true;
+    }
+    // Select (do not submit). The storyteller commits the pick by
+    // pressing Next — same UX as slayer / SELECT_PLAYER prompts.
+    _nominateMode.selected_id = pid;
+    renderNominateSelectionState();
+    return true;
   }
 
   async function submitNomination(nomineeId) {
-    const p = seatPlayer();
-    if (!p) return;
-    setSeatMsg("");
+    // The seat panel is closed by ``showNominatePicker``, so we read
+    // the nominator from ``_nominateMode`` instead of ``seatPlayer()``.
+    const mode = _nominateMode;
+    if (!mode) return;
+    if (seatNominateHint) seatNominateHint.textContent = "Sending…";
+    if (seatNominateNext) seatNominateNext.disabled = true;
     const res = await postJSON("/api/engine/nominate", {
-      nominator_id: p.id,
+      nominator_id: mode.nominator_id,
       nominee_id: nomineeId,
     });
     if (!res.ok) {
-      setSeatMsg((res.data && res.data.error) || "Nomination failed.");
+      if (seatNominateHint) {
+        seatNominateHint.textContent =
+          (res.data && res.data.error) || "Nomination failed.";
+      }
+      // Re-enable Next so the storyteller can retry / change picks.
+      if (seatNominateNext) seatNominateNext.disabled = false;
       return;
     }
-    const nominee = enginePlayersById.get(nomineeId);
-    setSeatMsg(
-      `${p.name} nominates ${nominee ? nominee.name : "#" + nomineeId}.`,
-      true
-    );
     hideNominatePicker();
     await refresh();
-    renderSeatPanel();
+  }
+
+  // Commit the in-progress nominee selection. Wired to the picker's
+  // Next button (and the Enter key while the picker has focus).
+  function commitNominateSelection() {
+    const mode = _nominateMode;
+    if (!mode || mode.selected_id == null) return;
+    submitNomination(mode.selected_id);
   }
 
   seatPanelClose.addEventListener("click", closeSeatPanel);
@@ -4224,9 +4683,40 @@
   seatActVoted.addEventListener("click", clickVoted);
   seatActExecute.addEventListener("click", clickExecute);
   seatActNominate.addEventListener("click", showNominatePicker);
-  seatNominateCancel.addEventListener("click", hideNominatePicker);
+  if (seatNominateBack) {
+    // Back is the dock-button equivalent of "cancel this nomination" —
+    // matches the slayer prompt's Back button (red/subdued, "destructive
+    // — undo" semantics).
+    seatNominateBack.addEventListener("click", hideNominatePicker);
+  }
+  if (seatNominateNext) {
+    seatNominateNext.addEventListener("click", commitNominateSelection);
+  }
   document.addEventListener("keydown", (ev) => {
-    if (ev.key === "Escape" && seatPanel.classList.contains("open")) {
+    // Enter — commit the current nominate selection if the picker is
+    // open and a nominee has been picked. Mirrors the slayer prompt
+    // where Enter advances on Next.
+    if (ev.key === "Enter" && _nominateMode
+        && _nominateMode.selected_id != null) {
+      // Only fire when the focus isn't inside a text input where the
+      // user might be typing (the picker has no inputs of its own,
+      // but other panels on the page might).
+      const tag = (ev.target && ev.target.tagName || "").toLowerCase();
+      if (tag !== "input" && tag !== "textarea") {
+        ev.preventDefault();
+        commitNominateSelection();
+        return;
+      }
+    }
+    if (ev.key !== "Escape") return;
+    // Esc closes the right-side nominate picker first (if open), since
+    // that's the most-foreground "modal-ish" surface. Otherwise it
+    // closes the left-side seat panel.
+    if (_nominateMode) {
+      hideNominatePicker();
+      return;
+    }
+    if (seatPanel.classList.contains("open")) {
       closeSeatPanel();
     }
   });
@@ -4236,6 +4726,13 @@
   // ST could mark someone drunk via the chair grimoire, etc.). Called
   // from the bottom of refresh() above.
   function reflectSeatPanel() {
+    // The right-side nominate picker is only meaningful during day —
+    // if the engine has shifted to setup / night / finished, drop the
+    // picker too so it doesn't linger on a board it no longer applies
+    // to.
+    if (_nominateMode && engineState.phase !== "day") {
+      hideNominatePicker();
+    }
     if (!seatPanel.classList.contains("open")) return;
     // Close the panel if the engine has reset back to setup — leaving
     // the panel open over the setup board would be confusing, since
@@ -4517,6 +5014,7 @@
   const qrClose = document.getElementById("qrClose");
   const qrSub = document.getElementById("qrSub");
   const qrTitle = document.getElementById("qrTitle");
+  const qrCodeNote = document.getElementById("qrCodeNote");
 
   // Which view the QR opens. ``player`` -> /player (a player's phone
   // joins the lobby and sees the townsquare). ``storyteller`` ->
@@ -4548,11 +5046,32 @@
       const r = await fetch("/api/host_info", { cache: "no-store" });
       if (!r.ok) throw new Error("host_info status " + r.status);
       const info = await r.json();
+      // ``access_code`` is echoed back by the server so the QR modal can
+      // pre-fill the ?code= query param. May be null if the operator
+      // launched with --no-access-code.
+      const accessCode = (info && info.access_code) || "";
+      // Prefer the Cloudflare Quick Tunnel URL when active. It's a real
+      // HTTPS endpoint reachable from off-network, so phones don't need
+      // to be on the same WiFi. The LAN candidate pills are suppressed
+      // in this case — anyone with the tunnel URL is already covered.
+      if (info && info.tunnel_url) {
+        return {
+          url: info.tunnel_url,
+          candidates: [],
+          port: null,
+          source: "tunnel",
+          tunnelStatus: info.tunnel_status || "running",
+          accessCode,
+        };
+      }
       if (info && info.lan_ip) {
         return {
           url: baseUrlFor(info.lan_ip, info.port || window.location.port),
           candidates: info.candidates || [],
           port: info.port || window.location.port || null,
+          source: "lan",
+          tunnelStatus: info.tunnel_status || "disabled",
+          accessCode,
         };
       }
     } catch (e) {
@@ -4563,6 +5082,9 @@
       url: window.location.origin,
       candidates: [],
       port: window.location.port || null,
+      source: "origin",
+      tunnelStatus: "disabled",
+      accessCode: "",
     };
   }
 
@@ -4586,6 +5108,11 @@
     }
   }
 
+  // Tracks the source of the auto-detected URL so renderQr() can
+  // tweak its sub-text. Set by openQrModal each time it pulls fresh
+  // server info.
+  let qrSourceLabel = null;
+
   async function openQrModal(target) {
     // ``target`` selects which page the QR opens — ``player`` or
     // ``storyteller``. Each toolbar button passes its own target so
@@ -4596,10 +5123,11 @@
     const info = QR_TARGET_INFO[qrTarget] || QR_TARGET_INFO.player;
     qrTitle.textContent = info.title + " — scan with a phone camera";
     // Open immediately with a placeholder, then upgrade when the
-    // server tells us the LAN IP.
+    // server tells us the LAN IP / tunnel URL.
     qrUrlInput.value = window.location.origin;
     qrCodeInput.value = "";
     qrCandidates.innerHTML = "";
+    qrSourceLabel = null;
     qrBackdrop.classList.add("open");
     renderQr();
 
@@ -4608,6 +5136,25 @@
     if (qrUrlInput.value === window.location.origin) {
       qrUrlInput.value = detected.url;
     }
+    // Pre-fill the access code from the server. Don't clobber a
+    // hand-typed override the storyteller might have entered while the
+    // fetch was in-flight.
+    if (qrCodeInput.value === "" && detected.accessCode) {
+      qrCodeInput.value = detected.accessCode;
+    }
+    if (qrCodeNote) {
+      qrCodeNote.textContent = detected.accessCode
+        ? "(auto-filled from server — required to join)"
+        : "(server has no code; leave blank)";
+    }
+    if (detected.source === "tunnel") {
+      qrSourceLabel = "via Cloudflare Tunnel — works off-WiFi";
+    } else if (detected.source === "lan") {
+      qrSourceLabel = null;  // default sub-text already says "scan from a phone"
+    }
+    // When the tunnel is the live source, hide the "other LAN IPs" pills
+    // — they aren't useful (and could confuse the storyteller into
+    // handing out a URL that only works on-network).
     renderCandidatePills(detected.candidates, detected.port);
     renderQr();
   }
@@ -4620,7 +5167,9 @@
     const base = qrUrlInput.value.trim().replace(/\/+$/, "");
     const code = qrCodeInput.value.trim();
     const targetInfo = QR_TARGET_INFO[qrTarget] || QR_TARGET_INFO.player;
-    qrSub.textContent = targetInfo.sub;
+    qrSub.textContent =
+      qrSourceLabel ? `${targetInfo.sub}  ·  ${qrSourceLabel}`
+                    : targetInfo.sub;
 
     // Build the phone URL: base + target path [+ ?code=...].
     let url = base;
@@ -4950,6 +5499,15 @@
       hideGameEndOverlay();
       hideReportOverlay();
       _gameEndShownFor = null;
+      // If polling sees the engine has returned to setup (typically
+      // because the storyteller hit Reset on a phone), tear down the
+      // prompt-polling timer so we stop hitting /api/prompt for a
+      // game that no longer exists. Mirrors the cleanup in
+      // resetGame() for the local-driven path.
+      if (_pollTimer) {
+        clearInterval(_pollTimer);
+        _pollTimer = null;
+      }
     } else if (phase === "finished") {
       // Same toolbar layout as Night/Day; nothing else to do here.
       setStartStatus("Game finished.", "ok");
@@ -4961,6 +5519,14 @@
       if (!startStatus.textContent) {
         setStartStatus("Engine is in " + phase + " phase.", "ok");
       }
+      // The engine moved into first_night / night / day without us
+      // going through the local startGame() path — typically because
+      // the storyteller pressed Start (or Start Night) on a phone.
+      // Make sure the prompt-polling timer is running so the wake-up
+      // sheet shows up on the local UI too. startPromptPolling() is
+      // idempotent (it bails if _pollTimer is already set), so this
+      // is safe to call on every poll-driven refresh.
+      if (typeof startPromptPolling === "function") startPromptPolling();
     }
     // Drive the live console panel's polling off the engine phase —
     // anything past setup means there's structured activity worth
@@ -5003,12 +5569,15 @@
       _setReadinessMessage("");
       return;
     }
-    // Start Game is always enabled during setup — the storyteller is
-    // trusted to know when the table is ready. The engine still
-    // validates seat count, demon count, etc. on the actual
-    // /api/engine/start_game call, and any error comes back through
-    // setStartStatus. We surface the *would-be* blocker as an
-    // informational banner / hover-title but do not gate the click.
+    // Start Game is gated on the readiness checks below. Whenever
+    // ``info`` ends up non-empty (seat count too low, an unassigned
+    // chair, an empty pool, a pool/player multiset mismatch, or an
+    // engine-reported setup-validation blocker) the button is
+    // disabled and the reason is surfaced both as the hover-title
+    // and as the inline banner above the button. The engine still
+    // re-validates on the actual /api/engine/start_game call as a
+    // backstop, but the UI no longer lets the storyteller click into
+    // an obvious failure.
     const list = [...chairs.values()];
     const seatedCount = list.length;
     let info = "";
@@ -5060,7 +5629,7 @@
       }
     }
 
-    startBtn.disabled = false;
+    startBtn.disabled = Boolean(info);
     startBtn.title = info
       ? info
       : "All chairs ready — click to start the game.";
@@ -5311,7 +5880,7 @@
       select_players: "Player selects players",
       select_two: "Player selects two players",
       select_master: "Butler selects their master",
-      select_character: "Storyteller picks a character",
+      select_character: "The player picks a character",
       select_wrong_player: "Storyteller picks the wrong player",
       select_shown_character: "Storyteller picks the character to show",
       select_count: "Storyteller picks the count to show",
@@ -5909,18 +6478,58 @@
     if (!chairsRoot) return;
     const isPickMode = isPromptPlayerSelect(_currentPrompt);
     document.body.classList.toggle("prompt-pick-mode", isPickMode);
-    const picked = isPickMode ? new Set(_selectedPlayerIds) : new Set();
+    // Nominate-mode picks travel through the same code path as engine
+    // SELECT_PLAYER picks so they survive ``render()`` rebuilds and
+    // wear the IDENTICAL chair outline (teal ring + glow defined by
+    // ``g[data-id].chair-picked .chair``). Engine prompt picks take
+    // precedence when both are somehow active — that case shouldn't
+    // arise in practice (nominations only happen during day, prompts
+    // only during night or daytime abilities), but precedence keeps the
+    // behaviour deterministic if it ever does.
+    let picked;
+    let promptCount = 1;
+    if (isPickMode) {
+      picked = new Set(_selectedPlayerIds);
+      promptCount = (_currentPrompt && _currentPrompt.count) || 1;
+    } else if (_nominateMode && _nominateMode.selected_id != null) {
+      picked = new Set([_nominateMode.selected_id]);
+    } else {
+      picked = new Set();
+    }
+    // Multi-pick gradient: when count >= 2, each picked chair carries
+    // its 0-based pick index and the total pick count as inline CSS
+    // custom properties. The chair-picked stylesheet rule reads them
+    // to shade later picks darker. Single-pick prompts (and the
+    // single-pick nominate flow) skip the props entirely; var()
+    // fallbacks keep the original solid teal.
     chairsRoot.querySelectorAll("g[data-id]").forEach(g => {
       const id = parseInt(g.getAttribute("data-id"), 10);
       const ch = chairs.get(id);
       const pid = (ch && typeof ch.player_id === "number")
         ? ch.player_id
         : id;
-      g.classList.toggle("chair-picked", picked.has(pid));
+      const isPicked = picked.has(pid);
+      g.classList.toggle("chair-picked", isPicked);
+      if (isPicked && isPickMode && promptCount >= 2) {
+        const idx = _selectedPlayerIds.indexOf(pid);
+        g.style.setProperty("--pick-index", String(idx));
+        g.style.setProperty("--pick-count", String(promptCount));
+      } else {
+        g.style.removeProperty("--pick-index");
+        g.style.removeProperty("--pick-count");
+      }
     });
   }
 
   function renderSelectionState() {
+    // Multi-pick gradient: when ``_currentPrompt.count >= 2``, each
+    // selected option (player or character) gets ``--pick-index`` and
+    // ``--pick-count`` as inline custom properties so the .selected
+    // rule can shade later picks darker. Yes/No options and character-
+    // single-pick options get nothing — var() fallbacks resolve
+    // progress to 0 and the option keeps its original solid color.
+    const promptCount = (_currentPrompt && _currentPrompt.count) || 1;
+    const isMulti = promptCount >= 2;
     const opts = promptOptions.querySelectorAll(".option");
     opts.forEach(opt => {
       const pid = parseInt(opt.dataset.pid || "", 10);
@@ -5928,11 +6537,21 @@
       const yn = opt.dataset.yesno;
       const ynSel = (yn === "true" && _selectedYesNo === true)
         || (yn === "false" && _selectedYesNo === false);
-      const sel = (!isNaN(pid) && _selectedPlayerIds.includes(pid))
-        || (name && name === _selectedCharacter)
-        || (name && _selectedCharacters.includes(name))
-        || ynSel;
+      const playerSelected = !isNaN(pid) && _selectedPlayerIds.includes(pid);
+      const charSingle = name && name === _selectedCharacter;
+      const charMulti = name && _selectedCharacters.includes(name);
+      const sel = playerSelected || charSingle || charMulti || ynSel;
       opt.classList.toggle("selected", !!sel);
+      if (sel && isMulti && (playerSelected || charMulti)) {
+        const idx = playerSelected
+          ? _selectedPlayerIds.indexOf(pid)
+          : _selectedCharacters.indexOf(name);
+        opt.style.setProperty("--pick-index", String(idx));
+        opt.style.setProperty("--pick-count", String(promptCount));
+      } else {
+        opt.style.removeProperty("--pick-index");
+        opt.style.removeProperty("--pick-count");
+      }
     });
     // Mirror the player picks onto the town-square chairs.
     reapplyChairSelection();
@@ -6505,6 +7124,9 @@
     slayer_no_ability_player_ids: [],
     virgin_no_ability_player_ids: [],
     artist_no_ability_player_ids: [],
+    // Godfather "[-1 or +1 Outsider]" setup choice. Defaults to +1
+    // and is overwritten by the snapshot once the server responds.
+    godfather_outsider_delta: 1,
   };
   let presets = [];
   let currentPreset = null;          // name string
@@ -6580,6 +7202,30 @@
       }
     } catch (e) {
       console.warn("drunk_fake set failed", e);
+    }
+  }
+
+  async function setGodfatherDelta(delta) {
+    // Storyteller-picked direction for the Godfather's
+    // "[-1 or +1 Outsider]" setup ability. Server validates that the
+    // value is exactly ±1; on success it returns a fresh pool
+    // snapshot which we apply so the recommended-counts banner and
+    // the toggle highlight refresh in lockstep.
+    try {
+      const r = await fetch(
+        "/api/character_pool/godfather_outsider_delta", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ delta }),
+      });
+      const data = await r.json();
+      if (r.ok) {
+        applyPoolSnapshot(data);
+      } else {
+        console.warn("godfather delta set failed", data);
+      }
+    } catch (e) {
+      console.warn("godfather delta set failed", e);
     }
   }
 
@@ -6816,9 +7462,30 @@
           }
         }
         const indicator = isFake ? "\u2606" : (has ? "\u2713" : "+");
+        // Godfather setup choice: "[-1 or +1 Outsider]". When the
+        // Godfather is in the pool we render a small two-button
+        // toggle right before the indicator so the storyteller can
+        // flip the recommended-bag delta without leaving the modal.
+        // The toggle is suppressed when the Godfather is *not* in
+        // the pool (no role to apply the shift to).
+        let gfToggleHtml = "";
+        if (has && name === "Godfather") {
+          const gfDelta = poolState.godfather_outsider_delta === -1 ? -1 : 1;
+          const minusActive = gfDelta === -1 ? " active" : "";
+          const plusActive = gfDelta === 1 ? " active" : "";
+          gfToggleHtml =
+            `<span class="gf-delta-toggle" ` +
+            `title="Godfather: -1 or +1 Outsider">` +
+            `<button type="button" class="gf-minus${minusActive}" ` +
+            `data-gf-delta="-1" aria-label="-1 Outsider">−1</button>` +
+            `<button type="button" class="gf-plus${plusActive}" ` +
+            `data-gf-delta="1" aria-label="+1 Outsider">+1</button>` +
+            `</span>`;
+        }
         html.push(
           `<div class="${cls.join(" ")}" data-name="${escapeAttr(name)}">` +
           `<span class="name">${annotated}</span>` +
+          gfToggleHtml +
           `<span class="ind">${indicator}</span>` +
           `</div>`);
       }
@@ -6837,7 +7504,19 @@
     //   * otherwise: regular add/remove toggle (server auto-clears
     //     and re-rolls the FT / WW slot if needed).
     addScroll.querySelectorAll(".char-item").forEach(el => {
-      el.addEventListener("click", () => {
+      el.addEventListener("click", (evt) => {
+        // The Godfather row carries a small ± toggle for its
+        // "[-1 or +1 Outsider]" setup choice. Clicks on that toggle
+        // must not also trigger the row's add/remove handler — we
+        // detect a toggle click by walking up from the event target
+        // and short-circuit if a button with ``data-gf-delta`` was
+        // hit. The toggle's own listener (below) drives the actual
+        // PUT to the server.
+        const gfBtn = evt.target && evt.target.closest
+          ? evt.target.closest("[data-gf-delta]")
+          : null;
+        if (gfBtn) return;
+
         const name = el.getAttribute("data-name");
         if (!name) return;
         const has = inPool.has(name);
@@ -6862,6 +7541,21 @@
           removeCharFromPool(name);
         } else {
           addCharToPool(name);
+        }
+      });
+    });
+
+    // Wire the Godfather "[-1 or +1 Outsider]" toggle. Each button
+    // calls setGodfatherDelta with the ``data-gf-delta`` int it
+    // carries, then stops propagation so the row's own click handler
+    // doesn't also fire. Re-render is driven by the snapshot the
+    // server returns from the PUT.
+    addScroll.querySelectorAll("[data-gf-delta]").forEach(btn => {
+      btn.addEventListener("click", (evt) => {
+        evt.stopPropagation();
+        const delta = parseInt(btn.getAttribute("data-gf-delta"), 10);
+        if (delta === -1 || delta === 1) {
+          setGodfatherDelta(delta);
         }
       });
     });
