@@ -26,3 +26,8 @@ Thumbs.db
 # map character names to filenames.
 assets/tokens/*.png
 !assets/tokens/manifest.json
+
+# Local working copy of the token PNGs used as the source for R2
+# uploads. Same copyright reasoning as assets/tokens/ — keep the art
+# out of git.
+tokens/
