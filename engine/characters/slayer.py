@@ -86,8 +86,11 @@ class Slayer(Character):
             Event(EventType.CHECK_CONDITION, source=self, targets=[self.player])
         )
 
-        # SELECT: any alive player.
-        eligible = [p.id for p in engine.players if p.alive]
+        # SELECT: any player (alive or dead) per the wiki rule. A
+        # slay on a dead seat is wasteful — even if the dead seat is
+        # the Demon, engine.kill no-ops on already-dead — but it's
+        # legal per the rules.
+        eligible = [p.id for p in engine.players]
         sel = SelectPlayerPrompt(
             text="Slayer slays a player",
             count=1,

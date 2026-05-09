@@ -105,10 +105,13 @@ class Monk(Character):
             Event(EventType.WAKEUP, source=self, targets=[self.player])
         )
 
-        # SELECT: any other alive player. Monk can't pick themselves.
+        # SELECT: any other player (alive or dead, per the wiki rule).
+        # Monk can't pick themselves. A dead pick wastes the protection
+        # but is legal — engine.kill no-ops on dead targets, so the
+        # Monk's safe-effect is harmless on a dead seat.
         eligible = [
             p.id for p in engine.players
-            if p.alive and p.id != self.player.id
+            if p.id != self.player.id
         ]
         sel = SelectPlayerPrompt(
             text="Monk protects a player",

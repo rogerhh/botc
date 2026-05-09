@@ -146,12 +146,15 @@ class Innkeeper(Character):
             Event(EventType.WAKEUP, source=self, targets=[self.player])
         )
 
-        # SELECT — 2 alive players. Self is allowed.
-        eligible = [p.id for p in engine.players if p.alive]
+        # SELECT — 2 players (alive or dead per the wiki rule). Self
+        # is allowed. Dead seats can be safe AND drunk; if revived
+        # later, the safe and drunk effects persist for their
+        # documented durations.
+        eligible = [p.id for p in engine.players]
         if len(eligible) < 2:
             return
         sel = SelectPlayerPrompt(
-            text="Innkeeper picks 2 alive players to protect",
+            text="Innkeeper picks 2 players to protect",
             count=2,
             eligible_player_ids=eligible,
             allow_self=True,

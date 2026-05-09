@@ -146,7 +146,9 @@ class Godfather(Character):
             Event(EventType.WAKEUP, source=self, targets=[self.player])
         )
 
-        eligible = [p.id for p in engine.players if p.alive]
+        # Per wiki rule, "choose a player" allows alive or dead picks.
+        # A dead pick is wasteful (engine.kill no-ops) but legal.
+        eligible = [p.id for p in engine.players]
         sel = SelectPlayerPrompt(
             text="Godfather kills a player",
             count=1,

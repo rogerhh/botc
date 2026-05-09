@@ -95,9 +95,10 @@ class Poisoner(Character):
             Event(EventType.WAKEUP, source=self, targets=[self.player])
         )
 
-        # SELECT: pick a player to poison. Storyteller may pick any
-        # alive player. The Poisoner can poison themselves.
-        eligible = [p.id for p in engine.players if p.alive]
+        # SELECT: pick a player to poison. Per the wiki rule, "choose
+        # a player" means any player — alive or dead — can be chosen.
+        # The Poisoner can poison themselves.
+        eligible = [p.id for p in engine.players]
         sel = SelectPlayerPrompt(
             text="Poisoner poisons a player",
             count=1,

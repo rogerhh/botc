@@ -112,8 +112,10 @@ class Gossip(Character):
             Event(EventType.WAKEUP, source=self, targets=[self.player])
         )
 
-        # SELECT — any alive player. Storyteller picks.
-        eligible = [p.id for p in engine.players if p.alive]
+        # SELECT — any player (alive or dead per the wiki rule).
+        # A dead pick is wasteful — engine.kill no-ops on dead — but
+        # legal.
+        eligible = [p.id for p in engine.players]
         if not eligible:
             self._truth_pending = False
             return
