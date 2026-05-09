@@ -161,6 +161,14 @@ class Professor(Character):
         engine.dispatch(
             Event(EventType.SELECT, source=self, targets=[target])
         )
+        # Goon notify: if the Professor picked a Goon seat, route to
+        # ``choose_me``. In practice this no-ops because the Professor
+        # only ever picks dead players (gated above with
+        # ``if not target.dead: return``), and a dead Goon has no
+        # ability so the choose_me gate returns False without firing
+        # the drunkening. Kept for consistency with the Group A
+        # template.
+        engine.notify_goon_chosen(self, target)
 
         # Slot consumed regardless of result.
         self._used = True

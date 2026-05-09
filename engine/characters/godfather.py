@@ -178,6 +178,9 @@ class Godfather(Character):
         engine.dispatch(
             Event(EventType.SELECT, source=self, targets=[target])
         )
+        # Goon notify: if the Godfather picked the Goon's seat, the
+        # Goon drunkens the Godfather and the kill below is skipped.
+        engine.notify_goon_chosen(self, target)
 
         if self.player.has_ability:
             engine.kill(target.id, DeathCause.ABILITY, source=self)

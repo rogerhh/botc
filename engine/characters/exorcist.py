@@ -136,6 +136,11 @@ class Exorcist(Character):
         engine.dispatch(
             Event(EventType.SELECT, source=self, targets=[target])
         )
+        # Goon notify: if the Exorcist picked the Goon's seat, the
+        # Goon drunkens the Exorcist so the block + token below
+        # don't land. The ``_previous_pick_id`` bookkeeping still
+        # happens (tracks what was picked, not what landed).
+        engine.notify_goon_chosen(self, target)
 
         self._previous_pick_id = target.id
 

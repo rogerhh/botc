@@ -231,10 +231,28 @@ class Innkeeper(Character):
         except (KeyError, ValueError, TypeError):
             drunk_player = chosen_players[0]
 
-        # RESOLUTION: emit the two effects via the registry. A
-        # drunk/poisoned Innkeeper goes through the motions but no
-        # effects are added (registry contract: source must have
-        # ability at application time).
+        # RESOLUTION: Goon-aware notify-all-then-emit.
+        #
+        # Innkeeper deliberately differs from Shabaloth / Po
+        # (which use ``process_targets_with_goon_break`` and care
+        # about pick ordering — kills before the Goon land, kills
+        # after don't). For the Innkeeper, **pick order does not
+        # matter**: if the Goon is among the picks, the retort
+        # drunkens the Innkeeper before any of the Innkeeper's own
+        # effects can land — neither SAFE nor DRUNK emits, in either
+        # ordering. The Innkeeper's ability is conceptually a single
+        # "fire," not a per-target loop.
+        #
+        # Implementation: notify every picked target up-front so the
+        # Goon's first-per-night gate fires synchronously if any
+        # pick is the Goon. The has_ability gate that follows then
+        # blocks all effect emission. This keeps registry state
+        # order-independent — there are no inactive Innkeeper-sourced
+        # effects to reactivate later if the Goon dies, because we
+        # never emit them in the first place.
+        for tp in chosen_players[:2]:
+            engine.notify_goon_chosen(self, tp)
+
         if self.player.has_ability:
             engine.add_effect(InnkeeperSafeEffect(
                 source=self,
@@ -251,8 +269,9 @@ class Innkeeper(Character):
             )
         else:
             engine.log(
-                f"Innkeeper {self.player.name} is drunk/poisoned — "
-                f"no real protection or drunkening tonight."
+                f"Innkeeper {self.player.name} is drunk/poisoned "
+                f"(or Goon-retorted) — no real protection or "
+                f"drunkening tonight."
             )
 
         engine.dispatch(

@@ -245,6 +245,20 @@ class Courtier(Character):
             if target is None or (target.dead and not p.dead):
                 target = p
 
+        # Goon notify: the Courtier picks a *character name*, not a
+        # player seat — so the SELECT event above carries
+        # ``targets=[self.player]`` rather than the resolved seat. We
+        # route to ``notify_goon_chosen`` here, after the name → seat
+        # lookup, so picking "Goon" against a seated Goon fires the
+        # Goon's ability (drunkening the Courtier + flipping alignment)
+        # before the Courtier's own drunkening effect would otherwise
+        # land. The notify is a no-op for any other picked role, for
+        # picks where no seat hosts the role, or when no Goon is in
+        # play. This keeps the SELECT event shape unchanged for every
+        # downstream consumer (logs, console feed, etc.).
+        if target is not None:
+            engine.notify_goon_chosen(self, target)
+
         # RESOLUTION: emit the CourtierDrunkEffect via the registry if
         # the Courtier has ability AND the chosen role is in play. If
         # either condition fails, surface the NO ABILITY marker

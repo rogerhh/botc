@@ -117,6 +117,11 @@ class Butler(Character):
         engine.dispatch(
             Event(EventType.SELECT, source=self, targets=[target])
         )
+        # Goon notify: if the Butler picked the Goon's seat, the Goon
+        # drunkens the Butler so the vote-restriction effect below
+        # doesn't land. The ``_master`` bookkeeping still happens —
+        # tracks what was picked, not what landed.
+        engine.notify_goon_chosen(self, target)
 
         # RESOLUTION: record the Master. Restriction is enforced at
         # vote time by the storyteller / UI, not here.

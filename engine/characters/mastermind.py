@@ -73,7 +73,12 @@ class Mastermind(Character):
         self._extension_active: bool = False
 
     def reaction(self, event: Event, engine: "Engine") -> None:
-        # Demon dies (any cause) → start the extension.
+        # Demon dies (any cause) → defer the extension decision until
+        # the post-DEATH callback queue drains. This lets a synchronous
+        # Scarlet Woman promotion or a deferred Imp self-kill star-pass
+        # put a new Demon in play *before* we decide whether the
+        # extension fires. Per the user spec: Mastermind only triggers
+        # if no demons are left after promotions.
         if (
             event.type is EventType.DEATH
             and event.targets
@@ -82,16 +87,9 @@ class Mastermind(Character):
             and self.player.has_ability
             and not self._extension_active
         ):
-            self._extension_active = True
-            engine._mastermind_extension_active = True
-            engine.log_reaction(
-                "Mastermind",
-                (
-                    f"Demon ({event.targets[0].name}) died — game "
-                    f"continues 1 more day."
-                ),
-                target=event.targets[0],
-                trigger="demon_death",
+            died_name = event.targets[0].name
+            engine._post_death_callbacks.append(
+                lambda: self._maybe_activate_extension(engine, died_name)
             )
             return super().reaction(event, engine)
 
@@ -127,3 +125,57 @@ class Mastermind(Character):
                 engine._mastermind_extension_active = False
 
         return super().reaction(event, engine)
+
+    def _maybe_activate_extension(
+        self, engine: "Engine", died_name: str
+    ) -> None:
+        """Activate the extension only if no Demon remains after the
+        post-DEATH queue drains.
+
+        Runs as a post-DEATH deferred callback so any Scarlet Woman
+        promotion or Imp self-kill star-pass has settled by the time
+        we make the decision. Re-checks ``has_ability`` in case the
+        Mastermind was droisoned during the deferred window.
+        """
+        if self._extension_active:
+            return
+        if self.player is None or not self.player.has_ability:
+            return
+        has_demon = any(
+            p for p in engine.alive_players
+            if p.char_type is CharType.DEMON
+        )
+        if has_demon:
+            engine.log_reaction(
+                "Mastermind",
+                (
+                    f"Demon ({died_name}) died but a new Demon is in "
+                    f"play — extension does not fire."
+                ),
+                target=self.player,
+                trigger="demon_death",
+                effect="no_extension_demon_replaced",
+            )
+            return
+        self._extension_active = True
+        engine._mastermind_extension_active = True
+        engine.log_reaction(
+            "Mastermind",
+            (
+                f"Demon ({died_name}) died and no Demon left — "
+                f"game continues 1 more day."
+            ),
+            target=self.player,
+            trigger="demon_death",
+            effect="extension_activated",
+        )
+        # Re-evaluate the win conditions: the standard "Demon is
+        # dead → good wins" check ran before this deferred callback,
+        # so a pending good-win may already be registered. Clear it
+        # so the extension takes effect.
+        if (
+            engine._pending_winner is Alignment.GOOD
+            and engine._pending_win_reason == "The Demon is dead."
+        ):
+            engine._pending_winner = None
+            engine._pending_win_reason = None

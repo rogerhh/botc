@@ -182,6 +182,12 @@ class Sailor(Character):
         engine.dispatch(
             Event(EventType.SELECT, source=self, targets=[chosen])
         )
+        # Goon notify: if the Sailor picked the Goon's seat (not
+        # themself — choose_me self-guards anyway), the Goon
+        # drunkens the Sailor. The has_ability check at effect-emit
+        # time below picks up the new state and skips the protection
+        # / drunkening Sailor would otherwise apply.
+        engine.notify_goon_chosen(self, chosen)
 
         # ST decision: which of {Sailor, chosen} ends up drunk. If the
         # Sailor picked themself, the only valid pick is the Sailor —

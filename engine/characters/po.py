@@ -62,7 +62,10 @@ class PoDeadEffect(Effect):
 
     kind = "po_dead"
     contributes_to_state = None
-    purge_on_source_death = True
+    # Survives source death: a self-kill (Po picks self) must still
+    # leave the DEAD marker on the victim's seat. Dawn cleanup
+    # (on_phase_boundary) remains responsible for removing the marker.
+    purge_on_source_death = False
     deactivate_on_source_droisoned = False
 
     def on_phase_boundary(self, engine: "Engine", phase: str) -> None:
@@ -91,7 +94,25 @@ class Po(Character):
     # PoDeadEffect emitted from ``ability()``.
 
     def _set_charged(self, engine: "Engine", charged: bool) -> None:
-        """Sync ``_charged`` with the registry's Po3AttacksEffect."""
+        """Sync ``_charged`` with the registry's Po3AttacksEffect.
+
+        The ``Po3AttacksEffect`` renders the visible ``3 ATTACKS``
+        reminder token on the Po's chair. A Lunatic-as-Po (or
+        Drunk-as-Po, hypothetically) also tracks a charge clock
+        independently of any real Po's, but the impersonator-side
+        state is kept *silent and internal* — no chair-side reminder,
+        just the in-memory ``self._charged`` flag. The flag still
+        drives the impersonator's own pick count on the next night so
+        the demon-info card reads out the correct number of picks.
+
+        The impersonator suppression is handled by the engine-level
+        gate in :meth:`Engine.add_effect`: emissions whose source is
+        a perceived character (``is_authentic`` False) are silently
+        suppressed for the registry, and ``effects_sourced_by`` for
+        the same source returns an empty list, so the purge branch
+        below is also a no-op for impersonators. No per-character
+        check needed here.
+        """
         self._charged = charged
         existing = [
             e for e in engine.effects_sourced_by(self)
@@ -123,7 +144,11 @@ class Po(Character):
             Event(EventType.WAKEUP, source=self, targets=[self.player])
         )
 
-        eligible = [p.id for p in engine.players if p.alive]
+        # Per wiki rule, "choose a player" allows alive or dead picks.
+        # A dead pick wastes that attack (engine.kill no-ops on dead)
+        # but is legal — and useful for an evil Po that wants to hide
+        # its kill count.
+        eligible = [p.id for p in engine.players]
         decline_id = 0
 
         if self._charged:
@@ -145,6 +170,7 @@ class Po(Character):
                     "character": self.name,
                     "step": "select_targets_charged",
                     "stage": "player",
+                    "is_demon_attack": True,
                 },
             )
         else:
@@ -160,6 +186,13 @@ class Po(Character):
                     "step": "select_target_or_skip",
                     "stage": "player",
                     "decline_id": decline_id,
+                    "is_demon_attack": True,
+                    # The decline sentinel doesn't correspond to a
+                    # real player — the engine's pick recorder strips
+                    # it before writing to ``_lunatic_picks_tonight``
+                    # so a Lunatic-as-Po who shakes their head reads
+                    # out as "did not pick anyone tonight".
+                    "lunatic_filter_id": decline_id,
                 },
             )
 
@@ -202,19 +235,40 @@ class Po(Character):
             Event(EventType.SELECT, source=self, targets=chosen_players)
         )
 
-        if self.player.has_ability:
-            for tp in chosen_players:
-                engine.kill(tp.id, DeathCause.DEMON_KILL, source=self)
-                if not tp.alive:
-                    engine.add_effect(PoDeadEffect(
-                        source=self, targets=[tp.id],
-                    ))
-        else:
-            engine.log(
-                f"Po {self.player.name} is drunk/poisoned — no real kills."
-            )
+        # Goon-aware per-target loop. When charged, Po picks 3 (or
+        # fewer if not enough alive); the base helper notifies the
+        # Goon BEFORE each per-target kill, so:
+        #   * picks=[Goon, A, B]   → drunkens Po immediately,
+        #                            no kills land.
+        #   * picks=[A, Goon, B]   → A dies, then drunken on Goon,
+        #                            B is skipped.
+        #   * picks=[A, B, Goon]   → A and B die, then drunken on Goon.
+        # A drunk/poisoned Po at SELECT time is gated by the helper's
+        # pre-iteration has_ability check.
+        def _kill_one(tp: "Player") -> None:
+            engine.kill(tp.id, DeathCause.DEMON_KILL, source=self)
+            if not tp.alive:
+                engine.add_effect(PoDeadEffect(
+                    source=self, targets=[tp.id],
+                ))
 
-        # Pick happened: clear charged state.
+        if not self.can_produce_real_effect:
+            engine.log(
+                f"Po {self.player.name} (authentic={self.is_authentic}, "
+                f"has_ability={self.player.has_ability}) — no real kills."
+            )
+        # The Goon-break helper internally gates on
+        # ``can_produce_real_effect`` so a Lunatic-shadowed or
+        # drunk/poisoned Po runs through the picks (recorded above)
+        # but ``_kill_one`` never executes.
+        self.process_targets_with_goon_break(
+            engine, chosen_players, _kill_one,
+        )
+
+        # Pick happened: clear charged state. This runs even on a
+        # Lunatic-shadow seat — the Lunatic-as-Po has its own internal
+        # charge clock (independent from the real Po's), tracked
+        # silently via ``_charged`` / Po3AttacksEffect on this instance.
         self._set_charged(engine, False)
 
         engine.dispatch(

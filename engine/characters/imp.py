@@ -75,7 +75,10 @@ class ImpDeadEffect(Effect):
 
     kind = "imp_dead"
     contributes_to_state = None
-    purge_on_source_death = True
+    # Survives source death: a self-kill must still leave the DEAD
+    # marker on the Imp's seat. Dawn cleanup (on_phase_boundary)
+    # remains responsible for removing the marker.
+    purge_on_source_death = False
     deactivate_on_source_droisoned = False
 
     def on_phase_boundary(self, engine: "Engine", phase: str) -> None:
@@ -146,6 +149,13 @@ class Imp(Character):
                 "character": self.name,
                 "step": "select_target",
                 "stage": "player",
+                # Tag for the engine's prompt-response handler: when
+                # this prompt resolves on a non-authentic demon seat
+                # (i.e. the perceived Imp running on a Lunatic
+                # chair), the response is recorded to
+                # ``engine._lunatic_picks_tonight`` so the real
+                # Demon's wake info card can read it back.
+                "is_demon_attack": True,
             },
         )
         target_id = engine.send_prompt(sel)
@@ -161,11 +171,22 @@ class Imp(Character):
         engine.dispatch(
             Event(EventType.SELECT, source=self, targets=[target])
         )
+        # Goon notify: if the Imp picked the Goon's seat, the Goon
+        # drunkens the Imp synchronously here, so the has_ability
+        # check below sees the new state. No-op when the target is
+        # not the Goon, when no Goon is in play, or when the Goon's
+        # first-per-night gate is closed.
+        engine.notify_goon_chosen(self, target)
 
-        # Drunk/poisoned Imp: still selects but no real kill.
-        if not self.player.has_ability:
+        # Authenticity / drunk-poison gate: a Drunk-/Lunatic-shadowed
+        # Imp picks targets but no real kill lands. ``can_produce_real_effect``
+        # is False for any perceived-role instance running on an
+        # impersonator's chair AND for a real Imp who is drunk/poisoned.
+        if not self.can_produce_real_effect:
             engine.log(
-                f"Imp {self.player.name} (drunk/poisoned) tried to kill "
+                f"Imp {self.player.name} (no-op, "
+                f"authentic={self.is_authentic}, "
+                f"has_ability={self.player.has_ability}) tried to kill "
                 f"{target.name} — no effect."
             )
             engine.dispatch(

@@ -102,6 +102,12 @@ class Gambler(Character):
         engine.dispatch(
             Event(EventType.SELECT, source=self, targets=[target])
         )
+        # Goon notify: if the Gambler picked the Goon's seat, the
+        # Goon drunkens the Gambler. The has_ability gate below then
+        # short-circuits — a drunk Gambler doesn't actually evaluate
+        # the guess, so the self-kill on a wrong guess does not fire
+        # (matches the rulebook: drunk Gambler is immune).
+        engine.notify_goon_chosen(self, target)
 
         # RESOLUTION: kill self on a wrong guess. Drunk/poisoned
         # Gambler is immune (no real ability).

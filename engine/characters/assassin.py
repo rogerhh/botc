@@ -52,11 +52,15 @@ class AssassinDeadEffect(Effect):
 
     kind = "assassin_dead"
     contributes_to_state = None
-    purge_on_source_death = True
+    # Survives source death: a self-kill (or Assassin force-kill that
+    # bounces back) must still leave the DEAD marker on the victim's
+    # seat. Dawn cleanup (on_phase_boundary) remains responsible for
+    # removing the marker.
+    purge_on_source_death = False
     deactivate_on_source_droisoned = False
 
     def on_phase_boundary(self, engine: "Engine", phase: str) -> None:
-        if phase == "dusk":
+        if phase == "dawn":
             engine.purge_effect(self)
 
 
@@ -139,6 +143,32 @@ class Assassin(Character):
             Event(EventType.SELECT, source=self, targets=[target])
         )
 
+        # Capture the Assassin's pre-notify droison state. The
+        # Assassin's force-kill is "stronger than" the Goon's retort:
+        # per the wiki, "If chosen by the Assassin, the Goon dies but
+        # still turns evil." Practically this means the kill must
+        # land regardless of any drunkening that the Goon's retort
+        # applies during ``notify_goon_chosen`` below — so we gate
+        # the force-kill on the source's state *before* the notify
+        # rather than after. A drunk-at-activation Assassin (e.g.
+        # poisoned earlier in the night) still sees their slot spent
+        # and no kill — that's the standard BotC rule for a drunk
+        # source's ability.
+        sober_at_select = self.player.has_ability
+
+        # Goon notify: if the Assassin picked the Goon's seat, the
+        # Goon's retort fires synchronously here — drunkens the
+        # Assassin and flips the Goon's alignment to match the
+        # Assassin (evil). We deliberately notify BEFORE the kill so
+        # the alignment flip happens while the Goon is still alive
+        # (the choose_me gate requires Goon ``has_ability``). After
+        # the kill the Goon would be dead and the alignment flip
+        # would no-op — that's the wrong order. The kill below uses
+        # the captured ``sober_at_select`` instead of a fresh
+        # ``has_ability`` read so the post-notify drunkening doesn't
+        # block it.
+        engine.notify_goon_chosen(self, target)
+
         # Slot consumed regardless of drunk state.
         self._used = True
         if self.player is not None:
@@ -147,7 +177,11 @@ class Assassin(Character):
                 source=self, targets=[self.player.id],
             ))
 
-        if self.player.has_ability:
+        if sober_at_select:
+            # Force-kill bypasses every PRE_DEATH canceller via
+            # ``force=True``. It also bypasses the Goon's retort
+            # drunkening on the Assassin (we use ``sober_at_select``,
+            # not a fresh ``has_ability`` read).
             engine.kill(target.id, DeathCause.ABILITY, source=self, force=True)
             if not target.alive:
                 engine.add_effect(AssassinDeadEffect(

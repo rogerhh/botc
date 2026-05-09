@@ -39,7 +39,7 @@ import itertools
 import pickle
 import threading
 import time
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 from engine import preset as preset_module
 from engine import script as script_data
@@ -197,6 +197,25 @@ class Engine:
         # win-condition reads, etc.) can still tell *how* the player
         # died — only the visual reminder is transient.
         self._demon_killed_player_ids: List[int] = []
+
+        # Player ids the Lunatic picked tonight. Populated by the
+        # engine's prompt-response handler when a demon-attack pick
+        # resolves on a non-authentic seat (perceived demon running
+        # on a Lunatic chair). Read by the real Demon's
+        # ``before_nightly_ability`` to emit the
+        # ``THE LUNATIC PICKED <names>`` info card; cleared at every
+        # dawn alongside the demon-kill reminders.
+        #
+        # When the Lunatic is droisoned/poisoned, the
+        # ``LunaticDroisonInterlude`` step replaces this list with the
+        # ST-selected wrong players before the real Demon's wake. The
+        # ``lunatic_chosen`` reminder tokens are placed on whatever's
+        # in this list at that point, so for a droisoned Lunatic the
+        # tokens land on the wrong players (per the user's spec).
+        self._lunatic_picks_tonight: List[int] = []
+        # One-shot flag so the real Demon's first-night info card
+        # appends ``THIS PLAYER IS THE LUNATIC`` only once per game.
+        self._lunatic_revealed_to_demon: bool = False
 
         # ---- Effect registry (Layer 1 foundation) -------------------
         # Triple-indexed store of every active or inactive
@@ -774,6 +793,16 @@ class Engine:
             char.on_setup_ability(self, mode)
         except Exception as exc:  # pragma: no cover (defensive)
             self.log(f"Error in {char.name} on_setup_ability ({mode}): {exc!r}")
+        # Lunatic auto-derivation. The Lunatic's perceived demon
+        # mirrors whichever Demon is currently in play; assigning or
+        # swapping a character on any seat may change that. The
+        # retrigger is a no-op outside Phase.SETUP, and a no-op when
+        # the Lunatic isn't seated, so this is cheap and safe to call
+        # unconditionally.
+        if char.name != "Lunatic":
+            # Don't double-fire the Lunatic's own setup when it was
+            # just assigned (its on_setup_ability already ran above).
+            self._retrigger_setup_for_role("Lunatic")
 
     def apply_setup_data(self, data: dict) -> None:
         """Pre-populate setup-time picks chosen in the UI.
@@ -1731,6 +1760,14 @@ class Engine:
                     perceived = self._perceived_night_for(char)
                     fired_first_night = char._first_night_pending and char.first_night_order > 0
                     try:
+                        # See preset-path equivalent for the design.
+                        char.before_nightly_ability(self, perceived)
+                    except Exception as exc:  # pragma: no cover (defensive)
+                        self.log(
+                            f"Error in {char.name} before_nightly_ability: "
+                            f"{exc!r}"
+                        )
+                    try:
                         char.ability(self, perceived)
                     except Exception as exc:  # pragma: no cover (defensive)
                         self.log(f"Error in {char.name} ability: {exc!r}")
@@ -1830,37 +1867,63 @@ class Engine:
         false, so the ability takes its drunk/poisoned branch.
         """
         steps = self._preset.order_for_night(night_number)
-        in_play: Dict[str, Character] = {}
+        # Map each character name to a *list* of instances that should
+        # run at that step. Real seated characters AND
+        # ``acting_perceived_character`` shadows both contribute, in
+        # this order:
+        #
+        #   1. Perceived shadows (Drunk / Lunatic) come first so the
+        #      impersonator wakes before any real holder of that
+        #      role's slot — matches the wiki's
+        #      "before the Demon wakes to attack, wake the Lunatic".
+        #   2. Real seated characters come second. Among real
+        #      instances sharing the same name (post-Scarlet-Woman
+        #      dead-and-promoted pair), alive ones come before dead.
+        #
+        # Canonical cases:
+        #   * Drunk-as-Empath: shadow registers under "Empath"; the
+        #     Drunk's pretend role is by rule not in play, so the
+        #     "Empath" list has just the shadow.
+        #   * Lunatic-as-Pukka: shadow registers under "Pukka", real
+        #     Pukka is appended after — the Lunatic acts first, then
+        #     the real Demon.
+        in_play: Dict[str, List[Character]] = {}
+        # Pass 1: collect shadows.
         for p in self._players:
             if p.character is None:
                 continue
-            # Prefer alive instances over dead ones when two seated
-            # players share a character name. Canonical example: after
-            # a Scarlet Woman promotion, the (dead) original Demon and
-            # the freshly-promoted Scarlet Woman both have
-            # ``character.name`` equal to the demon class. Without this
-            # guard the dead instance can win the in_play slot, and
-            # ``would_act_tonight`` then short-circuits on the demon
-            # step because ``self.player.dead`` is True.
-            existing = in_play.get(p.character.name)
-            if (
-                existing is not None
-                and existing.player is not None
-                and not existing.player.dead
-            ):
-                # Already have an alive instance — don't overwrite with
-                # a (possibly dead) duplicate.
-                pass
-            else:
-                in_play[p.character.name] = p.character
             perceived = p.character.acting_perceived_character()
             if perceived is not None:
-                # Don't shadow a real seated holder of that role: only
-                # register the perceived role if no one is genuinely
-                # playing it. (A Drunk's perceived role is normally
-                # picked from "Townsfolk not in play" so this is a
-                # defensive no-op in the canonical case.)
-                in_play.setdefault(perceived.name, perceived)
+                in_play.setdefault(perceived.name, []).append(perceived)
+        # Pass 2: append real characters after shadows.
+        for p in self._players:
+            if p.character is None:
+                continue
+            real = p.character
+            existing_list = in_play.setdefault(real.name, [])
+            # Prefer alive instances first among reals sharing a name
+            # (the Scarlet-Woman dead+promoted pair). Find the
+            # boundary between shadow entries (already appended) and
+            # real entries by walking from the end.
+            insert_at = len(existing_list)
+            if real.player is not None and not real.player.dead:
+                # Slot before any *dead* real already in the list.
+                for i in range(len(existing_list) - 1, -1, -1):
+                    other = existing_list[i]
+                    is_shadow = (
+                        other.player is not None
+                        and other.player.character is not other
+                    )
+                    if is_shadow:
+                        # Hit the shadow boundary — insert here (just
+                        # after the last shadow).
+                        insert_at = i + 1
+                        break
+                    if other.player is not None and other.player.dead:
+                        insert_at = i  # bump the dead real one slot
+                else:
+                    insert_at = 0  # no shadows; insert at front of reals
+            existing_list.insert(insert_at, real)
 
         # Resume support: ``self._completed_step_index`` is 0 on a
         # fresh night and >0 after a Back-button restore. We iterate
@@ -1909,39 +1972,71 @@ class Engine:
                 )
                 continue
 
-            char = in_play.get(step.name)
-            if char is None:
+            chars = in_play.get(step.name) or []
+            if not chars:
                 # That character isn't in this game — skip silently.
                 # Still take a checkpoint so the Back button has a
                 # consistent "after each step" history.
                 self._completed_step_index += 1
                 continue
-            # Trigger condition gating: if the character won't actually
-            # do anything tonight (Ravenkeeper still alive, Undertaker
-            # on a no-execution day, …) we skip the storyteller-facing
-            # announcement *and* the ability call, so the storyteller
-            # doesn't see a wake-up prompt for nothing.
-            perceived = self._perceived_night_for(char)
-            if not char.would_act_tonight(self, perceived):
-                self.log(
-                    f"Skipping {char.name}: trigger condition not met "
-                    f"tonight."
+            # Walk every instance registered at this step. Multiple
+            # instances are the Lunatic-shadow case: a real Pukka and a
+            # Lunatic-as-Pukka both run at the Pukka step, with the
+            # perceived (Lunatic) shadow ordered *first* so it wakes
+            # before the real Demon.
+            for char in chars:
+                if self._phase is Phase.FINISHED:
+                    break
+                if self._pending_winner is not None:
+                    break
+                # Trigger condition gating: if the character won't
+                # actually do anything tonight (Ravenkeeper still alive,
+                # Undertaker on a no-execution day, Zombuul on a
+                # day-someone-died, …) skip the announcement *and* the
+                # ability call, so the storyteller doesn't see a
+                # wake-up prompt for nothing.
+                perceived = self._perceived_night_for(char)
+                if not char.would_act_tonight(self, perceived):
+                    self.log(
+                        f"Skipping {char.name}: trigger condition not "
+                        f"met tonight."
+                    )
+                    continue
+                self._announce_step(step, character=char)
+                fired_first_night = (
+                    char._first_night_pending and char.first_night_order > 0
                 )
-                self._completed_step_index += 1
-                continue
-            self._announce_step(step, character=char)
-            fired_first_night = char._first_night_pending and char.first_night_order > 0
-            try:
-                char.ability(self, perceived)
-            except Exception as exc:  # pragma: no cover (defensive)
-                self.log(f"Error in {char.name} ability: {exc!r}")
-            if fired_first_night:
-                char.mark_first_night_fired()
+                try:
+                    # Pre-ability hook. Default implementation on the
+                    # Character base emits the
+                    # ``THE LUNATIC PICKED ... TONIGHT`` info card on
+                    # authentic Demon seats. Override on any role
+                    # that needs additional setup before its
+                    # ``ability()`` body.
+                    char.before_nightly_ability(self, perceived)
+                except Exception as exc:  # pragma: no cover (defensive)
+                    self.log(
+                        f"Error in {char.name} before_nightly_ability: "
+                        f"{exc!r}"
+                    )
+                try:
+                    char.ability(self, perceived)
+                except Exception as exc:  # pragma: no cover (defensive)
+                    self.log(f"Error in {char.name} ability: {exc!r}")
+                if fired_first_night:
+                    char.mark_first_night_fired()
+                # Lunatic droison interlude: if the ability we just
+                # ran was the perceived Demon shadow on a droisoned
+                # Lunatic's chair, give the ST a wrong-info pre-fill
+                # prompt for what the *real* Demon should see. The
+                # method is a no-op when the gate fails (authentic
+                # seat, sober Lunatic, no picks recorded, etc.).
+                self._maybe_run_lunatic_droison_interlude(char, step)
             self._completed_step_index += 1
             # Per the project rule: after each ability, save the game
             # state. The checkpoint is what the Back button restores.
             self._save_history_checkpoint(
-                f"after {char.name} (night {night_number})"
+                f"after {step.name} (night {night_number})"
             )
 
     def _announce_step(
@@ -2098,160 +2193,385 @@ class Engine:
         ))
 
     def _run_demon_info(self, step: "preset_module.NightStep") -> None:
-        """Show the Demon their Minions and 3 not-in-play good roles to
-        bluff as.
+        """Show every Demon-like seat their Minions and 3 bluff roles.
+
+        Two seat shapes drive this step:
+
+          * **Authentic Demon seat.** The seat's ``char_type`` is
+            ``CharType.DEMON``. They see the *real* Minions and three
+            not-in-play good (Townsfolk / Outsider) roles to bluff as.
+            Engine pre-picks 3 random not-in-play roles; ST may swap
+            any before the Demon wakes.
+          * **Lunatic seat (perceived Demon).** The Lunatic's
+            ``acting_perceived_character`` is a Demon class but
+            ``is_authentic`` is False on that shadow. The Lunatic gets
+            the same demon-info shape — ``THESE ARE YOUR MINIONS`` +
+            ``THESE CHARACTERS ARE NOT IN PLAY`` tokens — but the
+            payload is *fabricated*: the Storyteller picks any N
+            players (dead or alive) as fake minions and any 3
+            Townsfolk / Outsider characters from the script (in-play
+            allowed) as fake bluffs. Wrong-info defaults are seeded
+            per CLAUDE.md so the ST can hit Next.
 
         Project rule: Demon Info always runs in this engine,
         regardless of player count — every game with at least one
-        seated Demon gets the reveal. (The canonical Trouble Brewing
-        rulebook gates this step at 7+ players; we deliberately don't,
-        so 5- and 6-player Teensyville games still get the bluff
-        list.)
-
-        Prompt flow (matches the standard 6-section panel layout used
-        by every other character ability):
-
-          1. Title / description: synthesized from the preset step.
-          2. **ST input stage 1** — a ``SelectCharacterPrompt`` with
-             ``count=3`` and ``stage="st_pre"``. The engine pre-picks
-             3 random good (Townsfolk/Outsider) characters that are
-             not in play and surfaces them as the default. The
-             Storyteller may swap any of the picks before clicking
-             Next; the picks land before the Demon physically wakes.
-          3. **Wake up Demon (player)** — synthesized by the UI from
-             ``meta.character`` / ``meta.target_player_name``.
-             Internally we also dispatch ``EventType.WAKEUP`` so other
-             abilities and any audit tooling see a real wakeup event.
-          4. **Show this to player** — an ``InformationPrompt`` with
-             ``stage="info"`` carrying the (possibly Storyteller-edited)
-             bluffs plus the Demon's Minion list.
+        seated Demon (or Lunatic-shadowed Demon) gets the reveal.
+        (The canonical Trouble Brewing rulebook gates this step at
+        7+ players; we deliberately don't, so 5- and 6-player
+        Teensyville games still get the bluff list.)
         """
+        import random as _rand
+        from engine.characters.lunatic import Lunatic as _Lunatic
+
         minions = [p for p in self._players if p.char_type is CharType.MINION]
         demons = [p for p in self._players if p.char_type is CharType.DEMON]
-        if not demons:
+        # Lunatic seats whose perceived Demon class is set. The
+        # ``perceived`` instance carries the demon name we surface to
+        # the Lunatic's phone; the seat itself is what we target.
+        lunatic_seats: List["Player"] = []
+        for p in self._players:
+            if p.character is None:
+                continue
+            if not isinstance(p.character, _Lunatic):
+                continue
+            if p.character.acting_perceived_character() is None:
+                continue
+            lunatic_seats.append(p)
+
+        if not demons and not lunatic_seats:
             return
 
-        # Pre-pick three good (Townsfolk/Outsider) characters that are
-        # NOT in play, as the default bluff set the Storyteller will
-        # confirm in ST input stage 1. The pool is the full *script*
-        # (i.e. the active preset's roster) minus everyone seated; if
-        # the script is unusually thin we fall back to whatever is
-        # left. Going through ``self.all_character_names_by_type``
-        # (rather than ``script_data.names_by_type`` directly) is what
-        # keeps the bluff list scoped to this edition — e.g. on
-        # No Greater Joy the Demon won't be told to bluff as
-        # Washerwoman or Slayer because those roles aren't on the
-        # script.
         in_play_names = {
             p.character.name for p in self._players if p.character is not None
         }
-        all_good_names = (
+        all_good_names_in_script = (
             self.all_character_names_by_type(CharType.TOWNSFOLK)
             + self.all_character_names_by_type(CharType.OUTSIDER)
         )
-        bluff_pool = [n for n in all_good_names if n not in in_play_names]
-        import random as _rand
-        eligible_bluffs = sorted(set(bluff_pool))
-        n_bluffs = min(3, len(eligible_bluffs))
-        default_bluffs: List[str] = (
-            _rand.sample(eligible_bluffs, n_bluffs) if n_bluffs else []
-        )
+        # Authentic-demon bluff pool: in-script good roles NOT in play.
+        eligible_bluffs_authentic = sorted(set(
+            n for n in all_good_names_in_script if n not in in_play_names
+        ))
+        # Lunatic bluff pool: every TF/Outsider on the script,
+        # *including* in-play roles (per the Lunatic wiki: "These can
+        # even be characters that are in play.") and per the user's
+        # confirmation "Any characters including TF, outsiders (in
+        # play or not)".
+        eligible_bluffs_lunatic = sorted(set(all_good_names_in_script))
 
         minion_names = ", ".join(p.name for p in minions) or "(none)"
-        for demon in demons:
-            # ----- ST input stage 1: confirm / change the 3 bluffs ----
-            # Even though the engine already randomized the picks, we
-            # surface them to the ST so they can swap any character
-            # they don't like (e.g. one that conflicts with the table's
-            # mood, or that a clever player would never bluff).
-            bluff_prompt = SelectCharacterPrompt(
-                text="THESE CHARACTERS ARE NOT IN PLAY",
-                eligible_characters=eligible_bluffs,
-                count=n_bluffs if n_bluffs > 0 else 0,
-                target_player_id=demon.id,
-                meta={
-                    "character": "Demon",
-                    "target_player_name": demon.name,
-                    "step": "select_bluffs",
-                    "stage": "st_pre",
-                    "step_kind": "demon_info",
-                    "step_name": step.name,
-                    "description": step.description,
-                    "default": list(default_bluffs),
-                },
-            )
-            chosen_bluffs: List[str]
-            if n_bluffs == 0:
-                # Nothing for the ST to pick — skip the prompt entirely.
-                chosen_bluffs = []
-            else:
-                resp = self.send_prompt(bluff_prompt)
-                if isinstance(resp, list):
-                    chosen_bluffs = [str(x) for x in resp if x]
-                elif isinstance(resp, str) and resp:
-                    chosen_bluffs = [resp]
-                else:
-                    chosen_bluffs = list(default_bluffs)
-                # Defensive: if the ST somehow returned fewer bluffs
-                # than expected, top up from the random default so the
-                # Demon still sees three roles when possible.
-                if len(chosen_bluffs) < n_bluffs:
-                    for d in default_bluffs:
-                        if d not in chosen_bluffs:
-                            chosen_bluffs.append(d)
-                            if len(chosen_bluffs) >= n_bluffs:
-                                break
+        n_real_minions = len(minions)
 
-            # ----- WAKEUP — picks are locked in; wake the Demon ----
-            # Engine-internal event so other abilities / audit tools
-            # see a real wakeup. The UI synthesizes the visible
-            # "Wake up Demon (player)" line from the prompt meta.
+        # Wiki ordering: the Lunatic is woken *first* and shown a
+        # fabricated demon-info burst, *then* the real Demon is woken
+        # and (per the user's spec) shown the
+        # ``THIS PLAYER IS THE LUNATIC`` reveal at the *end* of their
+        # own demon-info card. So Lunatic seats come first, then real
+        # Demons.
+
+        # ----- 1) Lunatic seats: fabricate any N players + 3 bluffs. -
+        # Each Lunatic seat is independent — multiple Lunatics on the
+        # same script (which the engine doesn't outlaw, even if the
+        # rulebook does) would each get their own ST-driven payload.
+        for lunatic in lunatic_seats:
+            # Fake-minion picker. N matches the real Minion count (the
+            # number the Lunatic "should" believe their team is). Any
+            # player is eligible, dead or alive — explicitly NOT
+            # filtered to actual Minions per the wiki and per the
+            # user's confirmation.
+            fake_minion_ids = self._lunatic_pick_fake_minions(
+                step,
+                lunatic=lunatic,
+                count=n_real_minions,
+            )
+            try:
+                fake_minions = [self.get_player(int(pid)) for pid in fake_minion_ids]
+            except (KeyError, ValueError, TypeError):
+                fake_minions = []
+            fake_minion_names = (
+                ", ".join(p.name for p in fake_minions)
+                if fake_minions else "(none)"
+            )
+
+            # Fake-bluff picker — pool is full TF/Outsider on script.
+            n_bluffs = min(3, len(eligible_bluffs_lunatic))
+            default_bluffs = (
+                _rand.sample(eligible_bluffs_lunatic, n_bluffs)
+                if n_bluffs else []
+            )
+            chosen_bluffs = self._demon_info_pick_bluffs(
+                step,
+                target_player=lunatic,
+                eligible_bluffs=eligible_bluffs_lunatic,
+                default_bluffs=default_bluffs,
+                n_bluffs=n_bluffs,
+            )
+
+            self._dispatch(
+                Event(EventType.WAKEUP, source=None, targets=[lunatic])
+            )
+
+            self._send_demon_info_to_player(
+                step,
+                target_player=lunatic,
+                minion_player_names=[p.name for p in fake_minions],
+                minion_highlight_ids=[p.id for p in fake_minions],
+                minion_body=fake_minion_names,
+                chosen_bluffs=chosen_bluffs,
+            )
+
+        # ----- 2) Authentic Demon seats: real minions + bluffs. -----
+        # The authentic Demon's reveal lands *after* the Lunatic's so
+        # the Demon learns who the Lunatic is at the natural end of
+        # their own info burst (see ``_send_demon_info_to_player``).
+        lunatic_seat = lunatic_seats[0] if lunatic_seats else None
+        for demon in demons:
+            n_bluffs = min(3, len(eligible_bluffs_authentic))
+            default_bluffs = (
+                _rand.sample(eligible_bluffs_authentic, n_bluffs)
+                if n_bluffs else []
+            )
+            chosen_bluffs = self._demon_info_pick_bluffs(
+                step,
+                target_player=demon,
+                eligible_bluffs=eligible_bluffs_authentic,
+                default_bluffs=default_bluffs,
+                n_bluffs=n_bluffs,
+            )
+
             self._dispatch(
                 Event(EventType.WAKEUP, source=None, targets=[demon])
             )
 
-            # ----- Show this to player (auto info; ST clicks Next) ----
-            text = (
-                f"Wake {demon.name} (Demon). Your Minions: {minion_names}. "
-                f"Three not-in-play good roles to bluff as: "
-                f"{', '.join(chosen_bluffs) if chosen_bluffs else '(none)'}."
+            self._send_demon_info_to_player(
+                step,
+                target_player=demon,
+                minion_player_names=[p.name for p in minions],
+                minion_highlight_ids=[p.id for p in minions],
+                minion_body=minion_names,
+                chosen_bluffs=chosen_bluffs,
+                lunatic_seat=lunatic_seat,
             )
-            # The TARGET of demon-info is the Demon's Minions plus the
-            # 3 bluff roles. Highlight those chairs/character tokens so
-            # the Demon's eye snaps to them; dampen the rest of the board.
-            self.send_prompt(InformationPrompt(
-                text=text,
-                target_player_id=demon.id,
-                shown_to_player=True,
-                highlight_player_ids=[p.id for p in minions],
-                highlight_characters=list(chosen_bluffs),
-                meta={
-                    "step_kind": "demon_info",
-                    "step_name": step.name,
-                    "description": step.description,
-                    # ``character`` and ``target_player_name`` let the
-                    # storyteller UI synthesize the standard
-                    # "Wake up <Role> (<Player>)" line above this
-                    # info — the same 6-section layout used for ordinary
-                    # ability prompts.
-                    "character": "Demon",
-                    "target_player_name": demon.name,
-                    "stage": "info",
-                    "minion_player_names": [p.name for p in minions],
-                    "bluff_characters": list(chosen_bluffs),
-                    "render": {
-                        "tokens": (
-                            ([{"label": "THESE ARE YOUR MINIONS",
-                               "body": minion_names}]
-                             if minion_names and minion_names != "(none)"
-                             else [])
-                            + ([{"label": "THESE CHARACTERS ARE NOT IN PLAY",
-                                 "body": ", ".join(chosen_bluffs)}]
-                               if chosen_bluffs else [])
-                        ),
-                    },
-                },
-            ))
+            if lunatic_seat is not None:
+                self._lunatic_revealed_to_demon = True
+
+    def _demon_info_pick_bluffs(
+        self,
+        step: "preset_module.NightStep",
+        *,
+        target_player: "Player",
+        eligible_bluffs: List[str],
+        default_bluffs: List[str],
+        n_bluffs: int,
+    ) -> List[str]:
+        """Storyteller stage-1 bluff picker. Shared by Demon and Lunatic.
+
+        Engine pre-picks ``default_bluffs`` (random sample of the
+        eligible pool); the ST may swap before clicking Next. Returns
+        the final list (length ``n_bluffs``), defensively topping up
+        from the default if the ST returns fewer than expected.
+
+        When ``target_player`` is a Lunatic seat, the meta's
+        ``character`` / ``step_name`` are relabeled "Lunatic" /
+        "Lunatic Info" so the storyteller UI's title bar and wakeup
+        marker read "Wake up Lunatic (<name>)" / "Lunatic Info"
+        instead of borrowing the authentic-Demon labels.
+        """
+        if n_bluffs <= 0:
+            return []
+        from engine.characters.lunatic import Lunatic as _Lunatic
+        is_lunatic = isinstance(target_player.character, _Lunatic)
+        prompt_character = "Lunatic" if is_lunatic else "Demon"
+        prompt_step_name = "Lunatic Info" if is_lunatic else step.name
+        bluff_prompt = SelectCharacterPrompt(
+            text="THESE CHARACTERS ARE NOT IN PLAY",
+            eligible_characters=eligible_bluffs,
+            count=n_bluffs,
+            target_player_id=target_player.id,
+            meta={
+                "character": prompt_character,
+                "target_player_name": target_player.name,
+                "step": "select_bluffs",
+                "stage": "st_pre",
+                "step_kind": "demon_info",
+                "step_name": prompt_step_name,
+                "description": step.description,
+                "default": list(default_bluffs),
+            },
+        )
+        resp = self.send_prompt(bluff_prompt)
+        if isinstance(resp, list):
+            chosen = [str(x) for x in resp if x]
+        elif isinstance(resp, str) and resp:
+            chosen = [resp]
+        else:
+            chosen = list(default_bluffs)
+        if len(chosen) < n_bluffs:
+            for d in default_bluffs:
+                if d not in chosen:
+                    chosen.append(d)
+                    if len(chosen) >= n_bluffs:
+                        break
+        return chosen
+
+    def _lunatic_pick_fake_minions(
+        self,
+        step: "preset_module.NightStep",
+        *,
+        lunatic: "Player",
+        count: int,
+    ) -> List[int]:
+        """ST picker for the Lunatic's fake minions.
+
+        Eligible: every player. Dead or alive, evil or good — the
+        wiki and the user's spec are both explicit on this. The
+        engine pre-fills a random *wrong* default (random ``count``
+        players that are NOT real Minions); the ST may swap any
+        before clicking Next.
+        """
+        import random as _rand
+        all_player_ids = [p.id for p in self._players]
+        if count <= 0 or not all_player_ids:
+            return []
+        actual_minion_ids = {
+            p.id for p in self._players if p.char_type is CharType.MINION
+        }
+        non_minion_ids = [pid for pid in all_player_ids if pid not in actual_minion_ids]
+        # Wrong-default pre-fill: random non-Minion players. Falls
+        # back to any players when there aren't enough non-Minions.
+        candidates = non_minion_ids if len(non_minion_ids) >= count else all_player_ids
+        default_ids: List[int] = (
+            _rand.sample(candidates, min(count, len(candidates)))
+            if candidates else []
+        )
+        sel = SelectPlayerPrompt(
+            text="THESE ARE YOUR MINIONS",
+            eligible_player_ids=list(all_player_ids),
+            count=count,
+            allow_self=True,
+            target_player_id=lunatic.id,
+            meta={
+                "character": "Lunatic",
+                "target_player_name": lunatic.name,
+                "step": "select_fake_minions",
+                "stage": "st_pre",
+                "step_kind": "demon_info",
+                # Title-bar / wakeup-marker label. The night-sheet step
+                # is "Demon Info" but for the Lunatic seat we relabel
+                # it "Lunatic Info" so the ST sees "Wake up Lunatic
+                # (<name>)" instead of "Wake up Lunatic" hiding under
+                # a "Demon Info" header.
+                "step_name": "Lunatic Info",
+                "description": step.description,
+                "default": list(default_ids),
+            },
+        )
+        resp = self.send_prompt(sel)
+        if isinstance(resp, int):
+            return [resp]
+        if isinstance(resp, list):
+            try:
+                return [int(x) for x in resp]
+            except (TypeError, ValueError):
+                return list(default_ids)
+        return list(default_ids)
+
+    def _send_demon_info_to_player(
+        self,
+        step: "preset_module.NightStep",
+        *,
+        target_player: "Player",
+        minion_player_names: List[str],
+        minion_highlight_ids: List[int],
+        minion_body: str,
+        chosen_bluffs: List[str],
+        lunatic_seat: Optional["Player"] = None,
+    ) -> None:
+        """Emit the ``InformationPrompt`` carrying the demon-info reveal.
+
+        Authentic Demon seats and Lunatic-shadow seats use the same
+        token shape (``THESE ARE YOUR MINIONS`` + ``THESE CHARACTERS
+        ARE NOT IN PLAY``); only the *content* differs.
+
+        The meta's ``character`` / ``step_name`` are relabeled per
+        seat so the storyteller UI clearly distinguishes a Lunatic
+        wake from a Demon wake: a Lunatic seat shows "Lunatic Info"
+        / "Wake up Lunatic (<name>)" while an authentic Demon shows
+        the canonical "Demon Info" / "Wake up Demon (<name>)".
+
+        ``lunatic_seat`` is set only for an authentic Demon's reveal
+        when a Lunatic is seated — appending a third
+        ``THIS PLAYER IS THE LUNATIC`` token at the *end* of the
+        token list (per the user's spec) so the bluffs/minions read
+        first and the LUNATIC reveal lands as the closing line.
+        """
+        # Lunatic vs authentic-Demon labeling. The ``character`` /
+        # ``step_name`` meta fields drive the storyteller UI's title bar
+        # and wake-up marker. For a Lunatic seat we relabel them so the
+        # ST sees "Wake up Lunatic (<name>)" / "Lunatic Info" rather
+        # than borrowing the authentic-Demon strings; the token shape
+        # itself is unchanged.
+        from engine.characters.lunatic import Lunatic as _Lunatic
+        is_lunatic = isinstance(target_player.character, _Lunatic)
+        prompt_character = "Lunatic" if is_lunatic else "Demon"
+        prompt_step_name = "Lunatic Info" if is_lunatic else step.name
+
+        wake_who = "the Lunatic" if is_lunatic else target_player.name
+        text_parts = [
+            f"Wake {wake_who} ({target_player.name})." if is_lunatic
+            else f"Wake {target_player.name}.",
+            f"Your Minions: {minion_body}.",
+            (
+                "Three not-in-play good roles to bluff as: "
+                f"{', '.join(chosen_bluffs) if chosen_bluffs else '(none)'}."
+            ),
+        ]
+        if lunatic_seat is not None:
+            text_parts.append(f"This player is the Lunatic: {lunatic_seat.name}.")
+        text = " ".join(text_parts)
+
+        highlight_ids = list(minion_highlight_ids)
+        if lunatic_seat is not None:
+            highlight_ids.append(lunatic_seat.id)
+
+        tokens = (
+            ([{"label": "THESE ARE YOUR MINIONS",
+               "body": minion_body}]
+             if minion_body and minion_body != "(none)"
+             else [])
+            + ([{"label": "THESE CHARACTERS ARE NOT IN PLAY",
+                 "body": ", ".join(chosen_bluffs)}]
+               if chosen_bluffs else [])
+        )
+        if lunatic_seat is not None:
+            tokens.append({
+                "label": "THIS PLAYER IS THE LUNATIC",
+                "body": lunatic_seat.name,
+            })
+
+        meta = {
+            "step_kind": "demon_info",
+            "step_name": prompt_step_name,
+            "description": step.description,
+            "character": prompt_character,
+            "target_player_name": target_player.name,
+            "stage": "info",
+            "minion_player_names": list(minion_player_names),
+            "bluff_characters": list(chosen_bluffs),
+            "render": {"tokens": tokens},
+        }
+        if lunatic_seat is not None:
+            meta["lunatic_player_id"] = lunatic_seat.id
+            meta["lunatic_player_name"] = lunatic_seat.name
+
+        self.send_prompt(InformationPrompt(
+            text=text,
+            target_player_id=target_player.id,
+            shown_to_player=True,
+            highlight_player_ids=highlight_ids,
+            highlight_characters=list(chosen_bluffs),
+            meta=meta,
+        ))
 
     def _run_scarlet_woman_step(self, step: "preset_module.NightStep") -> None:
         """Walk a freshly-promoted Scarlet Woman through the demon reveal.
@@ -2334,6 +2654,10 @@ class Engine:
         self._pending_night_deaths.clear()
         # End-of-night cleanup — see ``advance_to_day``.
         self._demon_killed_player_ids.clear()
+        # Lunatic per-night state: picks roll over only within a single
+        # night (Lunatic picks → real Demon's info card on the same
+        # night). Cleared every dawn so the next night starts fresh.
+        self._lunatic_picks_tonight = []
         self._phase = Phase.DAY
         self._day_number += 1
         self._executed_today = False
@@ -2473,6 +2797,8 @@ class Engine:
         # Demon's nightly kill is dropped at dawn. Per project rule,
         # this marker exists only for the night the kill landed.
         self._demon_killed_player_ids.clear()
+        # Lunatic per-night picks: same dawn-clear rhythm.
+        self._lunatic_picks_tonight = []
 
         self._phase = Phase.DAY
         self._day_number += 1
@@ -2520,6 +2846,19 @@ class Engine:
         # actions (see :meth:`_run_night`) and the next dawn will
         # finalize the win.
         self._dispatch(Event(EventType.DAY_END))
+        # Win-condition check runs BEFORE dusk-expiring effects clear,
+        # so a character whose source is droisoned during the day (e.g.
+        # poisoned Mayor) does not satisfy ``has_ability`` at the win
+        # check. Without this ordering, dusk-purging effects (Poisoner's
+        # poison, Sailor's drunk, Innkeeper's drunk, DA's protection)
+        # would silently expire one tick before the dusk win check
+        # reads ``has_ability``, letting a poisoned-all-day Mayor still
+        # claim the 3-alive-no-execution win.
+        self._check_win_conditions(at_dusk=True)
+        # Defensive: a triggered dusk win could end the game; skip the
+        # cleanup pass since the engine is already in FINISHED state.
+        if self._phase is Phase.FINISHED:
+            return
         # Persistent-effect recheck for dusk: every character whose
         # ability has placed a duration-bound state on the table gets
         # a chance to clean it up before night begins. Canonical case:
@@ -2527,7 +2866,6 @@ class Engine:
         # here, even when the Poisoner is dead and won't act again to
         # clear it themselves.
         self._recheck_persistent_effects("dusk")
-        self._check_win_conditions(at_dusk=True)
         # Defensive: storyteller-driven _end_game could already have
         # marked the game finished. Don't try to advance past it.
         if self._phase is Phase.FINISHED:
@@ -2951,6 +3289,18 @@ class Engine:
             Event(EventType.DEATH, targets=[player],
                   data={"cause": DeathCause.EXECUTION})
         )
+        # Drain deferred post-DEATH callbacks (Imp self-kill star-pass,
+        # Mastermind extension activation) before running the win
+        # check, so any new-Demon promotion has settled. Mirrors the
+        # same drain in ``Engine.kill``.
+        if self._post_death_callbacks:
+            callbacks = list(self._post_death_callbacks)
+            self._post_death_callbacks.clear()
+            for cb in callbacks:
+                try:
+                    cb()
+                except Exception as exc:  # pragma: no cover (defensive)
+                    self.log(f"Post-DEATH callback crashed: {exc!r}")
         char_name = player.character.name if player.character else None
         self._console_log(
             "execution",
@@ -3261,13 +3611,54 @@ class Engine:
         per-target and per-kind indexes, dispatches an
         ``EFFECT_ADDED`` event, then runs ``resolve_droison_state`` to
         re-decide active/inactive for every effect in light of the new
-        addition. Returns the assigned id.
+        addition. Returns the assigned id, or ``-1`` if the effect was
+        suppressed by the impersonator gate (see below).
 
         The caller's contract (per the design doc): only call this when
         the source's ``has_ability`` is True at the moment of creation.
         Effects whose source is droisoned at application time should
         simply not be added — see e.g. ``CourtierDrunkEffect`` callers.
+
+        Impersonator gate
+        -----------------
+        An effect whose source is a *perceived* character — i.e. an
+        instance returned by :meth:`Character.acting_perceived_character`
+        and run on the impersonator's seat (the Drunk's perceived
+        Townsfolk, the Lunatic's perceived Demon) — is silently
+        suppressed regardless of target. The Drunk's seat carries only
+        its own self-source ``DrunkSelfDrunkEffect``; every effect the
+        perceived role would otherwise emit (the perceived role's
+        ``*_no_ability`` marker on the Drunk's own seat, the perceived
+        Washerwoman's SEEN/WRONG tokens on other seats, the perceived
+        Courtier's drunkening on a target, the perceived Poisoner's
+        poison, …) never lands. Trigger bookkeeping (``_used``,
+        ``_triggered``) lives on the perceived instance and is set by
+        the caller before this method runs, so the spent-once invariant
+        is preserved without help from the registry.
+
+        Authenticity is detected via ``Character.is_authentic`` (False
+        precisely when ``source.player.character is not source`` — i.e.
+        the seated player's actual character is something else and this
+        ``source`` is a shadow). Authentic-but-droisoned roles (a real
+        Virgin who is poisoned tonight, a real Slayer poisoned at the
+        moment of their shot, …) keep their existing behaviour: they
+        are *not* impersonators, ``is_authentic`` is True, and the
+        gate does not fire.
         """
+        src = effect.source
+        src_player = getattr(src, "player", None) if src is not None else None
+        if (
+            src_player is not None
+            and src_player.character is not None
+            and src_player.character is not src
+        ):
+            self.log(
+                f"Suppressed {effect.kind} from impersonator "
+                f"{type(src).__name__} on seat {src_player.name} "
+                f"(actual seat character is "
+                f"{type(src_player.character).__name__})."
+            )
+            return -1
         effect.id = next(self._next_effect_id)
         effect.is_active = True
         self._effects_by_id[effect.id] = effect
@@ -3349,6 +3740,105 @@ class Engine:
         ]
         out.sort(key=lambda e: e.id)
         return out
+
+    # ------------------------------------------------------------------
+    # Goon notification.
+    #
+    # Per the Goon's text — "Each night, the 1st player to choose you
+    # with their ability is drunk until dusk. You become their
+    # alignment." — the engine needs a way for a character's ability
+    # code to say "source has just actively chosen this target seat
+    # with their night ability." If that seat is the Goon's, the
+    # Goon's gate-and-apply logic runs (see ``Goon.choose_me``).
+    #
+    # The helpers below are the canonical entry point. Single-target
+    # abilities call ``notify_goon_chosen(self, target)`` once per
+    # selection; multi-target action abilities loop through targets
+    # via ``Character.process_targets_with_goon_break`` (which calls
+    # this once per target); multi-target info abilities call
+    # ``notify_goon_chosen_for_any(self, targets)``. Storyteller-driven
+    # targeting (Grandmother's grandchild, Sage's two-of-list, every
+    # WW/Lib/Inv setup pick) MUST NOT call these — per the wiki, the
+    # ST choosing the Goon doesn't fire the Goon's rule.
+    #
+    # Lookup is by class name (``Goon``); no preset / engine config
+    # references the Goon by name. When the active preset has no Goon,
+    # both helpers are silent no-ops, so adding ``notify_goon_chosen``
+    # to a character's ability code costs nothing in scripts that
+    # don't include the Goon.
+    # ------------------------------------------------------------------
+
+    def notify_goon_chosen(
+        self, source: "Character", target: "Player"
+    ) -> bool:
+        """``source`` has actively chosen ``target`` with a night ability.
+
+        Routes to :meth:`engine.characters.goon.Goon.choose_me` iff
+        ``target``'s seat hosts a Goon. Returns ``True`` if the Goon's
+        gate fired this call (drunkening + alignment flip applied),
+        ``False`` otherwise — including the cases where the target
+        isn't the Goon, no Goon is in play, the Goon is
+        drunk/poisoned/dead, or the first-per-night gate has already
+        closed for tonight.
+
+        The return value is informational; callers don't need to
+        consult it. The notify is fire-and-forget by design.
+
+        This MUST NOT be called for storyteller-driven targeting (the
+        Grandmother's grandchild, the Sage's two-of-list). Per the
+        wiki: "The Storyteller choosing the Goon due to an ability,
+        such as the Grandmother's, doesn't count."
+        """
+        if source is None or target is None:
+            return False
+        target_char = target.character
+        if target_char is None:
+            return False
+        # Class-name match — no isinstance import to keep this layer
+        # free of character-specific dependencies. Also matches whether
+        # the seat is currently impersonated (the Goon class' .name is
+        # set on the class itself).
+        if target_char.__class__.__name__ != "Goon":
+            return False
+        # Source's seat is the choosing player; choose_me handles the
+        # self-pick guard.
+        source_player = getattr(source, "player", None)
+        if source_player is None:
+            return False
+        try:
+            return bool(target_char.choose_me(source, source_player, self))
+        except AttributeError:
+            # Defensive: a class named "Goon" without choose_me would
+            # be a developer bug, not a runtime condition.
+            return False
+
+    def notify_goon_chosen_for_any(
+        self,
+        source: "Character",
+        targets: Iterable["Player"],
+    ) -> bool:
+        """Convenience wrapper for multi-target *info* abilities.
+
+        Fires :meth:`notify_goon_chosen` for the first Goon-seated
+        target in ``targets`` (in iteration order). Subsequent Goon
+        seats — if any — would be no-ops anyway because the
+        first-per-night gate closes after the first call. Returns
+        whatever the underlying notify returned, or ``False`` if none
+        of the targets is a Goon.
+
+        Used by Chambermaid / Fortune Teller (and any future info
+        ability that picks two-or-more players for a single info
+        computation): drunkening, if it fires, lands before the info
+        is computed so the source's drunk re-read picks up the new
+        state.
+        """
+        for t in targets or ():
+            if t is None:
+                continue
+            ch = t.character
+            if ch is not None and ch.__class__.__name__ == "Goon":
+                return self.notify_goon_chosen(source, t)
+        return False
 
     def effects_by_kind(
         self, kind: str, active_only: bool = True
@@ -3815,6 +4305,7 @@ class Engine:
                 f"(single eligible option): {auto!r}."
             )
             self._record_prompt_response(prompt, auto)
+            self._maybe_record_lunatic_pick(prompt, auto)
             return auto
         with self._lock:
             self._pending_prompt = prompt
@@ -3836,7 +4327,190 @@ class Engine:
             self._prompt_response = None
             self._pending_prompt = None
         self._record_prompt_response(prompt, response)
+        self._maybe_record_lunatic_pick(prompt, response)
         return response
+
+    def _maybe_run_lunatic_droison_interlude(
+        self,
+        char: Character,
+        step: "preset_module.NightStep",
+    ) -> None:
+        """ST wrong-info pre-fill for a droisoned Lunatic's picks.
+
+        Fires immediately after a *perceived demon* shadow's ability
+        returns on a Lunatic chair — the chair's actual character is
+        a Lunatic, but ``char`` is the perceived demon (e.g. Pukka)
+        because the engine routes the Lunatic's wake through
+        ``acting_perceived_character``.
+
+        Gate: the seated Lunatic must be droisoned/poisoned
+        (``has_ability == False``) and the engine must have just
+        recorded one or more picks via ``_maybe_record_lunatic_pick``.
+        Sober Lunatics fall through; an authentic real-Demon ability
+        also falls through because ``char.player.character is char``.
+
+        On fire: pre-fill a random *wrong* alternate set of N players
+        (drawn from alive players excluding the actual picks) per
+        CLAUDE.md's range-of-options wrong-default rule, send the ST
+        a ``SelectPlayerPrompt``, and overwrite
+        ``self._lunatic_picks_tonight`` with whatever the ST commits.
+        Tokens later placed for the Lunatic's pick will land on the
+        ST-selected wrong players (per the user's spec) — matching
+        the demon-info card the real Demon sees.
+        """
+        from engine.characters.lunatic import Lunatic as _Lunatic
+        if char.player is None:
+            return
+        seat_char = char.player.character
+        if seat_char is None or not isinstance(seat_char, _Lunatic):
+            return
+        # Only the perceived shadow's ability triggers the interlude;
+        # the Lunatic itself has no ability so this branch is mostly
+        # defensive against future hook changes.
+        if char is seat_char:
+            return
+        # Gate: only droisoned / poisoned Lunatics get the wrong-info
+        # interlude. A sober Lunatic's picks flow straight through.
+        if char.player.has_ability:
+            return
+        # No picks recorded → nothing to override (Zombuul didn't
+        # wake, Po was charging and skipped, etc.). The demon-info
+        # card will read out ``DID NOT PICK ANYONE`` regardless.
+        if not self._lunatic_picks_tonight:
+            return
+
+        import random as _rand
+        actual_picks = list(self._lunatic_picks_tonight)
+        n = len(actual_picks)
+        # Wrong-default eligible pool: alive players excluding the
+        # Lunatic's actual picks. Falls back to alive-without-Lunatic
+        # if there aren't enough non-pick alives.
+        alive_ids = [
+            p.id for p in self._players
+            if p.alive and p.id != char.player.id
+        ]
+        non_actual = [pid for pid in alive_ids if pid not in actual_picks]
+        candidates = non_actual if len(non_actual) >= n else alive_ids
+        default_wrong: List[int] = (
+            _rand.sample(candidates, min(n, len(candidates)))
+            if candidates else []
+        )
+        sel = SelectPlayerPrompt(
+            text="THE LUNATIC CHOSE (wrong info for the Demon)",
+            eligible_player_ids=list(alive_ids),
+            count=n,
+            allow_self=False,
+            target_player_id=char.player.id,
+            meta={
+                "character": "Lunatic",
+                "target_player_name": char.player.name,
+                "step": "lunatic_droison_override",
+                "stage": "st_post",
+                "step_kind": "lunatic_droison",
+                "step_name": step.name,
+                "description": (
+                    "The Lunatic is droisoned/poisoned. Pick the "
+                    "players the Demon will be told the Lunatic "
+                    "chose (engine pre-filled a wrong default; "
+                    "edit if desired, then click Next)."
+                ),
+                "default": list(default_wrong),
+            },
+        )
+        resp = self.send_prompt(sel)
+        overridden: List[int] = []
+        if isinstance(resp, int):
+            overridden = [resp]
+        elif isinstance(resp, list):
+            for x in resp:
+                try:
+                    overridden.append(int(x))
+                except (TypeError, ValueError):
+                    continue
+        else:
+            overridden = list(default_wrong)
+        # Drop ids that don't resolve (defensive).
+        cleaned: List[int] = []
+        for pid in overridden:
+            try:
+                self.get_player(pid)
+            except KeyError:
+                continue
+            cleaned.append(pid)
+        self._lunatic_picks_tonight = cleaned
+        self.log(
+            f"Lunatic {char.player.name} (droisoned) — demon-view "
+            f"override: {[self._safe_player_name(p) for p in cleaned]}."
+        )
+
+    def _maybe_record_lunatic_pick(self, prompt: Prompt, response: Any) -> None:
+        """Record a Lunatic-shadow demon attack pick when applicable.
+
+        Activated by tagging a demon's attack-pick prompt with
+        ``meta["is_demon_attack"] = True``. When that prompt resolves
+        on a *non-authentic* seat — i.e. the perceived demon is
+        running on a Lunatic chair — the storyteller's response is
+        captured as the Lunatic's picks for the night and read back
+        by the real Demon's ``before_nightly_ability`` info card.
+
+        The recorder is gated on the seated player's character being
+        a :class:`Lunatic`, so the same tag is harmless on a real
+        Demon's prompt (the gate fails, no record).
+
+        Decline sentinels (Po's "no pick" decline_id) are stripped via
+        ``meta["lunatic_filter_id"]`` so a Lunatic-as-Po who shakes
+        their head reads back as ``THE LUNATIC DID NOT PICK ANYONE
+        TONIGHT`` rather than recording the sentinel as a real pick.
+        """
+        meta = prompt.meta if isinstance(prompt.meta, dict) else {}
+        if not meta.get("is_demon_attack"):
+            return
+        target_pid = prompt.target_player_id
+        if target_pid is None:
+            return
+        try:
+            target = self.get_player(int(target_pid))
+        except (KeyError, ValueError, TypeError):
+            return
+        if target.character is None:
+            return
+        # Only Lunatic seats record. The same tag on a real Demon's
+        # prompt no-ops here.
+        from engine.characters.lunatic import Lunatic as _Lunatic
+        if not isinstance(target.character, _Lunatic):
+            return
+        # Normalize the response into a list of player ids.
+        picks: List[int] = []
+        if isinstance(response, int):
+            picks = [response]
+        elif isinstance(response, list):
+            for x in response:
+                try:
+                    picks.append(int(x))
+                except (TypeError, ValueError):
+                    continue
+        # Strip any decline / sentinel id (Po's "no pick" filter).
+        filter_id = meta.get("lunatic_filter_id")
+        if filter_id is not None:
+            try:
+                fid = int(filter_id)
+            except (TypeError, ValueError):
+                fid = None
+            if fid is not None:
+                picks = [pid for pid in picks if pid != fid]
+        # Drop ids that don't resolve to seated players (defensive).
+        valid_picks: List[int] = []
+        for pid in picks:
+            try:
+                self.get_player(pid)
+            except KeyError:
+                continue
+            valid_picks.append(pid)
+        self._lunatic_picks_tonight = valid_picks
+        self.log(
+            f"Lunatic {target.name} picked: "
+            f"{[self._safe_player_name(p) for p in valid_picks] or '(none)'}."
+        )
 
     def _merge_step_meta_into(self, prompt: Prompt) -> None:
         """Fold the current preset-step context into ``prompt.meta``.
@@ -3895,6 +4569,83 @@ class Engine:
                     if label:
                         prompt.meta["drunk_poison_state"] = label
                     break
+
+        # Lunatic-shadow relabel. Demon abilities (Imp/Pukka/...) run
+        # verbatim on the Lunatic seat via
+        # ``acting_perceived_character``, which means the prompt they
+        # emit is tagged with the *demon* class (e.g. ``character:
+        # "Pukka"`` / ``step_name: "Pukka"``). On the storyteller's
+        # screen that title would read "Wake up Pukka (<lunatic
+        # name>)" — wrong; the seat the ST is meant to wake is the
+        # Lunatic. Rewrite the labels here so:
+        #
+        #   * the wakeup marker (driven by ``meta.character``) reads
+        #     "Wake up Lunatic (<name>)"; and
+        #   * the title bar (driven by ``meta.step_name``) reads
+        #     "Lunatic (Pukka)" so the ST still sees which demon
+        #     class the Lunatic is shadowing tonight; and
+        #   * the rulebook description's "Wake the Demon" line is
+        #     rewritten to "Wake the Lunatic" so the panel's
+        #     description matches.
+        #
+        # Authentic-Demon prompts and the Lunatic's own demon-info
+        # st_pre stages (already labeled ``"Lunatic"``) are left
+        # alone.
+        self._relabel_for_lunatic_shadow(prompt)
+
+    def _relabel_for_lunatic_shadow(self, prompt: Prompt) -> None:
+        """Rewrite a perceived-Demon prompt for a Lunatic seat.
+
+        See the call site in :meth:`_merge_step_meta_into` for the
+        rationale. No-op when the prompt's target seat isn't a
+        Lunatic, or when the prompt is already Lunatic-labeled.
+        """
+        from engine.characters.lunatic import Lunatic as _Lunatic
+        pid = prompt.target_player_id
+        if pid is None:
+            return
+        try:
+            target = self.get_player(pid)
+        except KeyError:
+            return
+        if not isinstance(target.character, _Lunatic):
+            return
+        if prompt.meta is None:
+            prompt.meta = {}
+        meta = prompt.meta
+        char_label = meta.get("character")
+        if not char_label or char_label == "Lunatic":
+            return
+        # Demon class the Lunatic is shadowing — used in the
+        # parenthetical title. Falls back to whatever was already on
+        # ``meta.character`` if that's somehow a non-demon.
+        demon_class = char_label
+        # Wakeup marker label. The UI renders
+        # "Wake up <character> (<wakeupName>)" off this field.
+        meta["character"] = "Lunatic"
+        # Title bar. Prefer to wrap the existing step_name (e.g.
+        # "Pukka") so abilities that customise the title still keep
+        # their wording inside the parentheses; fall back to the
+        # demon class when there's no step_name.
+        existing_step_name = meta.get("step_name")
+        if existing_step_name and existing_step_name != "Lunatic":
+            meta["step_name"] = f"Lunatic ({existing_step_name})"
+        else:
+            meta["step_name"] = f"Lunatic ({demon_class})"
+        # Rewrite "Wake the Demon" → "Wake the Lunatic" in the
+        # rulebook description so the panel's body line matches the
+        # relabeled title. Case-insensitive on the verb so "wake
+        # the Demon" / "Wake the demon" variants are caught too.
+        desc = meta.get("description")
+        if isinstance(desc, str) and desc:
+            for needle, replacement in (
+                ("Wake the Demon", "Wake the Lunatic"),
+                ("wake the Demon", "wake the Lunatic"),
+                ("Wake the demon", "Wake the Lunatic"),
+                ("wake the demon", "wake the Lunatic"),
+            ):
+                desc = desc.replace(needle, replacement)
+            meta["description"] = desc
 
     def _auto_resolve(self, prompt: Prompt) -> Any:
         """Return the storyteller's only possible answer, or ``_NO_AUTO_RESOLVE``.
@@ -4399,8 +5150,8 @@ class Engine:
             if not spec.get("triggers_seat_swap") and spec.get("getter")
         )
 
-    def _per_seat_tokens(self) -> Dict[str, List[int]]:
-        """Per-seat (player_id) reminder-token presence.
+    def _per_seat_tokens(self) -> Dict[str, Dict[int, bool]]:
+        """Per-seat (player_id) reminder-token presence with active flag.
 
         Generic collector: every seated character (and every
         impersonated perceived character) contributes via
@@ -4408,11 +5159,26 @@ class Engine:
         character-name knowledge here — adding a new role with a new
         token kind requires no engine edit.
 
-        Returns a dict ``{token_kind: [player_id, ...]}``. The merge
-        across contributors is a deduped concatenation so multiple
-        seats can hold the same kind of token.
+        Returns a nested dict ``{token_kind: {player_id: any_active}}``.
+        ``any_active`` is True iff at least one contributor for that
+        ``(kind, player_id)`` pair is currently active. Contributions
+        from :meth:`Character.compute_reminder_tokens` are treated as
+        active (those are not effect-tracked). Contributions from the
+        effect registry are active iff the underlying ``Effect`` has
+        ``is_active=True`` — i.e. the source is not droisoned.
+
+        The ``any_active`` flag lets the UI dim tokens whose backing
+        ability is currently suppressed by drunkenness/poisoning while
+        still rendering them (per Q-new-9 of the design doc, both
+        active and inactive effects continue to render).
         """
-        merged: Dict[str, List[int]] = {}
+        merged: Dict[str, Dict[int, bool]] = {}
+
+        def _record(kind: str, pid: int, active: bool) -> None:
+            bucket = merged.setdefault(kind, {})
+            # OR-merge: a token is shown active iff *any* contributor
+            # for the same (kind, pid) is active.
+            bucket[pid] = bucket.get(pid, False) or active
 
         def _absorb(contributor: "Character") -> None:
             try:
@@ -4426,10 +5192,11 @@ class Engine:
             for kind, ids in contrib.items():
                 if not ids:
                     continue
-                bucket = merged.setdefault(kind, [])
                 for pid in ids:
-                    if pid not in bucket:
-                        bucket.append(pid)
+                    # ``compute_reminder_tokens`` contributions are not
+                    # effect-tracked and represent past-event markers
+                    # (e.g. ``zombuul_died_today``); always active.
+                    _record(kind, pid, True)
 
         for p in self.players:
             char = getattr(p, "character", None)
@@ -4443,9 +5210,12 @@ class Engine:
         # Layer 2 hook: also merge tokens contributed by the engine's
         # effect registry. Each effect's ``token_kind_for_target`` is
         # consulted per target. Per Q-new-9 of the design doc, both
-        # active and inactive effects render their tokens (no separate
-        # visual for now). Migrated characters have stopped writing
-        # ``compute_reminder_tokens``; their tokens flow through here.
+        # active and inactive effects render their tokens — but the
+        # per-(kind, pid) active flag is propagated so the UI can dim
+        # tokens whose only contributor is currently inactive (i.e.
+        # the source character is drunk/poisoned). Migrated characters
+        # have stopped writing ``compute_reminder_tokens``; their
+        # tokens flow through here.
         for eff in self._effects_by_id.values():
             for tgt_id in eff.targets:
                 try:
@@ -4457,9 +5227,7 @@ class Engine:
                     continue
                 if not kind:
                     continue
-                bucket = merged.setdefault(kind, [])
-                if tgt_id not in bucket:
-                    bucket.append(tgt_id)
+                _record(kind, tgt_id, bool(eff.is_active))
 
         return merged
 
@@ -4471,11 +5239,18 @@ class Engine:
           - ``display_character``: the role the seat *appears* to be
             (the Drunk's pretend Townsfolk if set; otherwise the real
             character).
-          - ``tokens``: ``[{"kind": str}, ...]`` — every reminder token
-            currently sitting on this chair. Token visibility is purely
-            a function of state; the engine clears the underlying slot
-            when the relevant ability resolves and the entry simply
-            stops appearing here.
+          - ``tokens``: ``[{"kind": str, "active": bool}, ...]`` — every
+            reminder token currently sitting on this chair. Token
+            visibility is purely a function of state; the engine clears
+            the underlying slot when the relevant ability resolves and
+            the entry simply stops appearing here. ``active`` is False
+            when the token's only contributor is an inactive effect
+            (i.e. the source character is drunk/poisoned by another
+            active effect); the UI dims those so the storyteller can
+            tell at a glance that the underlying ability is suppressed.
+            Setup tokens, the IS-THE-DRUNK marker, and contributions
+            from :meth:`Character.compute_reminder_tokens` are always
+            ``active=True``.
           - ``eligible_token_kinds``: list of setup-token kinds whose
             drag would land here. Sourced from the chair's character
             class' :meth:`Character.accepts_tokens`, gated on the
@@ -4496,17 +5271,32 @@ class Engine:
         }
         drunk_fake_role = self.pool.drunk_fake()
         pool_names = set(self.pool.list())
+        # Resolve the Lunatic's auto-derived perceived demon once per
+        # chair_views call. Looked up via _setup_picks_by_role so the
+        # value reflects whatever Demon is currently in play at this
+        # moment (mid-setup demon swaps included).
+        _lunatic_picks = self._setup_picks_by_role().get("Lunatic") or {}
+        _lunatic_perceived_demon: Optional[str] = _lunatic_picks.get("fake")
 
         out: List[Dict[str, Any]] = []
         for c in raw:
             char = (c.get("character") or "").strip()
             pid = c.get("player_id")
+            # ``kinds`` preserves insertion order while ``active_by_kind``
+            # tracks the per-token active flag (False -> render dimmed).
+            # Setup tokens, the IS-THE-DRUNK marker, and any
+            # ``compute_reminder_tokens`` contribution default to active
+            # (True). Tokens sourced from the effect registry inherit
+            # the underlying effect's ``is_active`` state via the
+            # ``_per_seat_tokens`` collector.
             kinds: List[str] = []
+            active_by_kind: Dict[str, bool] = {}
 
             # Setup tokens key off chair.character matching the slot.
             for kind, role in setup_roles.items():
                 if role and char == role:
                     kinds.append(kind)
+                    active_by_kind[kind] = True
 
             # IS-THE-DRUNK marker. Special-cased because the Drunk's
             # setup_pick has ``triggers_seat_swap=True`` (so it's
@@ -4519,19 +5309,61 @@ class Engine:
             # Drunk, both during setup and in-game.
             if char == "Drunk":
                 kinds.append("drunk")
+                active_by_kind["drunk"] = True
 
             # Runtime per-seat tokens key off chair.player_id. The
-            # ``seat`` dict is now ``{kind: [player_id, ...]}`` for
-            # every kind across every contributor.
+            # ``seat`` dict is ``{kind: {player_id: any_active}}`` —
+            # the per-seat collector folds in both legacy
+            # ``compute_reminder_tokens`` contributions and effect-
+            # registry tokens, with the active flag propagated so the
+            # UI can dim tokens whose only contributor is currently
+            # suppressed by drunkenness/poisoning.
             if pid is not None:
                 for kind, holders in seat.items():
                     if pid in holders:
-                        if kind not in kinds:
+                        seat_active = bool(holders[pid])
+                        if kind not in active_by_kind:
                             kinds.append(kind)
+                            active_by_kind[kind] = seat_active
+                        else:
+                            # Same kind already on this chair (e.g. a
+                            # setup token plus a runtime contribution
+                            # of the same kind). OR-merge so any
+                            # active contributor lights it up.
+                            active_by_kind[kind] = (
+                                active_by_kind[kind] or seat_active
+                            )
 
             display = char
             if char == "Drunk" and drunk_fake_role:
                 display = drunk_fake_role
+            # Lunatic chair display: keep the chair labeled ``Lunatic``
+            # so the storyteller's circle reflects the truth. The
+            # perceived demon is surfaced separately via
+            # ``perceived_character`` below — used by the edit-character
+            # panel to render ``Lunatic (Pukka)`` while the chair
+            # itself stays unambiguous.
+
+            # Perceived character: the role the seat *thinks* it is.
+            # Empty for ordinary roles. Populated for impersonators —
+            # the Drunk's fake Townsfolk and the Lunatic's perceived
+            # Demon. Sourced from ``player.perceived_character_name``
+            # for seated chairs (post-Start Game) and from the in-pool
+            # slot for setup-phase chairs.
+            perceived_character: Optional[str] = None
+            if pid is not None:
+                try:
+                    _p = self.get_player(pid)
+                except KeyError:
+                    _p = None
+                if _p is not None and _p.perceived_character_name:
+                    if _p.perceived_character_name != char:
+                        perceived_character = _p.perceived_character_name
+            if perceived_character is None:
+                if char == "Drunk" and drunk_fake_role:
+                    perceived_character = drunk_fake_role
+                elif char == "Lunatic" and _lunatic_perceived_demon:
+                    perceived_character = _lunatic_perceived_demon
 
             # Drag eligibility — only meaningful when the chair holds an
             # in-pool role. The character class declares which token
@@ -4542,10 +5374,68 @@ class Engine:
                 if klass is not None:
                     eligible = sorted(klass.accepts_tokens())
 
+            # Character type of the seated role, surfaced so the UI can
+            # render category-aware affordances without a separate
+            # preset-roster lookup. The Drunk is rendered as a
+            # Townsfolk (its ``display_character``); however the
+            # chair's *real* character is the Drunk (Outsider), so
+            # the ``char_type`` here always reflects the truth.
+            # ``None`` for empty chairs.
+            char_type_value: Optional[str] = None
+            if char:
+                spec = script_data.SCRIPT_BY_NAME.get(char)
+                if spec is not None:
+                    char_type_value = spec.char_type.value
+
+            # Live alignment of the seated player. The UI uses this
+            # (NOT the static ``char_type``) to decide the chair's
+            # good-vs-evil layout, because alignment is mutable at
+            # runtime — the Goon's ability flips its own alignment
+            # mid-game, and any future character that rewrites
+            # ``Player.alignment`` likewise needs the chair flip to
+            # follow without an engine-side allowlist. Lookup order:
+            #   1. Player.alignment when the chair is bound to an
+            #      engine player (post-Start Game).
+            #   2. The character's ``CharType.default_alignment``
+            #      during setup, before chairs are synced to players.
+            #   3. None for an empty chair.
+            alignment_value: Optional[str] = None
+            if pid is not None:
+                try:
+                    player = self.get_player(pid)
+                except KeyError:
+                    player = None
+                if (player is not None
+                        and player.alignment is not None):
+                    alignment_value = player.alignment.value
+            if alignment_value is None and char:
+                spec = script_data.SCRIPT_BY_NAME.get(char)
+                if spec is not None:
+                    alignment_value = spec.char_type.default_alignment.value
+
             out.append({
                 **c,
                 "display_character": display,
-                "tokens": [{"kind": k} for k in kinds],
+                # The role the seat *thinks* it is (Drunk's fake TF,
+                # Lunatic's perceived Demon). Distinct from
+                # ``display_character`` because the Drunk's chair
+                # *renders* as the fake Townsfolk while the Lunatic's
+                # chair renders as ``Lunatic`` — only the edit-character
+                # panel reads ``perceived_character`` to add the
+                # parenthetical (``Lunatic (Pukka)``).
+                "perceived_character": perceived_character,
+                "char_type": char_type_value,
+                "alignment": alignment_value,
+                # ``active`` is False when the token's only contributor
+                # is an inactive effect — the UI dims those so the
+                # storyteller can see at a glance that the underlying
+                # ability is currently suppressed by drunkenness or
+                # poisoning. Active (or non-effect) tokens render
+                # normally.
+                "tokens": [
+                    {"kind": k, "active": active_by_kind.get(k, True)}
+                    for k in kinds
+                ],
                 "eligible_token_kinds": eligible,
             })
         return out
@@ -4633,8 +5523,11 @@ class Engine:
         """Snapshot view of every setup pick currently on the pool,
         grouped by owner-role and indexed by slot name.
 
-        Driven entirely by ``Character.setup_picks`` declarations —
-        the engine has no character-name knowledge here.
+        Driven by ``Character.setup_picks`` declarations for any role
+        whose pick is stored on the pool; auto-derived roles (the
+        Lunatic, whose perceived Demon mirrors whichever Demon is in
+        play) contribute their slot value directly via inspection of
+        the seated character.
         """
         out: Dict[str, Dict[str, str]] = {}
         for kind, spec in self._setup_pick_registry().items():
@@ -4648,6 +5541,43 @@ class Engine:
             if value is None:
                 continue
             out.setdefault(owner, {})[slot] = value
+        # Lunatic auto-derivation. The Lunatic's perceived Demon isn't
+        # stored in the pool's slot table — it's computed from the
+        # in-play Demon at every setup re-trigger. Surface it under
+        # the same ``"fake"`` slot the Drunk uses so the UI's existing
+        # slot priority order ("fake" first) renders ``Lunatic
+        # (Pukka)`` without per-character branches in the JS.
+        #
+        # Two derivation paths, in priority order:
+        #
+        #   1. Mid-game / post-Start-Game: read
+        #      ``Lunatic._perceived_demon_name`` off the seated
+        #      Character. This is the value that was stamped in by
+        #      ``Lunatic.on_setup_ability`` (the same one we surface
+        #      on the player's phone), so the panel matches whatever
+        #      the Lunatic seat is actually shadowing.
+        #
+        #   2. Setup-phase fallback: the chair store may have the
+        #      Lunatic assigned to a chair, but ``self._players`` is
+        #      empty until ``_sync_chairs_to_engine`` runs at Start
+        #      Game. Fall back to ``self.pool.lunatic_perceived_demon()``,
+        #      which mirrors the runtime auto-derivation but reads the
+        #      bag instead of the seated Character. Lets the
+        #      edit-character panel render ``Lunatic (Pukka)`` during
+        #      setup the same way it renders ``Drunk (Empath)``.
+        lunatic_resolved = False
+        for p in self._players:
+            char = getattr(p, "character", None)
+            if char is None or char.name != "Lunatic":
+                continue
+            perceived = getattr(char, "_perceived_demon_name", None)
+            if perceived:
+                out.setdefault("Lunatic", {})["fake"] = perceived
+                lunatic_resolved = True
+        if not lunatic_resolved:
+            pool_perceived = self.pool.lunatic_perceived_demon()
+            if pool_perceived:
+                out.setdefault("Lunatic", {})["fake"] = pool_perceived
         return out
 
     def player_view(self, player_id: int) -> dict:

@@ -145,6 +145,11 @@ class DevilsAdvocate(Character):
         engine.dispatch(
             Event(EventType.SELECT, source=self, targets=[target])
         )
+        # Goon notify: if the DA picked the Goon's seat, the Goon
+        # drunkens the DA so the protection below doesn't land. The
+        # ``_previous_pick_id`` bookkeeping happens regardless — that
+        # tracks what the DA *picked*, not whether the effect landed.
+        engine.notify_goon_chosen(self, target)
 
         # RESOLUTION: emit DevilsAdvocateSurvivesEffect via the
         # registry. A drunk/poisoned DA goes through the motions but

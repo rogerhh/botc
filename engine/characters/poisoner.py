@@ -120,6 +120,9 @@ class Poisoner(Character):
         engine.dispatch(
             Event(EventType.SELECT, source=self, targets=[target])
         )
+        # Goon notify: if the Poisoner picked the Goon's seat, the
+        # Goon drunkens the Poisoner synchronously here.
+        engine.notify_goon_chosen(self, target)
 
         # No INFORMATION step — the Poisoner does not learn anything.
 

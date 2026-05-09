@@ -139,6 +139,9 @@ class Monk(Character):
         engine.dispatch(
             Event(EventType.SELECT, source=self, targets=[target])
         )
+        # Goon notify: if the Monk picked the Goon's seat, the Goon
+        # drunkens the Monk so the protection below doesn't land.
+        engine.notify_goon_chosen(self, target)
 
         # RESOLUTION: emit MonkSafeEffect via the registry. A drunk/
         # poisoned Monk goes through the motions but no effect lands.

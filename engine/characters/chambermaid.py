@@ -184,8 +184,6 @@ class Chambermaid(Character):
             )
         )
 
-        is_drunk_or_poisoned = self.player.drunk or self.player.poisoned
-
         # WAKEUP — engine-internal event, no separate ST prompt. The
         # storyteller-facing wake-up line is shown as part of the
         # SelectPlayerPrompt panel.
@@ -234,6 +232,18 @@ class Chambermaid(Character):
         engine.dispatch(
             Event(EventType.SELECT, source=self, targets=chosen_players)
         )
+        # Goon notify: if either picked player is the Goon, the Goon's
+        # retort drunkens the Chambermaid synchronously here. The
+        # ``is_drunk_or_poisoned`` capture below then sees the new
+        # state and the wrong-info ST prompt branch fires.
+        # ``notify_goon_chosen_for_any`` no-ops if no picked target
+        # is the Goon, or if the Goon's first-per-night gate is
+        # already closed for tonight.
+        engine.notify_goon_chosen_for_any(self, chosen_players)
+
+        # Capture droison state AFTER the Goon notify so a Chambermaid
+        # who just picked the Goon enters the wrong-info branch.
+        is_drunk_or_poisoned = self.player.drunk or self.player.poisoned
 
         # Compute the truthful count: how many of the picked seats woke
         # tonight to use their own ability. Reads from the tracker

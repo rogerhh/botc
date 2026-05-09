@@ -110,6 +110,11 @@ class Ravenkeeper(Character):
         engine.dispatch(
             Event(EventType.SELECT, source=self, targets=[target])
         )
+        # Goon notify: if the Ravenkeeper picked the Goon's seat, the
+        # Goon drunkens the Ravenkeeper. ``is_drunk_or_poisoned`` is
+        # captured AFTER the notify so the wrong-info ST prompt path
+        # below picks up the new state.
+        engine.notify_goon_chosen(self, target)
 
         is_drunk_or_poisoned = self.player.drunk or self.player.poisoned
         actual_char = target.character.name if target.character else None

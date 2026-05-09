@@ -335,8 +335,6 @@ class FortuneTeller(Character):
             Event(EventType.CHECK_CONDITION, source=self, targets=[self.player])
         )
 
-        is_drunk_or_poisoned = self.player.drunk or self.player.poisoned
-
         # WAKEUP — engine-internal event, no separate ST prompt.
         engine.dispatch(
             Event(EventType.WAKEUP, source=self, targets=[self.player])
@@ -364,6 +362,15 @@ class FortuneTeller(Character):
         engine.dispatch(
             Event(EventType.SELECT, source=self, targets=chosen_players)
         )
+        # Goon notify: if either picked player is the Goon, the Goon's
+        # retort drunkens the FT synchronously here. The
+        # ``is_drunk_or_poisoned`` capture below then sees the new
+        # state and the wrong-info Yes/No prompt fires.
+        engine.notify_goon_chosen_for_any(self, chosen_players)
+
+        # Capture droison state AFTER the Goon notify so an FT who
+        # just picked the Goon enters the wrong-info branch.
+        is_drunk_or_poisoned = self.player.drunk or self.player.poisoned
 
         # Compute the default answer. YES iff any chosen player passes
         # a char_type=DEMON check (Recluse may misregister) OR is the

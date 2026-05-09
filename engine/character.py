@@ -23,7 +23,7 @@ act on this night". The engine uses these to walk action_order.
 from __future__ import annotations
 
 import random as _rand
-from typing import TYPE_CHECKING, List, Optional, Sequence
+from typing import TYPE_CHECKING, Callable, Iterable, List, Optional, Sequence
 
 from engine.enums import CharType, SetupMode
 from engine.event import Event, EventType
@@ -167,6 +167,53 @@ class Character:
         # this to True so a revived character's first-night ability is
         # available again on the next night.
         self._first_night_pending: bool = True
+
+    # ------------------------------------------------------------------
+    # Authenticity.
+    # ------------------------------------------------------------------
+
+    @property
+    def is_authentic(self) -> bool:
+        """Is this Character instance the seated player's *real* role?
+
+        True for the real Empath / Pukka / Imp on their own seat. False
+        for any perceived-role instance carried by an impersonator
+        (Drunk, Lunatic) and run on the impersonator's chair via
+        :meth:`acting_perceived_character`. The Drunk's perceived TF
+        instance and the Lunatic's perceived Demon instance both fail
+        this check because the seated ``player.character`` is the
+        impersonator, not them.
+
+        Used by demons (and any other ability with real-world effects)
+        to gate the *resolution* path: a perceived Imp running on the
+        Lunatic's chair still picks targets and goes through the
+        motions, but their kill must not land. The Drunk's perceived
+        ability flow is additionally gated by ``has_ability=False``
+        from the self-drunk effect; the Lunatic is sober by design,
+        so the authenticity check is the load-bearing gate there.
+        """
+        return (
+            self.player is not None
+            and self.player.character is self
+        )
+
+    @property
+    def can_produce_real_effect(self) -> bool:
+        """Combined gate for "should this ability's resolution apply?".
+
+        Equivalent to ``self.is_authentic and self.player.has_ability``,
+        with a defensive fallback if the player isn't wired. This is
+        the single source of truth every demon ability (and any other
+        role with persistent state-changing effects) checks before
+        actually firing the kill / poison / charge / regurgitate. The
+        ability still goes through the prompt-and-pick motions before
+        this gate so the storyteller and player flow stay identical
+        on every chair the role can run on (real Demon, Lunatic-shadow,
+        droisoned, etc.).
+        """
+        if self.player is None:
+            return False
+        return self.is_authentic and self.player.has_ability
 
     # ------------------------------------------------------------------
     # Lifecycle hooks.
@@ -479,6 +526,92 @@ class Character:
         if mode is SetupMode.IN_GAME:
             self.setup_ability(engine)
         # SETUP_PHASE: default no-op.
+
+    def before_nightly_ability(
+        self, engine: "Engine", night_number: int
+    ) -> None:
+        """Pre-ability hook fired by the engine just before ``ability``.
+
+        The default implementation handles Demon-side bookkeeping so
+        every BMR demon (and any future demon) gets it for free
+        without per-class duplication:
+
+          * If this is an *authentic* Demon seat (``is_authentic`` is
+            True and ``char_type is CharType.DEMON``), and a Lunatic
+            is seated on the table, emit the
+            ``THE LUNATIC PICKED <names> TONIGHT`` /
+            ``THE LUNATIC DID NOT PICK ANYONE TONIGHT`` info card to
+            this Demon's player. Reads ``engine._lunatic_picks_tonight``
+            (which the Lunatic-shadow's prompt-resolution hook
+            populated earlier in the same night).
+
+        The hook is a no-op for any non-Demon, any non-authentic
+        seat (the Lunatic-shadow Pukka itself doesn't get this card),
+        and any game without a seated Lunatic.
+
+        Override on a subclass to add additional pre-ability logic;
+        if you do, call ``super().before_nightly_ability(engine,
+        night_number)`` first to keep the default Demon-side
+        handling.
+        """
+        if not self.is_authentic:
+            return
+        if self.player is None or self.player.dead:
+            return
+        if self.char_type is not CharType.DEMON:
+            return
+        # Gate on a seated Lunatic. Avoid emitting the info card to a
+        # game with no Lunatic — pure noise on the Demon's panel
+        # otherwise.
+        from engine.characters.lunatic import Lunatic as _Lunatic
+        lunatic = next(
+            (
+                p for p in engine.players
+                if p.character is not None
+                and isinstance(p.character, _Lunatic)
+            ),
+            None,
+        )
+        if lunatic is None:
+            return
+
+        picks = list(getattr(engine, "_lunatic_picks_tonight", []) or [])
+        pick_players = []
+        for pid in picks:
+            try:
+                pick_players.append(engine.get_player(int(pid)))
+            except (KeyError, ValueError, TypeError):
+                continue
+        names = ", ".join(p.name for p in pick_players) if pick_players else ""
+
+        if pick_players:
+            text = f"THE LUNATIC PICKED {names} TONIGHT."
+            label = "THE LUNATIC PICKED"
+            body = names
+        else:
+            text = "THE LUNATIC DID NOT PICK ANYONE TONIGHT."
+            label = "THE LUNATIC PICKED"
+            body = "no one"
+
+        engine.send_prompt(InformationPrompt(
+            text=text,
+            target_player_id=self.player.id,
+            shown_to_player=True,
+            highlight_player_ids=[p.id for p in pick_players],
+            meta={
+                "step_kind": "lunatic_picks_for_demon",
+                "character": self.name,
+                "target_player_name": self.player.name,
+                "stage": "info",
+                "lunatic_player_id": lunatic.id,
+                "lunatic_player_name": lunatic.name,
+                "picked_player_ids": [p.id for p in pick_players],
+                "picked_player_names": [p.name for p in pick_players],
+                "render": {
+                    "tokens": [{"label": label, "body": body}],
+                },
+            },
+        ))
 
     def ability(self, engine: "Engine", night_number: int) -> None:
         """Run the character's nightly ability.
@@ -942,6 +1075,99 @@ class Character:
         if self.player.dead:
             return False
         return True
+
+    # ------------------------------------------------------------------
+    # Multi-target processing helpers.
+    # ------------------------------------------------------------------
+
+    def process_targets_with_goon_break(
+        self,
+        engine: "Engine",
+        targets: "Iterable[Player]",
+        action_fn: "Callable[[Player], None]",
+    ) -> None:
+        """Iterate ``targets`` in order, applying ``action_fn`` per seat.
+
+        The canonical "do something to each picked seat, but stop if a
+        Goon's drunkening interrupts mid-loop" pattern.
+
+        **Order of operations per iteration**, consciously notify-FIRST:
+
+          1. Pre-iteration ``has_ability`` guard. If the source has
+             already lost their ability (e.g. an earlier target was
+             the Goon and drunkened us), break.
+          2. :meth:`engine.engine.Engine.notify_goon_chosen` — if the
+             current target is the Goon's seat, fire the Goon's
+             retort *before* this iteration's ``action_fn`` runs.
+             The retort drunkens the source synchronously via the
+             registry, so step 3 sees ``has_ability=False`` and skips.
+          3. Post-notify ``has_ability`` guard. Break if the source
+             just lost ability (the Goon was this target).
+          4. ``action_fn(target)``. The source is guaranteed to have
+             ability at this point.
+
+        The notify-first ordering matches the rules: when a player
+        picks the Goon, the Goon makes them drunk **immediately**,
+        before the player's own ability resolves on the Goon. This
+        makes user scenarios 2 and 5 fall out:
+
+          * Shabaloth picks ``[Goon, A]`` → notify drunkens Shabaloth
+            on Goon, action_fn never runs, neither A nor Goon dies.
+          * Innkeeper picks ``[Goon, Other]`` → notify drunkens
+            Innkeeper on Goon, action_fn never runs, neither target
+            gets SAFE or DRUNK.
+
+        And scenarios 3 and 6:
+
+          * Shabaloth picks ``[A, Goon]`` → notify(A) is no-op,
+            action_fn(A) kills A, notify(Goon) drunkens Shabaloth,
+            loop breaks, Goon doesn't die.
+          * Innkeeper picks ``[Other, Goon]`` → notify(Other) no-op,
+            action_fn(Other) emits SAFE+DRUNK on Other, notify(Goon)
+            drunkens Innkeeper, loop breaks, Goon gets nothing.
+
+        The pick order comes from the player's multi-select prompt
+        response, which already preserves click order (see
+        ``ui/static/index.html``'s ``_selectedPlayerIds`` push/shift
+        and the storyteller mirror in ``ui/static/storyteller.html``).
+        Callers pass the order through unchanged.
+
+        ``action_fn`` should not need its own drunk/poisoned guard —
+        the helper guarantees the source has ability when action_fn
+        is called. (Belt-and-braces guards inside action_fn are
+        harmless but redundant.)
+
+        Default implementation suits Shabaloth, Po, and any future
+        "do thing to N targets" ability. Override on characters whose
+        per-target action shape differs (Innkeeper applies SAFE to
+        all picks plus DRUNK to one; the override passes its own
+        ``action_fn`` to this base implementation rather than
+        re-rolling the loop).
+        """
+        if self.player is None:
+            return
+        for t in targets or ():
+            if t is None:
+                continue
+            # Step 1: pre-iteration gate. ``can_produce_real_effect``
+            # combines authenticity (this is the seated role, not a
+            # Lunatic / Drunk shadow) with ``has_ability`` (alive,
+            # sober, healthy). Either failing → no real action and no
+            # Goon retort fires; the loop bails out so the picks past
+            # this point don't trigger anything either.
+            if not self.can_produce_real_effect:
+                break
+            # Step 2: notify the Goon FIRST. If t is the Goon, the
+            # retort drunkens the source synchronously; no-op otherwise.
+            engine.notify_goon_chosen(self, t)
+            # Step 3: post-notify guard. Skip action_fn for this
+            # iteration AND break the loop — the source has lost their
+            # ability and every remaining target is now moot.
+            if not self.can_produce_real_effect:
+                break
+            # Step 4: source has ability, target is not the Goon, run
+            # the per-target action.
+            action_fn(t)
 
     def __repr__(self) -> str:  # pragma: no cover  (debug)
         pname = self.player.name if self.player else "—"

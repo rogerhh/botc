@@ -70,7 +70,10 @@ class ZombuulDeadEffect(Effect):
 
     kind = "zombuul_dead"
     contributes_to_state = None
-    purge_on_source_death = True
+    # Survives source death: a self-kill must still leave the DEAD
+    # marker on the victim's seat. Dawn cleanup (on_phase_boundary)
+    # remains responsible for removing the marker.
+    purge_on_source_death = False
     deactivate_on_source_droisoned = False
 
     def on_phase_boundary(self, engine: "Engine", phase: str) -> None:
@@ -234,7 +237,11 @@ class Zombuul(Character):
             event.type is EventType.PRE_DEATH_LAST_RESORT
             and self.player is not None
             and not self._first_death_used
-            and self.player.has_ability
+            # Authenticity + has_ability: a Lunatic-shadowed Zombuul
+            # has no real survival save (the Lunatic is just a sober
+            # Outsider; if they die, they die). ``can_produce_real_effect``
+            # combines both gates.
+            and self.can_produce_real_effect
             and event.targets
             and any(t.id == self.player.id for t in event.targets)
             and not event.data.get("cancelled")
@@ -274,17 +281,47 @@ class Zombuul(Character):
             return
         return super().reaction(event, engine)
 
+    def _anyone_died_today(self, engine: "Engine") -> bool:
+        """Did any seat register as dead during the most-recent day?
+
+        Reads the engine-wide :class:`ZombuulDiedTodayEffect` registry
+        instead of this instance's local ``_died_today_ids`` list. The
+        global view matters for **Lunatic-shadowed Zombuul** wake
+        gating: a sober Lunatic perceiving themselves as the Zombuul
+        builds a *separate* Zombuul instance whose ``_died_today_ids``
+        is empty, because:
+
+          * the real Zombuul's first-death save runs on
+            ``PRE_DEATH_LAST_RESORT`` and is gated on
+            ``can_produce_real_effect`` — the perceived (non-authentic)
+            shadow short-circuits without recording the day-death; and
+          * when the save fires, the death is cancelled at PRE_DEATH,
+            so the standard ``DEATH`` branch (which both real and
+            perceived instances would otherwise hit) never runs.
+
+        Result: when the real Zombuul is executed and survives via
+        first-death, only the real Zombuul's local list gets the
+        entry; the Lunatic's perceived Zombuul wakes the next night
+        as if "no-one died today", breaking the bluff. Querying the
+        engine's effect registry — populated unconditionally by the
+        real Zombuul's reactions — gives both instances the same
+        answer.
+        """
+        return bool(
+            engine.effects_by_kind("zombuul_died_today", active_only=True)
+        )
+
     def would_act_tonight(self, engine: "Engine", night_number: int) -> bool:
         if not super().would_act_tonight(engine, night_number):
             return False
         if night_number == 1:
             return False
-        return not self._died_today_ids
+        return not self._anyone_died_today(engine)
 
     def ability(self, engine: "Engine", night_number: int) -> None:
         if night_number == 1 or self.player is None or self.player.dead:
             return
-        if self._died_today_ids:
+        if self._anyone_died_today(engine):
             return
         # Exorcist block: short-circuit before any wake.
         if (
@@ -302,7 +339,9 @@ class Zombuul(Character):
             Event(EventType.WAKEUP, source=self, targets=[self.player])
         )
 
-        eligible = [p.id for p in engine.players if p.alive]
+        # Per wiki rule, "choose a player" allows alive or dead. A
+        # dead pick is wasteful (engine.kill no-ops on dead) but legal.
+        eligible = [p.id for p in engine.players]
         sel = SelectPlayerPrompt(
             text="Zombuul kills a player",
             count=1,
@@ -314,6 +353,7 @@ class Zombuul(Character):
                 "character": self.name,
                 "step": "select_target",
                 "stage": "player",
+                "is_demon_attack": True,
             },
         )
         target_id = engine.send_prompt(sel)
@@ -329,7 +369,10 @@ class Zombuul(Character):
         engine.dispatch(
             Event(EventType.SELECT, source=self, targets=[target])
         )
-        if self.player.has_ability:
+        # Goon notify: if the Zombuul picked the Goon's seat, the
+        # Goon drunkens the Zombuul and the kill below is skipped.
+        engine.notify_goon_chosen(self, target)
+        if self.can_produce_real_effect:
             engine.kill(target.id, DeathCause.DEMON_KILL, source=self)
             # Place the Zombuul-specific DEAD reminder on the victim
             # (cleared at DAY_START). Note: the Zombuul's own DEATH
@@ -342,8 +385,13 @@ class Zombuul(Character):
                 if not target.alive:
                     self._emit_dead_marker(engine, target.id)
         else:
+            # Either drunk/poisoned, or this is a Lunatic-shadowed
+            # Zombuul whose pick is purely cosmetic (the demon-info
+            # card will still relay the pick to the real Demon).
             engine.log(
-                f"Zombuul {self.player.name} is drunk/poisoned — no kill."
+                f"Zombuul {self.player.name} "
+                f"(authentic={self.is_authentic}, "
+                f"has_ability={self.player.has_ability}) — no kill."
             )
         engine.dispatch(
             Event(EventType.RESOLUTION, source=self, targets=[target])
