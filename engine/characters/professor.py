@@ -56,13 +56,22 @@ class ProfessorNoAbilityEffect(Effect):
 
 
 class ProfessorAliveEffect(Effect):
-    """ALIVE marker on a seat the Professor revived."""
+    """ALIVE marker on a seat the Professor revived.
+
+    Like every BMR ALIVE/DEAD-style ST-announcement reminder, this
+    expires at the next dawn — its purpose is to remind the
+    storyteller to declare *"this player is alive again"* at dawn.
+    Purged via ``on_phase_boundary("dawn")``."""
 
     kind = "professor_alive"
     contributes_to_state = None
     purge_on_source_death = True
     purge_on_source_character_change = True
     deactivate_on_source_droisoned = False
+
+    def on_phase_boundary(self, engine: "Engine", phase: str) -> None:
+        if phase == "dawn":
+            engine.purge_effect(self)
 
 
 class Professor(Character):

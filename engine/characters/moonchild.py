@@ -51,15 +51,28 @@ class MoonchildDeadEffect(Effect):
     """Marker on a seat the Moonchild's pending kill will hit at the
     next night transition (or that just got killed by the trigger).
 
-    Mirrors the legacy ``_queued_kill_id`` storage; rendered via the
-    registry so the storyteller's grimoire shows the Moonchild's
-    pending pointed-at seat."""
+    Rendered via the registry so the storyteller's grimoire shows
+    the Moonchild's pointed-at seat both *before* the kill resolves
+    (during the day after the Moonchild publicly points) and
+    *through* the kill at NIGHT_START — the marker persists into
+    the next dawn so the ST has the reminder during the dawn
+    announcement. Like every BMR DEAD-style ST-announcement
+    reminder, it is purged at the next dawn via
+    ``on_phase_boundary``.
+
+    The internal ``Moonchild._queued_kill_id`` tracks the pending
+    kill independently and is cleared at NIGHT_START regardless of
+    this visual effect's lifetime."""
 
     kind = "moonchild_dead"
     contributes_to_state = None
     purge_on_source_death = False
     purge_on_source_character_change = True
     deactivate_on_source_droisoned = False
+
+    def on_phase_boundary(self, engine: "Engine", phase: str) -> None:
+        if phase == "dawn":
+            engine.purge_effect(self)
 
 
 class Moonchild(Character):
@@ -123,14 +136,20 @@ class Moonchild(Character):
                     f"slot forfeit."
                 )
         elif event.type is EventType.NIGHT_START:
-            # Resolve the queued kill on the next night.
+            # Resolve the queued kill on the next night. We clear
+            # only the *internal* ``_queued_kill_id`` here — the
+            # visible MoonchildDeadEffect must persist through the
+            # kill into the next dawn so the storyteller has the
+            # reminder during the dawn death announcement. The
+            # effect's ``on_phase_boundary("dawn")`` purges it
+            # then.
             if self._queued_kill_id is not None:
                 try:
                     target = engine.get_player(self._queued_kill_id)
                 except KeyError:
-                    self._set_queued_kill(engine, None)
+                    self._queued_kill_id = None
                     return super().reaction(event, engine)
-                self._set_queued_kill(engine, None)
+                self._queued_kill_id = None
                 if target.alive:
                     engine.log_reaction(
                         "Moonchild",

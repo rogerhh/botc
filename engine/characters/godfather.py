@@ -68,7 +68,10 @@ class GodfatherDeadEffect(Effect):
 
     kind = "godfather_dead"
     contributes_to_state = None
-    purge_on_source_death = True
+    # Survives source death: a self-kill must still leave the DEAD
+    # marker on the victim's seat. Dawn cleanup (on_phase_boundary)
+    # remains responsible for removing the marker.
+    purge_on_source_death = False
     deactivate_on_source_droisoned = False
 
     def on_phase_boundary(self, engine: "Engine", phase: str) -> None:
