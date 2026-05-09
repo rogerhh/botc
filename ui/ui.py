@@ -718,6 +718,164 @@ def spawn_engine_runner_subprocess() -> Optional[subprocess.Popen]:
         return proc
 
 
+# ---------------------------------------------------------------------------
+# Cloudflare Quick Tunnel subprocess.
+#
+# When the operator runs ``botc.py --tunnel``, the UI server spawns
+# ``cloudflared tunnel --url http://localhost:<port>`` as a child
+# process. cloudflared establishes an outbound mTLS connection to
+# Cloudflare's edge and prints a public ``https://*.trycloudflare.com``
+# URL to its stdout. We parse that URL out and surface it through
+# ``/api/host_info`` so the desktop and storyteller-phone QR codes
+# build their /player and /storyteller links from it instead of from
+# the LAN IP. The subprocess is killed on server shutdown.
+#
+# Failure modes the operator might see:
+#   - ``cloudflared`` not on PATH  -> tunnel_status="error", tunnel_url=None.
+#     The QR codes silently fall back to LAN as before.
+#   - cloudflared exits before producing a URL  -> tunnel_status="error".
+#   - cloudflared is healthy but URL hasn't arrived yet  -> tunnel_status
+#     starts as "starting" and flips to "running" once the URL is parsed.
+# ---------------------------------------------------------------------------
+
+TUNNEL_PROCESS: Optional[subprocess.Popen] = None
+TUNNEL_PROCESS_LOCK = threading.Lock()
+TUNNEL_URL: Optional[str] = None
+TUNNEL_STATUS: str = "disabled"  # disabled | starting | running | error | stopped
+TUNNEL_ERROR: Optional[str] = None
+
+# cloudflared prints the public URL on a line of its own; the URL
+# always sits on the trycloudflare.com subdomain. We pull the first
+# match per process lifetime — subsequent reconnects reuse it.
+_TRYCLOUDFLARE_RE = re.compile(r"https://[a-zA-Z0-9-]+\.trycloudflare\.com")
+
+
+def _tunnel_log_pump(proc: subprocess.Popen) -> None:
+    """Background reader for cloudflared's combined stdout/stderr.
+
+    Mirrors every line to ``sys.stderr`` (prefixed) so the operator
+    sees what cloudflared is doing, and snapshots the trycloudflare
+    URL into the module-level ``TUNNEL_URL`` the first time it appears.
+    """
+    global TUNNEL_URL, TUNNEL_STATUS, TUNNEL_ERROR
+    try:
+        if proc.stdout is None:
+            return
+        for raw in proc.stdout:
+            line = raw.rstrip("\r\n")
+            if not line:
+                continue
+            sys.stderr.write(f"[cloudflared] {line}\n")
+            sys.stderr.flush()
+            if TUNNEL_URL is None:
+                m = _TRYCLOUDFLARE_RE.search(line)
+                if m:
+                    TUNNEL_URL = m.group(0)
+                    TUNNEL_STATUS = "running"
+                    sys.stderr.write(
+                        f"[tunnel] public URL ready: {TUNNEL_URL}\n"
+                    )
+                    sys.stderr.flush()
+    except (OSError, ValueError):
+        pass
+    finally:
+        rc = proc.poll()
+        if rc is not None:
+            if TUNNEL_URL is None and TUNNEL_STATUS in ("starting", "running"):
+                TUNNEL_STATUS = "error"
+                TUNNEL_ERROR = (
+                    f"cloudflared exited with code {rc} before producing a URL"
+                )
+            elif TUNNEL_STATUS == "running":
+                TUNNEL_STATUS = "stopped"
+
+
+def start_cloudflared_tunnel(port: int) -> bool:
+    """Spawn ``cloudflared tunnel --url http://localhost:<port>``.
+
+    Returns True if cloudflared was launched (the public URL may not
+    have arrived yet — front-ends should poll ``/api/host_info`` and
+    branch on ``tunnel_status`` / ``tunnel_url``). Returns False if
+    cloudflared isn't installed or could not be spawned at all.
+    """
+    global TUNNEL_PROCESS, TUNNEL_STATUS, TUNNEL_ERROR
+
+    with TUNNEL_PROCESS_LOCK:
+        if TUNNEL_PROCESS is not None and TUNNEL_PROCESS.poll() is None:
+            return True  # already running
+
+        try:
+            proc = subprocess.Popen(
+                [
+                    "cloudflared", "tunnel",
+                    "--url", f"http://localhost:{port}",
+                    "--no-autoupdate",
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                bufsize=1,
+                text=True,
+            )
+        except FileNotFoundError:
+            TUNNEL_STATUS = "error"
+            TUNNEL_ERROR = (
+                "cloudflared not found on PATH. Install it from "
+                "https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/"
+                " (or `brew install cloudflared` on macOS)."
+            )
+            sys.stderr.write(f"[tunnel] {TUNNEL_ERROR}\n")
+            return False
+        except OSError as exc:
+            TUNNEL_STATUS = "error"
+            TUNNEL_ERROR = f"cloudflared spawn failed: {exc!r}"
+            sys.stderr.write(f"[tunnel] {TUNNEL_ERROR}\n")
+            return False
+
+        TUNNEL_PROCESS = proc
+        TUNNEL_STATUS = "starting"
+        TUNNEL_ERROR = None
+
+        threading.Thread(
+            target=_tunnel_log_pump, args=(proc,),
+            name="cloudflared-log-pump", daemon=True,
+        ).start()
+
+    sys.stderr.write(
+        "[tunnel] cloudflared spawned; waiting for public URL "
+        "(usually 2-5 seconds)...\n"
+    )
+    sys.stderr.flush()
+    return True
+
+
+def stop_cloudflared_tunnel() -> bool:
+    """Tear down the cloudflared subprocess (if any). Returns True if a
+    live process was killed, False otherwise."""
+    global TUNNEL_PROCESS, TUNNEL_URL, TUNNEL_STATUS
+
+    with TUNNEL_PROCESS_LOCK:
+        proc = TUNNEL_PROCESS
+        if proc is None:
+            return False
+        if proc.poll() is None:
+            try:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=2.0)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    try:
+                        proc.wait(timeout=1.0)
+                    except subprocess.TimeoutExpired:
+                        pass
+            except OSError:
+                pass
+        TUNNEL_PROCESS = None
+        TUNNEL_URL = None
+        TUNNEL_STATUS = "disabled"
+        return True
+
+
 def _make_random_code() -> str:
     alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
     return "".join(secrets.choice(alphabet) for _ in range(6))
@@ -1025,11 +1183,29 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if path == "/api/host_info":
+            # ``tunnel_url`` is the public https://*.trycloudflare.com URL
+            # if the operator started the server with --tunnel and the
+            # subprocess has produced one. Front-ends prefer it over
+            # ``lan_ip`` so phones can connect from off-network. The LAN
+            # fields are still reported so the UI can fall back when the
+            # tunnel is down or hasn't come up yet.
+            #
+            # ``access_code`` echoes the server's current access code (if
+            # any) so the storyteller-side QR modals can pre-fill the
+            # ?code= query param without the operator having to retype
+            # it. Safe to return: ``_gate()`` ran above this point, so
+            # the caller is either on localhost or already authenticated
+            # — anyone unauthenticated never reaches this branch.
             ips = _detect_lan_ips()
             self._send_json(HTTPStatus.OK, {
                 "lan_ip": ips[0] if ips else None,
                 "candidates": ips,
                 "port": SERVER_PORT,
+                "tunnel_url": TUNNEL_URL,
+                "tunnel_status": TUNNEL_STATUS,
+                "tunnel_error": TUNNEL_ERROR,
+                "access_code": ACCESS_CODE,
+                "access_code_required": ACCESS_CODE is not None,
             })
             return
 
@@ -2444,12 +2620,17 @@ def serve(
     host: str = "0.0.0.0",
     port: int = 8000,
     access_code: Optional[str] = None,
+    tunnel: bool = False,
 ) -> None:
     """Start the HTTP server, binding ``engine`` as the source of truth.
 
     ``botc.py`` (the top-level entry point) builds the engine first and
     then calls this. The legacy ``python3 -m ui.ui`` path goes through
     :func:`main`, which builds a default engine and forwards here.
+
+    If ``tunnel`` is True, ``cloudflared tunnel --url http://localhost:<port>``
+    is launched as a child process and the resulting public URL is exposed
+    via ``/api/host_info`` so the QR codes use it instead of the LAN IP.
     """
     global ACCESS_CODE, SERVER_PORT
     ENGINE_replace(engine)
@@ -2464,11 +2645,44 @@ def serve(
         print(f"  Access code: {ACCESS_CODE}")
         print( "  Players should visit  <your-url>/phone  and enter that code.")
         print( "  Requests from localhost bypass the code.")
+
+    if tunnel:
+        # Launches in the background; the public URL appears in stderr
+        # (and in /api/host_info) once cloudflared finishes its handshake.
+        # Failures are non-fatal — the server keeps serving on LAN.
+        if start_cloudflared_tunnel(port):
+            print("  Cloudflare Quick Tunnel: starting (URL will appear in logs).")
+        else:
+            print("  Cloudflare Quick Tunnel: FAILED to start — see logs above.")
+            print("  The server is still running on LAN; QR codes will use the LAN IP.")
+
+        # Public-exposure warning. The tunnel publishes the BotC URL to
+        # the open internet; without an access code, anyone who learns
+        # the trycloudflare.com URL can join the lobby. We can't
+        # auto-generate a code here (the operator might have explicit
+        # reasons to leave it off — e.g. a private group with the URL
+        # only shared in a private chat) but we make sure they see this
+        # in their terminal before any phone scans the QR.
+        if ACCESS_CODE is None:
+            banner = "!" * 70
+            print()
+            print(banner)
+            print("!! WARNING: tunnel is ON and NO access code is set.")
+            print("!! Your BotC server is reachable from the open internet by")
+            print("!! anyone who learns the *.trycloudflare.com URL.")
+            print("!! Restart with `--access-code` to require a join code,")
+            print("!! or pass `--no-tunnel` to keep the server LAN-only.")
+            print(banner)
+            print()
+
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         print("\nShutting down.")
         server.server_close()
+    finally:
+        # Always tear down the tunnel; safe to call when none was started.
+        stop_cloudflared_tunnel()
 
 
 def main() -> None:
@@ -2483,11 +2697,33 @@ def main() -> None:
                         help="Interface to bind (default: all interfaces).")
     parser.add_argument("--port", type=int, default=8000,
                         help="TCP port (default: 8000).")
+    # --access-code defaults to auto-generated; see botc.py for the
+    # rationale.
     parser.add_argument(
-        "--access-code", nargs="?", const="__AUTO__", default=None,
+        "--access-code", nargs="?", const="__AUTO__", default="__AUTO__",
         metavar="CODE",
-        help="Require an access code to visit the site.",
+        help="Require an access code to visit the site. Auto-generates "
+             "a 6-character code by default; pass an explicit value to "
+             "use a fixed code, or --no-access-code to disable.",
     )
+    parser.add_argument(
+        "--no-access-code",
+        action="store_const", dest="access_code", const=None,
+        help="Disable the access code; anyone with the URL can join.",
+    )
+    # --tunnel defaults to ON; --no-tunnel disables it. See botc.py for
+    # the same wiring.
+    parser.add_argument(
+        "--tunnel", dest="tunnel", action="store_true",
+        help="Enable the Cloudflare Quick Tunnel (DEFAULT). Requires "
+             "`cloudflared` on PATH.",
+    )
+    parser.add_argument(
+        "--no-tunnel", dest="tunnel", action="store_false",
+        help="Disable the Cloudflare Quick Tunnel; serve QR codes from "
+             "the LAN IP only.",
+    )
+    parser.set_defaults(tunnel=True)
     args = parser.parse_args()
 
     code: Optional[str] = None
@@ -2496,7 +2732,8 @@ def main() -> None:
     elif args.access_code is not None:
         code = args.access_code
 
-    serve(Engine(), host=args.host, port=args.port, access_code=code)
+    serve(Engine(), host=args.host, port=args.port, access_code=code,
+          tunnel=args.tunnel)
 
 
 if __name__ == "__main__":

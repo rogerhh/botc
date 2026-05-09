@@ -47,11 +47,42 @@ def main() -> None:
                         help="TCP port (default: 8000).")
     parser.add_argument("--players", type=int, default=8,
                         help="Default number of seats to start with (default: 8).")
+    # --access-code defaults to auto-generated. The combination of
+    # default-on tunnel + no auth would publish the BotC server to the
+    # open internet, which is unsafe; defaulting an access code on
+    # closes that hole. Pass `--no-access-code` to explicitly disable
+    # (e.g. LAN-only games on a trusted home network).
     parser.add_argument(
-        "--access-code", nargs="?", const="__AUTO__", default=None,
+        "--access-code", nargs="?", const="__AUTO__", default="__AUTO__",
         metavar="CODE",
-        help="Require an access code to visit the site.",
+        help="Require an access code to visit the site. With no value, "
+             "auto-generates a 6-character code (DEFAULT). Pass an "
+             "explicit value to use a fixed code, or --no-access-code "
+             "to disable.",
     )
+    parser.add_argument(
+        "--no-access-code",
+        action="store_const", dest="access_code", const=None,
+        help="Disable the access code; anyone with the URL can join.",
+    )
+    # --tunnel defaults to ON: phones can connect from off-network and
+    # the BotC traffic is wrapped in TLS by Cloudflare's edge. Pass
+    # --no-tunnel to fall back to LAN-only operation. If `cloudflared`
+    # isn't installed the spawn fails non-fatally and the QR codes
+    # fall back to the LAN IP automatically.
+    parser.add_argument(
+        "--tunnel", dest="tunnel", action="store_true",
+        help="Enable the Cloudflare Quick Tunnel. This is the DEFAULT; "
+             "the flag is accepted for clarity. Requires `cloudflared` "
+             "on PATH (brew install cloudflared / "
+             "https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/).",
+    )
+    parser.add_argument(
+        "--no-tunnel", dest="tunnel", action="store_false",
+        help="Disable the Cloudflare Quick Tunnel. QR codes will use "
+             "the LAN IP, so phones must be on the same WiFi.",
+    )
+    parser.set_defaults(tunnel=True)
     args = parser.parse_args()
 
     code = None
@@ -61,7 +92,8 @@ def main() -> None:
         code = args.access_code
 
     engine = _make_engine(default_seats=args.players)
-    ui_module.serve(engine, host=args.host, port=args.port, access_code=code)
+    ui_module.serve(engine, host=args.host, port=args.port, access_code=code,
+                    tunnel=args.tunnel)
 
 
 if __name__ == "__main__":
