@@ -365,7 +365,16 @@
   },
   "Shabaloth": {
     "icon": "shabaloth.png",
-    "reminders": [],
+    "reminders": [
+      {
+        "icon": "shabaloth_dead.png",
+        "name": "DEAD"
+      },
+      {
+        "icon": "shabaloth_alive.png",
+        "name": "ALIVE"
+      }
+    ],
     "slug": "shabaloth"
   },
   "Slayer": {
