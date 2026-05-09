@@ -305,11 +305,21 @@ def apply_setup_deltas(
     pool_names: Iterable[str],
     roster_townsfolk: Optional[int] = None,
     roster_outsiders: Optional[int] = None,
+    name_overrides: Optional[Dict[str, Tuple[int, int]]] = None,
 ) -> Tuple[int, int]:
     """Return (adjusted_townsfolk, adjusted_outsiders) after applying every
     in-pool role's ``setup_townsfolk_delta`` / ``setup_outsider_delta`` to
     the recommended counts, then clamping the result against the preset's
     actual roster size.
+
+    ``name_overrides`` lets the caller substitute a role's deltas at
+    snapshot time without having to mutate the script spec. The map is
+    ``{role_name: (townsfolk_delta, outsider_delta)}``; for each entry,
+    if the role appears in ``pool_names`` the override pair is added to
+    the running totals *instead of* the role's static spec values. This
+    is how the Godfather's "[-1 or +1 Outsider]" Storyteller choice is
+    honored — the pool stores the picked direction and the snapshot
+    passes ``{"Godfather": (+1 or -1 mirrored, picked)}`` here.
 
     Why the clamp matters: a role like the Baron declares ``+2 outsiders /
     -2 townsfolk`` regardless of which script it lives in. On a Trouble
@@ -332,9 +342,15 @@ def apply_setup_deltas(
     ``None`` (the default) to skip the roster clamp — useful when no
     preset is selected and the snapshot has nothing to clamp against.
     """
+    overrides = name_overrides or {}
     townsfolk_delta = 0
     outsider_delta = 0
     for n in pool_names:
+        if n in overrides:
+            t_d, o_d = overrides[n]
+            townsfolk_delta += t_d
+            outsider_delta += o_d
+            continue
         spec = SCRIPT_BY_NAME.get(n)
         if spec is None:
             continue

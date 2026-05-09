@@ -2030,6 +2030,32 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(HTTPStatus.OK, _character_pool_snapshot())
             return
 
+        if path == "/api/character_pool/godfather_outsider_delta":
+            # Storyteller-picked direction for the Godfather's
+            # "[-1 or +1 Outsider]" setup ability. Body must be
+            # ``{"delta": -1}`` or ``{"delta": 1}``; anything else is
+            # rejected. The choice is persisted on the pool and re-read
+            # by ``_character_pool_snapshot`` on every poll, so the
+            # recommended-counts banner updates immediately.
+            ok, data = self._read_json()
+            if not ok or "delta" not in data:
+                self._send_json(HTTPStatus.BAD_REQUEST,
+                                {"error": "need delta"})
+                return
+            delta = data.get("delta")
+            if not isinstance(delta, int) or isinstance(delta, bool):
+                self._send_json(
+                    HTTPStatus.BAD_REQUEST,
+                    {"error": "delta must be the integer -1 or 1"})
+                return
+            try:
+                POOL.set_godfather_outsider_delta(delta)
+            except ValueError as exc:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+                return
+            self._send_json(HTTPStatus.OK, _character_pool_snapshot())
+            return
+
         if self.path == "/api/storyteller":
             ok, data = self._read_json()
             if not ok or "x" not in data or "y" not in data:
@@ -2296,9 +2322,21 @@ def _character_pool_snapshot() -> dict:
                 if n in script_data.SCRIPT_BY_NAME
             )
 
+    # The Godfather's "[-1 or +1 Outsider]" setup ability is a
+    # Storyteller-picked shift in either direction; the pool stores
+    # the chosen direction and we surface it as a per-name override
+    # so the recommendation banner reflects whichever way the
+    # Storyteller flipped the small ± toggle on the Godfather row.
+    # Mirror the Outsider delta into the Townsfolk delta (-1 mirrors
+    # to +1 so the bag total stays constant).
+    gf_delta = POOL.godfather_outsider_delta()
+    delta_overrides: Dict[str, Tuple[int, int]] = {}
+    if "Godfather" in names:
+        delta_overrides["Godfather"] = (-gf_delta, gf_delta)
     adj_t, adj_o = script_data.apply_setup_deltas(
         rec_t, rec_o, names,
         roster_townsfolk=roster_t, roster_outsiders=roster_o,
+        name_overrides=delta_overrides or None,
     )
 
     recommended = {
@@ -2583,6 +2621,11 @@ def _character_pool_snapshot() -> dict:
         # per-character branches; the named ``*_role`` keys above are
         # kept for backward compatibility with existing UI code.
         "setup_picks_by_role": ENGINE._setup_picks_by_role(),
+        # Godfather's "[-1 or +1 Outsider]" setup choice (-1 or +1).
+        # Drives the small ± toggle the Edit Character panel renders
+        # on the Godfather row, and feeds back into the recommended-
+        # counts banner via ``apply_setup_deltas``'s name_overrides.
+        "godfather_outsider_delta": gf_delta,
     }
 
 

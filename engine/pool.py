@@ -85,6 +85,13 @@ class CharacterPool:
         self._investigator_minion: Optional[str] = None
         self._investigator_wrong: Optional[str] = None
         self._grandmother_grandchild: Optional[str] = None
+        # Godfather's "[-1 or +1 Outsider]" setup choice. Defaults to
+        # +1 (matching ``Godfather.setup_outsider_delta``); the
+        # storyteller can flip to -1 from the Edit Character panel,
+        # which is honored by ``apply_setup_deltas`` via an explicit
+        # override map. Only meaningful while ``"Godfather"`` is in
+        # ``self._names``.
+        self._godfather_outsider_delta: int = 1
         self._lock = threading.Lock()
 
     # ------------------------------------------------------------------
@@ -144,6 +151,55 @@ class CharacterPool:
     def grandmother_grandchild(self) -> Optional[str]:
         with self._lock:
             return self._grandmother_grandchild
+
+    def godfather_outsider_delta(self) -> int:
+        """Godfather's chosen Outsider shift (+1 or -1).
+
+        Per the rulebook the Godfather's setup ability says
+        "[-1 or +1 Outsider]" — a Storyteller-picked shift in either
+        direction. The default is +1 to match the script's
+        ``setup_outsider_delta``; the UI surfaces a small ± toggle on
+        the Godfather row in the Edit Character panel that flips this
+        between +1 and -1.
+
+        Returns 0 implicitly when ``"Godfather"`` is not in the pool
+        (there is no Godfather to apply the shift), but we keep the
+        stored value so the toggle's selection persists across remove
+        + re-add cycles within the same pool lifetime.
+        """
+        with self._lock:
+            return self._godfather_outsider_delta
+
+    def lunatic_perceived_demon(self) -> Optional[str]:
+        """The Demon class the Lunatic's seat thinks they are.
+
+        Auto-derived from the bag (no Storyteller picker): the first
+        Demon in pool insertion order, or the project default
+        (``LUNATIC_DEFAULT_DEMON``) if no Demon is in the pool yet.
+        Returns ``None`` only when the Lunatic itself isn't in the
+        pool — there's no point surfacing a perceived role for a seat
+        that doesn't exist.
+
+        Lives on the pool (rather than only on the seated Lunatic
+        Character) so the UI can render ``Lunatic (Pukka)`` during
+        setup, before chairs are synced into engine players. The
+        seated Lunatic's runtime
+        ``Lunatic._perceived_demon_name`` mirrors this same logic via
+        ``_find_in_play_demon_name`` once the bag is materialized as
+        Players.
+        """
+        # Local import to avoid pool ↔ characters cycle at import time.
+        from engine.characters.lunatic import LUNATIC_DEFAULT_DEMON
+        with self._lock:
+            if "Lunatic" not in self._names:
+                return None
+            for name in self._names:
+                spec = script_data.SCRIPT_BY_NAME.get(name)
+                if spec is None:
+                    continue
+                if spec.char_type is CharType.DEMON:
+                    return name
+            return LUNATIC_DEFAULT_DEMON
 
     # ------------------------------------------------------------------
     # Internal helpers (assume self._lock is held).
@@ -531,6 +587,8 @@ class CharacterPool:
             self._investigator_minion = None
             self._investigator_wrong = None
             self._grandmother_grandchild = None
+            # Reset the Godfather's [-1/+1] choice to the default.
+            self._godfather_outsider_delta = 1
 
     def set_many(self, names: List[str]) -> List[str]:
         seen: set = set()
@@ -861,6 +919,21 @@ class CharacterPool:
                 raise ValueError(f"unknown character {name!r}")
             self._investigator_wrong = name
             return self._investigator_wrong
+
+    def set_godfather_outsider_delta(self, delta: int) -> int:
+        """Set the Godfather's "[-1 or +1 Outsider]" choice.
+
+        Only ``+1`` and ``-1`` are accepted; anything else raises
+        ``ValueError``. The Godfather does not need to be in the pool
+        for this to succeed — the value is stored and takes effect as
+        soon as the Godfather is added. Returns the stored value.
+        """
+        if delta not in (-1, 1):
+            raise ValueError(
+                "Godfather Outsider delta must be -1 or +1")
+        with self._lock:
+            self._godfather_outsider_delta = delta
+            return self._godfather_outsider_delta
 
     def set_grandmother_grandchild(self, name: Optional[str]) -> Optional[str]:
         """Set the Grandmother's grandchild role, or pass None to clear it.
