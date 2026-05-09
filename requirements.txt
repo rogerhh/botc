@@ -1,0 +1,13 @@
+# Runtime dependencies for the BotC server.
+#
+# The HTTP server itself is stdlib-only, but we use boto3 to fetch
+# character-token PNGs from a private Cloudflare R2 bucket on first
+# access (see ui/r2_tokens.py), and python-dotenv so the operator can
+# keep R2 credentials in a local .env file instead of exporting them
+# by hand.
+#
+# Install:
+#     pip install -r requirements.txt
+
+boto3>=1.28
+python-dotenv>=1.0

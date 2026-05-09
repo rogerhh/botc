@@ -63,6 +63,7 @@ from engine.engine import Engine  # noqa: E402
 from engine.enums import Alignment, CharType, DeathCause  # noqa: E402
 from engine import preset as preset_module  # noqa: E402
 from engine import script as script_data  # noqa: E402
+from ui import r2_tokens  # noqa: E402
 
 STATIC_DIR = os.path.join(_HERE, "static")
 
@@ -1200,6 +1201,15 @@ class Handler(BaseHTTPRequestHandler):
         # Mirrors /static/ but rooted at the repo's assets directory so
         # we can serve images like /assets/tokens/drunk.png inline in
         # the SVG town square.
+        #
+        # Token PNGs (``/assets/tokens/<name>``) are NOT checked into
+        # the repo. ``assets/tokens/`` is gitignored except for
+        # ``manifest.json``. On a cache miss we lazily fetch the object
+        # from a private R2 bucket (see ``ui/r2_tokens.py``) using the
+        # server's R2 credentials, write it to disk, and then serve it
+        # like any other static file. After the first hit the file is
+        # cached locally, so subsequent loads never touch R2 — this
+        # keeps end-user bandwidth identical to the all-on-disk era.
         if path.startswith("/assets/"):
             rel = path[len("/assets/"):]
             safe = os.path.normpath(rel)
@@ -1207,6 +1217,19 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_error(HTTPStatus.FORBIDDEN)
                 return
             full = os.path.join(_ROOT, "assets", safe)
+            # Lazy R2 fetch for missing token PNGs.
+            #
+            # Scope intentionally narrow: ONLY ``assets/tokens/<file>``
+            # (no further subdirectories), because that's where the R2
+            # object keys live (flat namespace, no prefix). Other
+            # ``/assets/`` paths (presets, etc.) keep the original
+            # behavior — they're either in the repo or 404.
+            if not os.path.isfile(full):
+                norm = safe.replace(os.sep, "/")
+                if norm.startswith("tokens/") and "/" not in norm[len("tokens/"):]:
+                    token_name = norm[len("tokens/"):]
+                    if token_name:
+                        r2_tokens.lazy_fetch(token_name, full)
             content_type = _guess_content_type(full)
             self._send_file(full, content_type)
             return

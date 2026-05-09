@@ -15,3 +15,14 @@ Thumbs.db
 *.swp
 .vscode/
 .idea/
+
+# Local secrets — R2 credentials etc. See .env.example for the shape.
+.env
+
+# Character token PNGs are stored in a private R2 bucket and lazily
+# downloaded by ui/r2_tokens.py on first request. They are NOT checked
+# into git so the art (which is copyrighted) stays out of the repo.
+# manifest.json IS tracked — it's the lookup table the server uses to
+# map character names to filenames.
+assets/tokens/*.png
+!assets/tokens/manifest.json
