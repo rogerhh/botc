@@ -479,6 +479,83 @@ def test_chambermaid_select_prompt_excludes_self_and_dead() -> None:
     assert sorted(seen_eligible[-1]) == sorted([c.id, d.id, f.id])
 
 
+# ---------------------------------------------------------------------------
+# Goon interaction (user scenario 1).
+# ---------------------------------------------------------------------------
+
+
+def test_chambermaid_picks_goon_drunk_branch_fires() -> None:
+    """User scenario 1 — Chambermaid picks the Goon as one of the two
+    targets.
+
+    The Goon's retort drunkens the Chambermaid synchronously after
+    SELECT (via ``notify_goon_chosen_for_any``). The drunk re-read
+    that follows the notify call captures the new state, so the
+    wrong-info ST prompt fires (``select_count`` with
+    ``due_to_drunk_poison=True``). The ST may change the count
+    before the player sees it; here we send "1" and assert that's
+    what the player learns.
+    """
+    e = Engine()
+    a = e.add_seat("Alice")    # Chambermaid
+    b = e.add_seat("Bob")      # Goon
+    c = e.add_seat("Cara")     # Soldier (no night action)
+    d = e.add_seat("Dan")      # Poisoner
+    f = e.add_seat("Eve")      # Imp
+
+    e.assign_character(a.id, "Chambermaid")
+    e.assign_character(b.id, "Goon")
+    e.assign_character(c.id, "Soldier")
+    e.assign_character(d.id, "Poisoner")
+    e.assign_character(f.id, "Imp")
+
+    captured: List[dict] = []
+    e.start_game()
+    e.start_night()
+    drain_prompts(e, [
+        # Poisoner picks themselves (irrelevant for this test).
+        ({"character": "Poisoner", "step": "select_player"}, d.id),
+        # Chambermaid picks Goon + Soldier — neither would normally
+        # trigger a wake on its own, so the truthful count is 0.
+        ({"character": "Chambermaid", "step": "select_players"},
+         [b.id, c.id]),
+        # The Goon's retort drunkens the Chambermaid; the wrong-info
+        # branch fires and the ST is asked for a count. Send "1".
+        ({"character": "Chambermaid", "step": "select_count",
+          "due_to_drunk_poison": True}, "1"),
+        # Information surfaced to the player.
+        ({"character": "Chambermaid", "step": "information"}, None),
+    ], captured_meta=captured)
+
+    # The shown count is what the ST sent ("1"), not the truthful 0.
+    assert _chambermaid_count(captured) == 1, (
+        "Chambermaid sees the ST-picked wrong count, not the truth."
+    )
+
+    # The wrong-info prompt fired with the truthful count surfaced
+    # under ``correct`` — the ST sees what they're overriding even
+    # though the prefilled default is something else.
+    drunk_prompt = next(
+        m for m in captured
+        if m.get("character") == "Chambermaid"
+        and m.get("step") == "select_count"
+    )
+    assert drunk_prompt.get("correct") == "0"
+    assert drunk_prompt.get("due_to_drunk_poison") is True
+
+    # The Chambermaid is drunk (via GoonDrunkEffect) for the rest of
+    # the night and the day.
+    e.advance_to_day()
+    assert e.get_player(a.id).drunk, (
+        "Chambermaid drunkened by the Goon's retort after the SELECT."
+    )
+    # Both seats are good (Chambermaid good, Goon good), so no flip.
+    from engine.enums import Alignment
+    assert e.get_player(b.id).alignment is Alignment.GOOD, (
+        "Goon stays good (Chambermaid is good — no flip needed)."
+    )
+
+
 if __name__ == "__main__":
     test_wake_detector_excludes_engine_dispatched_wakes()
     test_wake_tracker_resets_at_night_start()
@@ -487,4 +564,5 @@ if __name__ == "__main__":
     test_chambermaid_one_when_only_one_picked_woke()
     test_chambermaid_drunk_prompts_for_wrong_default()
     test_chambermaid_select_prompt_excludes_self_and_dead()
+    test_chambermaid_picks_goon_drunk_branch_fires()
     print("All Chambermaid tests passed.")

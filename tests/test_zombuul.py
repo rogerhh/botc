@@ -459,3 +459,123 @@ def test_zombuul_first_life_still_saves_when_no_other_protector() -> None:
     assert zomb._first_death_used is True, (
         "First life should be consumed when no other protector cancelled."
     )
+
+
+# ---------------------------------------------------------------------------
+# Lunatic-shadow Zombuul wake-gate — must mirror the real Zombuul's "did
+# anyone die today?" answer, including the first-death-save case where
+# only the real Zombuul's local _died_today_ids gets the entry.
+# ---------------------------------------------------------------------------
+
+def _make_lunatic_zombuul_game() -> tuple:
+    """6-seat game: Lunatic on Alice (perceived Zombuul), real Zombuul on Eve.
+
+    Lunatic's ``on_setup_ability`` auto-derives the perceived Demon
+    from the in-play Demon, so seating a Zombuul on any other chair
+    causes the Lunatic's ``members[0]`` to be a fresh Zombuul instance.
+    """
+    e = Engine()
+    a = e.add_seat("Alice")    # Lunatic (perceived Zombuul)
+    b = e.add_seat("Bob")      # Soldier
+    c = e.add_seat("Cara")     # Mayor
+    d = e.add_seat("Dan")      # Saint
+    g = e.add_seat("Gail")     # Poisoner
+    f = e.add_seat("Eve")      # real Zombuul
+    e.assign_character(a.id, "Lunatic")
+    e.assign_character(b.id, "Soldier")
+    e.assign_character(c.id, "Mayor")
+    e.assign_character(d.id, "Saint")
+    e.assign_character(g.id, "Poisoner")
+    e.assign_character(f.id, "Zombuul")
+    e.start_game()
+    return e, (a, b, c, d, g, f)
+
+
+def test_lunatic_shadow_zombuul_does_not_wake_after_real_zombuul_executed() -> None:
+    """The bug: real Zombuul is executed, first-death save fires, the
+    Zombuul registers as dead today and correctly skips its own wake.
+    A Lunatic-perceived Zombuul on a different seat must skip the wake
+    too — otherwise the storyteller's Zombuul-bluff for the Lunatic
+    breaks ("everybody saw the Zombuul die today, but the Lunatic
+    still gets a wake-up?").
+
+    Mechanism: the perceived Zombuul is a *separate* instance with its
+    own (empty) ``_died_today_ids`` list, and the real Zombuul's
+    PRE_DEATH_LAST_RESORT save branch is gated on
+    ``can_produce_real_effect`` so the perceived shadow short-circuits
+    without recording the day-death. The fix routes the wake gate
+    through the engine-wide ``ZombuulDiedTodayEffect`` registry, which
+    is populated unconditionally by the real Zombuul's reaction.
+    """
+    e, (a, b, c, d, g, f) = _make_lunatic_zombuul_game()
+    real_zomb = f.character
+    lunatic = a.character
+
+    perceived = lunatic.acting_perceived_character()
+    assert perceived is not None and perceived.name == "Zombuul"
+    # Sanity: it really is a separate instance, not the real Zombuul.
+    assert perceived is not real_zomb
+
+    _begin_day(e, 1)
+    e.execute_player(f.id)  # real Zombuul executed; survival save fires
+
+    # Pre-conditions of the bug scenario:
+    assert f.alive is True, "Zombuul's first-death save must keep Eve alive."
+    assert real_zomb._first_death_used is True
+    # The real Zombuul's local list has the entry…
+    assert f.id in real_zomb._died_today_ids
+    # …but the perceived Zombuul's local list does NOT — the
+    # PRE_DEATH_LAST_RESORT branch is gated on can_produce_real_effect
+    # and on event.targets containing self.player.id, neither of which
+    # holds for the Lunatic shadow. This is the exact gap the global
+    # wake-gate query closes.
+    assert perceived._died_today_ids == []
+
+    # The fix: wake gate consults the engine effect registry, not the
+    # local list, so both Zombuul instances answer the same way.
+    _begin_night(e, 2)
+    assert real_zomb.would_act_tonight(e, 2) is False, (
+        "Real Zombuul registered as dead today and should skip its wake."
+    )
+    assert perceived.would_act_tonight(e, 2) is False, (
+        "Lunatic-shadow Zombuul must skip the wake too — the global "
+        "'someone died today' state covers both instances."
+    )
+
+
+def test_lunatic_shadow_zombuul_wakes_when_no_one_died_today() -> None:
+    """Symmetric sanity check: with the fix in place, the Lunatic
+    shadow still wakes on a clean day. Pins down that the global
+    wake-gate didn't accidentally over-suppress."""
+    e, (a, b, c, d, g, f) = _make_lunatic_zombuul_game()
+    lunatic = a.character
+    perceived = lunatic.acting_perceived_character()
+    assert perceived is not None
+
+    _begin_day(e, 1)  # nobody dies on day 1
+    _begin_night(e, 2)
+    assert perceived.would_act_tonight(e, 2) is True, (
+        "Lunatic-shadow Zombuul should wake on a no-deaths day."
+    )
+
+
+def test_lunatic_shadow_zombuul_does_not_wake_on_normal_day_death() -> None:
+    """Cover the easier path too: when an unrelated player dies during
+    the day (not the real Zombuul), the standard DEATH event reaches
+    both real and perceived Zombuul instances and the perceived one's
+    own ``_died_today_ids`` gets populated. The wake gate must skip
+    on this path as well — both pre- and post-fix.
+    """
+    e, (a, b, c, d, g, f) = _make_lunatic_zombuul_game()
+    lunatic = a.character
+    perceived = lunatic.acting_perceived_character()
+    assert perceived is not None
+
+    _begin_day(e, 1)
+    e.execute_player(b.id)  # Bob (Soldier) executed — uncancelled, real death
+
+    _begin_night(e, 2)
+    assert perceived.would_act_tonight(e, 2) is False, (
+        "A normal day-death registers via the DEATH event on both "
+        "the real and perceived Zombuul, so the shadow already skips."
+    )
