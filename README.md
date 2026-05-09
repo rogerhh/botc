@@ -1,6 +1,6 @@
 # Blood on the Clocktower — Storyteller Server
 
-A self-hosted server for running Blood on the Clocktower (Trouble Brewing).
+A self-hosted server for running Blood on the Clocktower.
 The Storyteller drives the game from a laptop; players connect their phones
 for night info. The engine is the single source of truth.
 
